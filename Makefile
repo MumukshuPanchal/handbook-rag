@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test check
+.PHONY: help install lint format typecheck test check snapshot
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -23,3 +23,6 @@ test: ## Run the tests with coverage
 	uv run pytest --cov --cov-report=term-missing
 
 check: lint typecheck test ## Run everything CI runs
+
+snapshot: ## Download the handbook at the pinned commit into data/
+	uv run handbook-rag snapshot

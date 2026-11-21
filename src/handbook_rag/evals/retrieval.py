@@ -4,10 +4,11 @@ This measures retrieval alone. No language model is involved, so a run is free,
 deterministic and fast, and can be repeated after every change.
 """
 
+import hashlib
 import json
 import time
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -160,12 +161,22 @@ def _summarise_groups(
     return {name: _summarise(members) for name, members in sorted(groups.items())}
 
 
-def write_run(report: RetrievalReport, flow_dir: Path, variant: str, description: str) -> Path:
+def write_run(
+    report: RetrievalReport,
+    flow_dir: Path,
+    variant: str,
+    description: str,
+    config: Mapping[str, object] | None = None,
+) -> Path:
     """Write one run to ``flow_dir/variant`` and return that directory.
 
     The layout is one directory per variant (``baseline``, ``v1``, ...) under a shared
     flow directory, with one row per question in ``results.jsonl``. Failed questions go
     to ``errors.jsonl`` so they can never be mistaken for scored ones.
+
+    A number is only useful if it can be traced to what produced it. The summary records
+    ``config`` (which models and settings were used) and a fingerprint of the labels that
+    were scored, and every row carries the fingerprint of its own label.
     """
     run_dir = flow_dir / variant
     (run_dir / "traces").mkdir(parents=True, exist_ok=True)
@@ -183,6 +194,7 @@ def write_run(report: RetrievalReport, flow_dir: Path, variant: str, description
             row = {
                 "prompt_id": question.id,
                 "prompt": question.question,
+                "fingerprint": question.fingerprint,
                 "tags": [question.section, question.origin, f"review:{question.review}"],
                 "status": "ok",
                 "grade": result.scores,
@@ -214,8 +226,11 @@ def write_run(report: RetrievalReport, flow_dir: Path, variant: str, description
         for failure in report.failures:
             output.write(json.dumps(asdict(failure), ensure_ascii=False) + "\n")
 
+    labels = sorted(f"{r.question.id}:{r.question.fingerprint}" for r in report.results)
     summary = {
         "description": description,
+        "config": dict(config or {}),
+        "labels_fingerprint": hashlib.sha256("\n".join(labels).encode("utf-8")).hexdigest()[:16],
         "questions_scored": len(report.results),
         "questions_failed": len(report.failures),
         "questions_not_scored": report.not_scored,

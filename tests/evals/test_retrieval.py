@@ -172,7 +172,13 @@ def test_a_broken_label_stops_the_run() -> None:
 def test_run_is_written_as_one_row_per_question_with_a_summary(tmp_path: Path) -> None:
     report = evaluate_retrieval(QUESTIONS, DOCUMENTS, SECOND_PLACE)
 
-    run_dir = write_run(report, tmp_path / "retrieval", "baseline", "Dense retrieval only.")
+    run_dir = write_run(
+        report,
+        tmp_path / "retrieval",
+        "baseline",
+        "Dense retrieval only.",
+        {"retrieval_mode": "dense", "rerank": False},
+    )
 
     rows = [json.loads(line) for line in (run_dir / "results.jsonl").read_text().splitlines()]
     assert [row["prompt_id"] for row in rows] == ["q001", "q002"]
@@ -182,6 +188,9 @@ def test_run_is_written_as_one_row_per_question_with_a_summary(tmp_path: Path) -
     assert rows[0]["retrieved"][1]["covers"] == [0]
     summary = json.loads((run_dir / "summary.json").read_text())
     assert summary["questions_scored"] == 2
+    assert summary["config"] == {"retrieval_mode": "dense", "rerank": False}
+    assert len(summary["labels_fingerprint"]) == 16
+    assert rows[0]["fingerprint"] == QUESTIONS[0].fingerprint
     assert summary["questions_not_scored"] == 1
     assert summary["metrics"]["mrr@10"]["mean"] == 0.75
     assert (run_dir / "traces" / "q001_rep0.json").is_file()

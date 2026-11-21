@@ -70,3 +70,31 @@ def test_reranking_wraps_the_chosen_retriever_only_when_asked(loaded: list[str])
 def test_reranking_defaults_to_the_setting(loaded: list[str]) -> None:
     assert isinstance(wiring.make_retriever(Settings(rerank=True)), RerankingRetriever)
     assert isinstance(wiring.make_retriever(Settings(rerank=True), rerank=False), DenseRetriever)
+
+
+def test_a_run_description_lists_only_what_the_configuration_uses() -> None:
+    settings = Settings()
+
+    dense = wiring.describe_retrieval(settings, "dense", False)
+    sparse = wiring.describe_retrieval(settings, "sparse", False)
+    hybrid = wiring.describe_retrieval(settings, "hybrid", True)
+
+    assert dense["retrieval_mode"] == "dense"
+    assert dense["embedding_model"] == settings.embedding_model
+    assert dense["rerank"] is False
+    assert "sparse_model" not in dense
+    assert "rrf_k" not in dense
+    assert "rerank_model" not in dense
+    assert "embedding_model" not in sparse
+    assert sparse["sparse_model"] == settings.sparse_model
+    assert hybrid["rrf_k"] == settings.rrf_k
+    assert hybrid["rerank_model"] == settings.rerank_model
+    assert hybrid["handbook_commit"] == settings.handbook_commit
+    assert hybrid["collection"] == settings.collection_name
+
+
+def test_a_run_description_defaults_to_the_settings() -> None:
+    described = wiring.describe_retrieval(Settings(retrieval_mode="sparse", rerank=True))
+
+    assert described["retrieval_mode"] == "sparse"
+    assert described["rerank"] is True

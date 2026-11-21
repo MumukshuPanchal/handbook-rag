@@ -49,6 +49,36 @@ def make_reranker(settings: Settings) -> CrossEncoderReranker:
     return CrossEncoderReranker(settings.rerank_model)
 
 
+def describe_retrieval(
+    settings: Settings, mode: RetrievalMode | None = None, rerank: bool | None = None
+) -> dict[str, object]:
+    """The settings that decide what ``make_retriever`` returns, for recording with a run.
+
+    Only what the configuration uses is listed: keyword search has no embedding model,
+    and fusion settings mean nothing outside hybrid search.
+    """
+    mode = mode or settings.retrieval_mode
+    reranked = settings.rerank if rerank is None else rerank
+    described: dict[str, object] = {
+        "handbook_commit": settings.handbook_commit,
+        "chunking": settings.chunking.version,
+        "collection": settings.collection_name,
+        "retrieval_mode": mode,
+    }
+    if mode in ("dense", "hybrid"):
+        described["embedding_model"] = settings.embedding_model
+    if mode in ("sparse", "hybrid"):
+        described["sparse_model"] = settings.sparse_model
+    if mode == "hybrid":
+        described["fusion_candidates"] = settings.fusion_candidates
+        described["rrf_k"] = settings.rrf_k
+    described["rerank"] = reranked
+    if reranked:
+        described["rerank_model"] = settings.rerank_model
+        described["rerank_candidates"] = settings.rerank_candidates
+    return described
+
+
 def make_retriever(
     settings: Settings, mode: RetrievalMode | None = None, rerank: bool | None = None
 ) -> Retriever:

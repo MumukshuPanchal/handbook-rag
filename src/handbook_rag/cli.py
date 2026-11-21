@@ -13,6 +13,7 @@ from handbook_rag.config import get_settings
 from handbook_rag.evals.dataset import DatasetError, load_golden_set
 from handbook_rag.evals.golden import check_against_corpus, sample_source_chunks
 from handbook_rag.evals.retrieval import METRICS, evaluate_retrieval, write_run
+from handbook_rag.evals.review import render_review_page
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import VectorStoreError
 from handbook_rag.ingest.build import CorpusError, build_corpus
@@ -351,3 +352,36 @@ def golden_check(
             typer.echo(f"    - {problem}")
         raise typer.Exit(code=1)
     typer.echo("  labels    every quote was found in its page")
+
+
+@app.command(name="golden-review")
+def golden_review(
+    dataset: Annotated[
+        Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
+    ] = Path("evals/golden/questions.jsonl"),
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            help="Where to write the page. Defaults to golden-review.html in the data dir."
+        ),
+    ] = None,
+) -> None:
+    """Write a page that shows every question next to its evidence, for a person to review."""
+    settings = get_settings()
+    try:
+        questions = load_golden_set(dataset)
+        corpus = build_corpus(settings)
+    except FileNotFoundError as error:
+        typer.echo(f"error: golden set not found: {dataset}", err=True)
+        raise typer.Exit(code=1) from error
+    except (DatasetError, CorpusError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    target = output or settings.data_dir / "golden-review.html"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(render_review_page(questions, corpus.documents), encoding="utf-8")
+    pending = sum(question.review == "pending" for question in questions)
+    typer.echo(f"Review page for {len(questions)} questions ({pending} waiting for review)")
+    typer.echo(f"  written to  {target}")
+    typer.echo("  open it in a browser, then set review to verified for each question you accept")

@@ -366,3 +366,29 @@ def test_golden_check_fails_when_a_quote_is_not_in_its_page(tmp_path: Path) -> N
     assert result.exit_code == 1
     assert "1 broken" in result.output
     assert "q001: quote not found in people/leave.md" in result.output
+
+
+@pytest.mark.usefixtures("fake_pipeline")
+def test_golden_review_writes_a_page_with_the_evidence_marked(tmp_path: Path) -> None:
+    dataset = tmp_path / "questions.jsonl"
+    dataset.write_text(golden_rows("sixteen weeks of paid leave"))
+    output = tmp_path / "review" / "page.html"
+
+    result = runner.invoke(
+        app, ["golden-review", "--dataset", str(dataset), "--output", str(output)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Review page for 2 questions (2 waiting for review)" in result.output
+    assert "<mark>sixteen weeks of paid leave</mark>" in output.read_text()
+
+
+@pytest.mark.usefixtures("fake_pipeline")
+def test_golden_review_defaults_to_the_data_directory(tmp_path: Path) -> None:
+    dataset = tmp_path / "questions.jsonl"
+    dataset.write_text(golden_rows("sixteen weeks of paid leave"))
+
+    result = runner.invoke(app, ["golden-review", "--dataset", str(dataset)])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "data" / "golden-review.html").is_file()

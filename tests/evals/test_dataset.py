@@ -166,3 +166,12 @@ def test_fingerprint_changes_only_when_something_a_score_depends_on_changes() ->
     assert (
         fingerprint(evidence=[{"doc_id": "people/leave.md", "quote": "sixteen weeks"}]) != original
     )
+
+
+def test_a_model_check_and_a_blind_origin_are_recorded() -> None:
+    question = GoldenQuestion.model_validate(
+        {**ANSWERABLE, "origin": "model-blind", "review": "checked"}
+    )
+
+    assert question.origin == "model-blind"
+    assert question.review == "checked"

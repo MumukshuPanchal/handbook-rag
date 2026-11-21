@@ -42,11 +42,14 @@ class GoldenQuestion(BaseModel):
     evidence: tuple[Evidence, ...] = ()
     type: Literal["answerable", "unanswerable"]
     """Whether the handbook contains the answer. Unanswerable questions test declining."""
-    origin: Literal["hand-written", "model-drafted"]
-    """Who wrote the question. Results are reported per origin, because questions drafted
-    by a model tend to reuse the wording of their source passage."""
-    review: Literal["pending", "verified"] = "pending"
-    """Whether a person has checked the question, the answer and the evidence."""
+    origin: Literal["hand-written", "model-drafted", "model-blind"]
+    """Who made the question. ``model-drafted``: a model that was shown the passage, so the
+    question tends to reuse its wording. ``model-blind``: a model that was shown no
+    handbook text; the evidence was found afterwards. Results are reported per origin."""
+    review: Literal["pending", "checked", "verified"] = "pending"
+    """Who checked the question, the answer and the evidence. ``checked``: an independent
+    checker, a separate model session that did not see how the question was made.
+    ``verified``: a person. A model's check is never recorded as a person's review."""
     unanswerable_kind: Literal["near-miss", "false-premise", "out-of-scope"] | None = None
     """Why the handbook cannot answer. ``near-miss``: it covers the topic but not the detail
     asked. ``false-premise``: the question assumes something the company does not have.

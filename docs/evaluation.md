@@ -24,8 +24,8 @@ A golden set is a fixed list of test questions with known answers. It lives in `
 |---|---|
 | `evidence` | The page and an exact quote from its cleaned text that answers the question |
 | `type` | `answerable`, or `unanswerable` for questions the handbook cannot answer |
-| `origin` | `hand-written` or `model-drafted` |
-| `review` | `verified` once a person has checked the question, the answer and the evidence |
+| `origin` | Who made it: `hand-written`, `model-drafted` (a model that was shown the passage) or `model-blind` (a model that was shown no handbook text; the evidence was found afterwards) |
+| `review` | Who checked it: `pending` (nobody), `checked` (an independent checker, a separate model session that did not see how the question was made) or `verified` (a person) |
 | `unanswerable_kind` | Unanswerable questions only: `near-miss`, `false-premise` or `out-of-scope` |
 | `note` | Optional. Anything a reviewer should know, such as why no page answers the question |
 
@@ -34,6 +34,8 @@ Evidence is a page and a quote, never a chunk id. Chunk ids change whenever chun
 If a quote cannot be found in its page, the run stops. A label that no longer matches the corpus would make every number that depends on it wrong.
 
 ## How the golden set is built
+
+Nobody checks their own work here. A maker writes each question. A checker that has not seen how it was made looks for the maker's mistakes. The maker fixes what was found, and a fresh checker checks the fixes. The `origin` field records who made a question and the `review` field who checked it. The [drafting guidelines](../evals/golden/drafting-guidelines.md) describe both roles.
 
 The current set, its counts and its known limits are described in its [dataset card](../evals/golden/README.md).
 

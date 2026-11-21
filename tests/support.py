@@ -1,10 +1,16 @@
 """Helpers shared by tests. Fixtures live in ``conftest.py``; plain helpers live here."""
 
 import json
+import math
+import re
 import subprocess
+import uuid
+import zlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from handbook_rag.ingest.models import Chunk
 
 
 def git(repo: Path, *args: str) -> str:
@@ -37,3 +43,57 @@ def write_snapshot(data_dir: Path, commit: str, pages: dict[str, str]) -> None:
         page.parent.mkdir(parents=True, exist_ok=True)
         page.write_text(text)
     (data_dir / "handbook" / "manifest.json").write_text(json.dumps({"commit": commit}))
+
+
+class FakeEmbedder:
+    """A stand-in embedding model for tests: fast, deterministic, and needs no download.
+
+    Each word is hashed to one of a few dimensions, so two texts that share words get
+    similar vectors. That is enough to test indexing and retrieval logic.
+    """
+
+    name = "fake-embedder"
+    dimension = 64
+    device = "cpu"
+    max_tokens = 512
+
+    def __init__(self) -> None:
+        self.embedded: list[str] = []
+
+    def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        self.embedded.extend(texts)
+        return [self._vector(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._vector(text)
+
+    def _vector(self, text: str) -> list[float]:
+        vector = [0.0] * self.dimension
+        for word in re.findall(r"[a-z0-9]+", text.lower()):
+            vector[zlib.crc32(word.encode()) % self.dimension] += 1.0
+        length = math.sqrt(sum(value * value for value in vector)) or 1.0
+        return [value / length for value in vector]
+
+
+def make_chunk(
+    text: str,
+    *,
+    doc_id: str = "people/leave.md",
+    section: str = "people",
+    title: str = "Leave",
+    heading_path: tuple[str, ...] = (),
+) -> Chunk:
+    """A chunk with a valid id derived from its content, for tests that need one."""
+    return Chunk(
+        chunk_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}|{text}")),
+        doc_id=doc_id,
+        title=title,
+        url=f"https://handbook.example.com/handbook/{doc_id.removesuffix('.md')}/",
+        section=section,
+        source_commit="a" * 40,
+        heading_path=heading_path,
+        start_char=0,
+        end_char=len(text),
+        text=text,
+        token_count=len(text.split()),
+    )

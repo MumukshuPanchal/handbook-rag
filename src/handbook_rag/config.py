@@ -51,6 +51,34 @@ class Settings(BaseSettings):
         default="CC-BY-SA-4.0",
         description="SPDX identifier of the licence the handbook text is published under.",
     )
+    handbook_base_url: str = Field(
+        default="https://handbook.gitlab.com/handbook/",
+        description="Public address of the handbook, used to build a link to each page.",
+    )
+    min_page_chars: int = Field(
+        default=200,
+        gt=0,
+        description="Pages with less cleaned text than this are skipped as stubs.",
+    )
+
+    embedding_model: str = Field(
+        default="BAAI/bge-small-en-v1.5",
+        description="Embedding model. Its tokenizer also measures chunk sizes.",
+    )
+    embedding_max_tokens: int = Field(
+        default=512,
+        gt=0,
+        description="Longest input the embedding model reads. Text beyond it is ignored.",
+    )
+    chunk_max_tokens: int = Field(
+        default=320, gt=0, description="Token budget for one chunk, before its context header."
+    )
+    chunk_min_tokens: int = Field(
+        default=60, gt=0, description="Pieces smaller than this are merged into a neighbour."
+    )
+    chunk_overlap_tokens: int = Field(
+        default=40, ge=0, description="How much of a piece may be repeated in the next one."
+    )
 
 
 @lru_cache

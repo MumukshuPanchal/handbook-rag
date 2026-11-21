@@ -111,3 +111,17 @@ def make_chunk(
         text=text,
         token_count=len(text.split()),
     )
+
+
+class FakeReranker:
+    """A stand-in reranker for tests: scores a text by how many of the question's words it has."""
+
+    name = "fake-reranker"
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, list[str]]] = []
+
+    def score(self, query: str, texts: Sequence[str]) -> list[float]:
+        self.calls.append((query, list(texts)))
+        wanted = set(re.findall(r"[a-z0-9]+", query.lower()))
+        return [float(len(wanted & set(re.findall(r"[a-z0-9]+", text.lower())))) for text in texts]

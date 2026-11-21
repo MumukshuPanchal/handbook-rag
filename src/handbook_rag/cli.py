@@ -186,11 +186,18 @@ def search(
         RetrievalMode | None,
         typer.Option(help="dense (by meaning), sparse (by keyword) or hybrid. Default: settings."),
     ] = None,
+    rerank: Annotated[
+        bool | None,
+        typer.Option(
+            "--rerank/--no-rerank",
+            help="Re-score the candidates with a cross-encoder. Default: settings.",
+        ),
+    ] = None,
 ) -> None:
     """Find the chunks most relevant to a question."""
     settings = get_settings()
     try:
-        retriever = wiring.make_retriever(settings, mode)
+        retriever = wiring.make_retriever(settings, mode, rerank)
         results = retriever.retrieve(query, limit=limit or settings.search_limit, section=section)
     except VectorStoreError as error:
         typer.echo(f"error: {error}", err=True)
@@ -224,13 +231,20 @@ def eval_retrieval(
         RetrievalMode | None,
         typer.Option(help="dense (by meaning), sparse (by keyword) or hybrid. Default: settings."),
     ] = None,
+    rerank: Annotated[
+        bool | None,
+        typer.Option(
+            "--rerank/--no-rerank",
+            help="Re-score the candidates with a cross-encoder. Default: settings.",
+        ),
+    ] = None,
 ) -> None:
     """Score retrieval on the golden set: is the right passage found, and how high?"""
     settings = get_settings()
     try:
         questions = load_golden_set(dataset)
         corpus = build_corpus(settings)
-        retriever = wiring.make_retriever(settings, mode)
+        retriever = wiring.make_retriever(settings, mode, rerank)
         report = evaluate_retrieval(questions, corpus.documents, retriever)
     except FileNotFoundError as error:
         typer.echo(f"error: golden set not found: {dataset}", err=True)
@@ -245,7 +259,11 @@ def eval_retrieval(
     run_dir = write_run(report, output, variant, description)
 
     typer.echo(f"Retrieval evaluation: {variant}")
-    typer.echo(f"  mode        {mode or settings.retrieval_mode}")
+    reranked = settings.rerank if rerank is None else rerank
+    typer.echo(
+        f"  mode        {mode or settings.retrieval_mode}"
+        f"{', reranked with ' + settings.rerank_model if reranked else ''}"
+    )
     typer.echo(f"  collection  {settings.collection_name}")
     typer.echo(
         f"  questions   {len(report.results)} scored, {len(report.failures)} failed, "

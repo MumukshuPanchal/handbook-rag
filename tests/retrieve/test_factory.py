@@ -6,8 +6,9 @@ from handbook_rag.config import Settings
 from handbook_rag.index.store import QdrantVectorStore
 from handbook_rag.retrieve.dense import DenseRetriever
 from handbook_rag.retrieve.hybrid import HybridRetriever
+from handbook_rag.retrieve.rerank import RerankingRetriever
 from handbook_rag.retrieve.sparse import SparseRetriever
-from tests.support import FakeEmbedder, FakeSparseEncoder
+from tests.support import FakeEmbedder, FakeReranker, FakeSparseEncoder
 
 
 @pytest.fixture
@@ -24,8 +25,13 @@ def loaded(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         built.append("sparse")
         return FakeSparseEncoder()
 
+    def reranker(_settings: Settings) -> FakeReranker:
+        built.append("reranker")
+        return FakeReranker()
+
     monkeypatch.setattr(wiring, "make_embedder", embedder)
     monkeypatch.setattr(wiring, "make_sparse_encoder", sparse_encoder)
+    monkeypatch.setattr(wiring, "make_reranker", reranker)
     monkeypatch.setattr(
         wiring, "make_store", lambda settings: QdrantVectorStore(client, settings.collection_name)
     )
@@ -50,3 +56,17 @@ def test_hybrid_mode_loads_both(loaded: list[str]) -> None:
 def test_mode_defaults_to_the_setting(loaded: list[str]) -> None:
     assert isinstance(wiring.make_retriever(Settings(retrieval_mode="sparse")), SparseRetriever)
     assert isinstance(wiring.make_retriever(Settings()), DenseRetriever)
+
+
+def test_reranking_wraps_the_chosen_retriever_only_when_asked(loaded: list[str]) -> None:
+    assert isinstance(wiring.make_retriever(Settings(), "dense", rerank=True), RerankingRetriever)
+    assert "reranker" in loaded
+
+    loaded.clear()
+    assert isinstance(wiring.make_retriever(Settings(), "dense", rerank=False), DenseRetriever)
+    assert "reranker" not in loaded
+
+
+def test_reranking_defaults_to_the_setting(loaded: list[str]) -> None:
+    assert isinstance(wiring.make_retriever(Settings(rerank=True)), RerankingRetriever)
+    assert isinstance(wiring.make_retriever(Settings(rerank=True), rerank=False), DenseRetriever)

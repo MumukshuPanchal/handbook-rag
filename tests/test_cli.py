@@ -10,6 +10,7 @@ from handbook_rag.cli import app
 from handbook_rag.index.store import QdrantVectorStore
 from tests.support import (
     FakeEmbedder,
+    FakeReranker,
     FakeSparseEncoder,
     Upstream,
     count_words,
@@ -132,6 +133,7 @@ def fake_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeEmbedd
     monkeypatch.setattr(
         "handbook_rag.wiring.make_sparse_encoder", lambda _settings: FakeSparseEncoder()
     )
+    monkeypatch.setattr("handbook_rag.wiring.make_reranker", lambda _settings: FakeReranker())
     monkeypatch.setattr(
         "handbook_rag.wiring.make_store",
         lambda settings: QdrantVectorStore(client, settings.collection_name),
@@ -287,3 +289,15 @@ def test_eval_retrieval_reports_the_mode_it_ran_in(
     assert result.exit_code == 0, result.output
     assert "mode        hybrid" in result.output
     assert (tmp_path / "runs" / "v1" / "results.jsonl").is_file()
+
+
+def test_search_can_rerank_its_results(fake_pipeline: FakeEmbedder) -> None:
+    runner.invoke(app, ["index"])
+
+    found = runner.invoke(
+        app, ["search", "laptop expense dollars", "--limit", "1", "--mode", "hybrid", "--rerank"]
+    )
+
+    assert found.exit_code == 0, found.output
+    assert "finance/expenses" in found.output
+    assert "1. 3.000" in found.output

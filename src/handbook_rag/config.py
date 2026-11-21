@@ -118,6 +118,17 @@ class Settings(BaseSettings):
         gt=0,
         description="In hybrid mode, how many candidates each search contributes before merging.",
     )
+    rerank: bool = Field(
+        default=False,
+        description="Whether retrieved candidates are re-scored by a cross-encoder before use.",
+    )
+    rerank_model: str = Field(
+        default="cross-encoder/ms-marco-MiniLM-L6-v2",
+        description="Cross-encoder model that scores a question against each candidate chunk.",
+    )
+    rerank_candidates: int = Field(
+        default=30, gt=0, description="How many candidates the first search hands to the reranker."
+    )
     rrf_k: int = Field(
         default=60,
         gt=0,

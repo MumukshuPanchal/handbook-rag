@@ -52,7 +52,10 @@ Each way of retrieving is a variant of the same run, so they can be compared que
 uv run handbook-rag eval-retrieval --variant baseline --mode dense
 uv run handbook-rag eval-retrieval --variant v1 --mode sparse --description "Keyword search only (BM25)."
 uv run handbook-rag eval-retrieval --variant v2 --mode hybrid --description "Dense and BM25 merged with reciprocal rank fusion."
+uv run handbook-rag eval-retrieval --variant v3 --mode hybrid --rerank --description "Hybrid, then reranked by a cross-encoder."
 ```
+
+Each row records the latency of its retrieval, so a variant's gain in quality can be weighed against the time it adds.
 
 | Metric | Question it answers |
 |---|---|

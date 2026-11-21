@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant index search eval-retrieval eval-compare golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant index search eval-retrieval eval-compare eval-table golden-check golden-review
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -47,6 +47,9 @@ eval-retrieval: ## Score retrieval on the golden set
 
 eval-compare: ## Compare two runs: make eval-compare base=baseline candidate=v1
 	uv run handbook-rag eval-compare $(base) $(candidate)
+
+eval-table: ## Print a Markdown table of every evaluation run
+	uv run handbook-rag eval-table --metric hit@5 --metric hit@1 --metric mrr@10 --metric ndcg@10
 
 golden-check: ## Check every golden set label against the corpus
 	uv run handbook-rag golden-check

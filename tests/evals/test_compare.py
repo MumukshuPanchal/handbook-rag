@@ -3,7 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from handbook_rag.evals.compare import ComparisonError, compare_runs, load_run, metric_labels
+from handbook_rag.evals.compare import (
+    ComparisonError,
+    compare_runs,
+    load_run,
+    metric_labels,
+    overview_of_runs,
+    results_table,
+)
 
 
 def write_run(
@@ -112,3 +119,63 @@ def test_metric_labels_follow_the_order_the_flow_declares(tmp_path: Path) -> Non
 
     assert metric_labels(tmp_path) == {"hit@5": "Hit@5", "mrr@10": "mrr@10"}
     assert metric_labels(tmp_path / "elsewhere") == {}
+
+
+def write_summarised_run(
+    flow_dir: Path, name: str, hit: float, latencies: list[float], description: str
+) -> None:
+    """Write a run the way the evaluation does, as far as the overview reads it."""
+    run_dir = flow_dir / name
+    run_dir.mkdir(parents=True)
+    rows = [{"prompt_id": f"q{i}", "status": "ok", "latency_s": s} for i, s in enumerate(latencies)]
+    (run_dir / "results.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    estimate = {"mean": hit, "low": hit - 0.05, "high": hit + 0.04, "count": len(latencies)}
+    summary = {
+        "description": description,
+        "config": {"retrieval_mode": name},
+        "questions_scored": len(latencies),
+        "metrics": {"hit@5": estimate, "mrr@10": {**estimate, "mean": hit - 0.1}},
+    }
+    (run_dir / "summary.json").write_text(json.dumps(summary))
+
+
+def test_overview_lists_the_baseline_first_and_then_runs_in_numeric_order(tmp_path: Path) -> None:
+    for name in ("v10", "v2", "baseline", "v1"):
+        write_summarised_run(tmp_path, name, 0.8, [0.03], f"Run {name}.")
+
+    overviews = overview_of_runs(tmp_path)
+
+    assert [overview.name for overview in overviews] == ["baseline", "v1", "v2", "v10"]
+    assert overviews[0].config == {"retrieval_mode": "baseline"}
+
+
+def test_overview_reads_scores_and_the_median_latency(tmp_path: Path) -> None:
+    write_summarised_run(tmp_path, "baseline", 0.8, [0.010, 0.030, 0.500], "Dense.")
+
+    (overview,) = overview_of_runs(tmp_path)
+
+    assert overview.description == "Dense."
+    assert overview.questions == 3
+    assert overview.metrics["hit@5"].mean == 0.8
+    assert overview.median_latency_s == 0.030
+
+
+def test_results_table_is_markdown_with_an_interval_on_the_first_metric(tmp_path: Path) -> None:
+    write_summarised_run(tmp_path, "baseline", 0.8, [0.030], "Dense only.")
+    write_summarised_run(tmp_path, "v1", 0.9, [0.221], "Hybrid.")
+
+    table = results_table(
+        overview_of_runs(tmp_path), {"hit@5": "Hit@5", "mrr@10": "MRR@10"}, ["hit@5", "mrr@10"]
+    )
+
+    assert table.splitlines() == [
+        "| Run | What it is | Questions | Hit@5 (95% interval) | MRR@10 | Median time |",
+        "|---|---|---|---|---|---|",
+        "| baseline | Dense only. | 1 | 0.800 (0.750 to 0.840) | 0.700 | 30 ms |",
+        "| v1 | Hybrid. | 1 | 0.900 (0.850 to 0.940) | 0.800 | 221 ms |",
+    ]
+
+
+def test_a_directory_without_runs_is_an_error(tmp_path: Path) -> None:
+    with pytest.raises(ComparisonError, match="no runs found"):
+        overview_of_runs(tmp_path)

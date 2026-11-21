@@ -424,3 +424,29 @@ def test_eval_compare_explains_a_run_that_does_not_exist(tmp_path: Path) -> None
 
     assert result.exit_code == 1
     assert "no run found" in result.output
+
+
+def test_eval_table_prints_one_row_per_run(fake_pipeline: FakeEmbedder, tmp_path: Path) -> None:
+    runner.invoke(app, ["index"])
+    dataset = tmp_path / "questions.jsonl"
+    dataset.write_text(golden_rows("sixteen weeks of paid leave"))
+    runs = tmp_path / "runs"
+    common = ["eval-retrieval", "--dataset", str(dataset), "--output", str(runs)]
+    runner.invoke(app, [*common, "--description", "Dense."])
+    runner.invoke(app, [*common, "--variant", "v1", "--mode", "hybrid", "--description", "Hybrid."])
+
+    table = runner.invoke(
+        app, ["eval-table", "--runs", str(runs), "--metric", "hit@5", "--metric", "mrr@10"]
+    )
+    unknown = runner.invoke(app, ["eval-table", "--runs", str(runs), "--metric", "bleu"])
+    empty = runner.invoke(app, ["eval-table", "--runs", str(tmp_path / "nowhere")])
+
+    assert table.exit_code == 0, table.output
+    lines = table.output.splitlines()
+    assert lines[0].startswith("| Run | What it is | Questions | Hit@5 (95% interval) | MRR@10 |")
+    assert lines[2].startswith("| baseline | Dense. | 1 | 1.000 (1.000 to 1.000) | 1.000 |")
+    assert lines[3].startswith("| v1 | Hybrid. | 1 | 1.000 (1.000 to 1.000) | 1.000 |")
+    assert unknown.exit_code == 1
+    assert "no such metric" in unknown.output
+    assert empty.exit_code == 1
+    assert "no runs found" in empty.output

@@ -102,6 +102,8 @@ How to read a row:
 
 The comparison refuses to run if the two variants did not score exactly the same questions with the same labels. Every row in `results.jsonl` carries a fingerprint of its question, reference answer and evidence, so a run made before the golden set changed cannot be compared by accident with one made after.
 
+To report results, `make eval-table` prints one row per variant as a Markdown table, read from the files each run wrote. Numbers in a write-up are generated, never copied by hand.
+
 ## What a run writes
 
 Each run is a variant: `baseline` first, then `v1`, `v2` and so on. A variant directory under `evals/runs/retrieval/` contains:

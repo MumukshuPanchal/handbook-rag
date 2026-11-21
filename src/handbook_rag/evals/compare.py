@@ -6,6 +6,9 @@ set and reports the difference per question, with a confidence interval.
 """
 
 import json
+import re
+import statistics
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,6 +48,18 @@ class RunComparison:
     candidate: RunScores
     questions: int
     metrics: dict[str, MetricComparison]
+
+
+@dataclass(frozen=True, slots=True)
+class RunOverview:
+    """One run, summarised for a results table."""
+
+    name: str
+    description: str
+    questions: int
+    metrics: dict[str, Estimate]
+    median_latency_s: float | None
+    config: dict[str, object]
 
 
 def metric_labels(flow_dir: Path) -> dict[str, str]:
@@ -122,3 +137,66 @@ def compare_runs(base_dir: Path, candidate_dir: Path) -> RunComparison:
             change=paired_difference(before, after),
         )
     return RunComparison(base=base, candidate=candidate, questions=len(order), metrics=metrics)
+
+
+def _run_order(name: str) -> tuple[bool, list[int | str]]:
+    """Sort key: the baseline first, then v1, v2, ... v10 in numeric order."""
+    parts: list[int | str] = [
+        int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name) if part
+    ]
+    return (name != "baseline", parts)
+
+
+def overview_of_runs(flow_dir: Path) -> list[RunOverview]:
+    """Summarise every run under a flow directory, from the files each run wrote."""
+    overviews: list[RunOverview] = []
+    for summary_path in flow_dir.glob("*/summary.json"):
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        latencies = [
+            float(row["latency_s"])
+            for line in (summary_path.parent / "results.jsonl").read_text("utf-8").splitlines()
+            if "latency_s" in (row := json.loads(line))
+        ]
+        overviews.append(
+            RunOverview(
+                name=summary_path.parent.name,
+                description=summary.get("description", ""),
+                questions=int(summary.get("questions_scored", 0)),
+                metrics={
+                    name: Estimate(**estimate) for name, estimate in summary["metrics"].items()
+                },
+                median_latency_s=statistics.median(latencies) if latencies else None,
+                config=dict(summary.get("config", {})),
+            )
+        )
+    if not overviews:
+        raise ComparisonError(f"no runs found under {flow_dir}")
+    return sorted(overviews, key=lambda overview: _run_order(overview.name))
+
+
+def results_table(
+    overviews: Sequence[RunOverview], labels: dict[str, str], metric_ids: Sequence[str]
+) -> str:
+    """A Markdown table of the runs, one row each.
+
+    The first metric is shown with its 95% confidence interval, the rest as means. The
+    table is generated so that numbers in a write-up are never copied by hand.
+    """
+    headline = metric_ids[0]
+    header = ["Run", "What it is", "Questions", f"{labels.get(headline, headline)} (95% interval)"]
+    header += [labels.get(metric, metric) for metric in metric_ids[1:]]
+    header.append("Median time")
+    lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
+    for overview in overviews:
+        first = overview.metrics[headline]
+        cells = [
+            overview.name,
+            overview.description,
+            str(overview.questions),
+            f"{first.mean:.3f} ({first.low:.3f} to {first.high:.3f})",
+        ]
+        cells += [f"{overview.metrics[metric].mean:.3f}" for metric in metric_ids[1:]]
+        latency = overview.median_latency_s
+        cells.append("" if latency is None else f"{latency * 1000:.0f} ms")
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines) + "\n"

@@ -10,7 +10,13 @@ import typer
 
 from handbook_rag import __version__, wiring
 from handbook_rag.config import get_settings
-from handbook_rag.evals.compare import ComparisonError, compare_runs, metric_labels
+from handbook_rag.evals.compare import (
+    ComparisonError,
+    compare_runs,
+    metric_labels,
+    overview_of_runs,
+    results_table,
+)
 from handbook_rag.evals.dataset import DatasetError, load_golden_set
 from handbook_rag.evals.golden import check_against_corpus, sample_source_chunks
 from handbook_rag.evals.retrieval import METRICS, evaluate_retrieval, write_run
@@ -324,6 +330,31 @@ def eval_compare(
     typer.echo("")
     typer.echo("  clear    the interval excludes zero: chance is an unlikely explanation")
     typer.echo("  unclear  the two runs cannot be told apart with this many questions")
+
+
+@app.command(name="eval-table")
+def eval_table(
+    runs: Annotated[
+        Path, typer.Option(help="Directory that holds one sub-directory per run.")
+    ] = Path("evals/runs/retrieval"),
+    metric: Annotated[
+        list[str] | None,
+        typer.Option(help="Metric to show, in order. Repeat for several. Default: all."),
+    ] = None,
+) -> None:
+    """Print a Markdown table of every run, for pasting into a write-up."""
+    try:
+        overviews = overview_of_runs(runs)
+    except ComparisonError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    labels = metric_labels(runs) or {name: name for name in overviews[0].metrics}
+    chosen = metric or list(labels)
+    unknown = [name for name in chosen if any(name not in o.metrics for o in overviews)]
+    if unknown:
+        typer.echo(f"error: no such metric in every run: {', '.join(unknown)}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(results_table(overviews, labels, chosen), nl=False)
 
 
 @app.command(name="golden-candidates")

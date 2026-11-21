@@ -99,10 +99,32 @@ class Settings(BaseSettings):
             "batch of 64 long chunks was five times slower than 16."
         ),
     )
+    sparse_model: str = Field(
+        default="Qdrant/bm25", description="Model that builds the sparse keyword vectors."
+    )
     qdrant_url: str = Field(
         default="http://localhost:6333", description="Address of the Qdrant vector store."
     )
     search_limit: int = Field(default=5, gt=0, description="How many chunks a search returns.")
+    retrieval_mode: Literal["dense", "sparse", "hybrid"] = Field(
+        default="dense",
+        description=(
+            "How chunks are retrieved: by meaning (dense), by keyword (sparse), or both "
+            "merged (hybrid)."
+        ),
+    )
+    fusion_candidates: int = Field(
+        default=30,
+        gt=0,
+        description="In hybrid mode, how many candidates each search contributes before merging.",
+    )
+    rrf_k: int = Field(
+        default=60,
+        gt=0,
+        description=(
+            "Reciprocal rank fusion constant. Larger values flatten the advantage of top ranks."
+        ),
+    )
 
     @property
     def chunking(self) -> ChunkingConfig:
@@ -115,13 +137,19 @@ class Settings(BaseSettings):
 
     @property
     def collection_name(self) -> str:
-        """The vector store collection for this corpus, embedding model and chunking.
+        """The vector store collection for this corpus, these models and this chunking.
 
-        Changing any of the three gives a new collection, so vectors produced under
-        different settings are never mixed in one index.
+        Changing any of them gives a new collection, so vectors produced under different
+        settings are never mixed in one index.
         """
-        model = re.sub(r"[^a-z0-9]+", "-", self.embedding_model.lower()).strip("-")
-        return f"handbook-{self.handbook_commit[:8]}-{model}-{self.chunking.version}"
+
+        def slug(name: str) -> str:
+            return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+        return (
+            f"handbook-{self.handbook_commit[:8]}-{slug(self.embedding_model)}"
+            f"-{slug(self.sparse_model)}-{self.chunking.version}"
+        )
 
 
 @lru_cache

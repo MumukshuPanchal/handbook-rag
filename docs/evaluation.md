@@ -46,6 +46,14 @@ make eval-retrieval
 
 No language model is involved, so a run is free and gives the same result every time.
 
+Each way of retrieving is a variant of the same run, so they can be compared question by question:
+
+```bash
+uv run handbook-rag eval-retrieval --variant baseline --mode dense
+uv run handbook-rag eval-retrieval --variant v1 --mode sparse --description "Keyword search only (BM25)."
+uv run handbook-rag eval-retrieval --variant v2 --mode hybrid --description "Dense and BM25 merged with reciprocal rank fusion."
+```
+
 | Metric | Question it answers |
 |---|---|
 | Hit@k | Did a relevant chunk appear in the top k? The model can only answer from what it is given, so Hit@5 is the ceiling on answer quality when five chunks are passed. |

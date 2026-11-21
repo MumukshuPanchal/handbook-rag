@@ -8,7 +8,13 @@ from typer.testing import CliRunner
 from handbook_rag import __version__
 from handbook_rag.cli import app
 from handbook_rag.index.store import QdrantVectorStore
-from tests.support import FakeEmbedder, Upstream, count_words, write_snapshot
+from tests.support import (
+    FakeEmbedder,
+    FakeSparseEncoder,
+    Upstream,
+    count_words,
+    write_snapshot,
+)
 
 runner = CliRunner()
 
@@ -122,9 +128,12 @@ def fake_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeEmbedd
 
     embedder = FakeEmbedder()
     client = QdrantClient(":memory:")
-    monkeypatch.setattr("handbook_rag.cli.make_embedder", lambda _settings: embedder)
+    monkeypatch.setattr("handbook_rag.wiring.make_embedder", lambda _settings: embedder)
     monkeypatch.setattr(
-        "handbook_rag.cli.make_store",
+        "handbook_rag.wiring.make_sparse_encoder", lambda _settings: FakeSparseEncoder()
+    )
+    monkeypatch.setattr(
+        "handbook_rag.wiring.make_store",
         lambda settings: QdrantVectorStore(client, settings.collection_name),
     )
     return embedder
@@ -229,3 +238,52 @@ def test_eval_retrieval_explains_a_missing_or_broken_golden_set(tmp_path: Path) 
     assert "golden set not found" in missing.output
     assert malformed.exit_code == 1
     assert "broken.jsonl:1" in malformed.output
+
+
+@pytest.mark.parametrize("mode", ["dense", "sparse", "hybrid"])
+def test_search_works_in_every_retrieval_mode(fake_pipeline: FakeEmbedder, mode: str) -> None:
+    runner.invoke(app, ["index"])
+
+    found = runner.invoke(app, ["search", "parental leave weeks", "--limit", "1", "--mode", mode])
+
+    assert found.exit_code == 0, found.output
+    assert "people/leave" in found.output
+
+
+def test_eval_retrieval_reports_the_mode_it_ran_in(
+    fake_pipeline: FakeEmbedder, tmp_path: Path
+) -> None:
+    runner.invoke(app, ["index"])
+    dataset = tmp_path / "questions.jsonl"
+    dataset.write_text(
+        json.dumps(
+            {
+                "id": "q001",
+                "question": "how many weeks of paid parental leave do new parents get",
+                "reference_answer": "Sixteen weeks.",
+                "evidence": [{"doc_id": "people/leave.md", "quote": "sixteen weeks of paid leave"}],
+                "type": "answerable",
+                "origin": "hand-written",
+            }
+        )
+        + "\n"
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "eval-retrieval",
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(tmp_path / "runs"),
+            "--variant",
+            "v1",
+            "--mode",
+            "hybrid",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "mode        hybrid" in result.output
+    assert (tmp_path / "runs" / "v1" / "results.jsonl").is_file()

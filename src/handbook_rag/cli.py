@@ -8,7 +8,7 @@ from typing import Annotated
 
 import typer
 
-from handbook_rag import __version__
+from handbook_rag import __version__, wiring
 from handbook_rag.config import get_settings
 from handbook_rag.evals.dataset import DatasetError, load_golden_set
 from handbook_rag.evals.golden import check_against_corpus, sample_source_chunks
@@ -18,8 +18,7 @@ from handbook_rag.index.store import VectorStoreError
 from handbook_rag.ingest.build import CorpusError, build_corpus
 from handbook_rag.ingest.snapshot import SnapshotError, download_snapshot
 from handbook_rag.ingest.tokens import token_counter
-from handbook_rag.retrieve.dense import DenseRetriever
-from handbook_rag.wiring import make_embedder, make_store
+from handbook_rag.wiring import RetrievalMode
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -132,16 +131,18 @@ def index() -> None:
     """Embed every chunk and store it in the vector store. Safe to run again."""
     settings = get_settings()
     try:
-        store = make_store(settings)
+        store = wiring.make_store(settings)
         corpus = build_corpus(settings)
     except (CorpusError, VectorStoreError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=1) from error
 
-    embedder = make_embedder(settings)
+    embedder = wiring.make_embedder(settings)
+    sparse_encoder = wiring.make_sparse_encoder(settings)
     typer.echo(f"Indexing {len(corpus.chunks):,} chunks")
     typer.echo(f"  collection  {store.collection}")
-    typer.echo(f"  model       {embedder.name} on {embedder.device}")
+    typer.echo(f"  dense       {embedder.name} on {embedder.device}")
+    typer.echo(f"  sparse      {sparse_encoder.name}")
 
     last_reported = 0
 
@@ -154,7 +155,11 @@ def index() -> None:
 
     try:
         report = index_chunks(
-            corpus.chunks, embedder=embedder, store=store, on_progress=report_progress
+            corpus.chunks,
+            embedder=embedder,
+            sparse_encoder=sparse_encoder,
+            store=store,
+            on_progress=report_progress,
         )
     except VectorStoreError as error:
         typer.echo(f"error: {error}", err=True)
@@ -177,12 +182,15 @@ def search(
         str | None,
         typer.Option(help="Search only one handbook section, such as 'engineering'."),
     ] = None,
+    mode: Annotated[
+        RetrievalMode | None,
+        typer.Option(help="dense (by meaning), sparse (by keyword) or hybrid. Default: settings."),
+    ] = None,
 ) -> None:
-    """Find the chunks closest in meaning to a question."""
+    """Find the chunks most relevant to a question."""
     settings = get_settings()
     try:
-        store = make_store(settings)
-        retriever = DenseRetriever(make_embedder(settings), store)
+        retriever = wiring.make_retriever(settings, mode)
         results = retriever.retrieve(query, limit=limit or settings.search_limit, section=section)
     except VectorStoreError as error:
         typer.echo(f"error: {error}", err=True)
@@ -212,13 +220,17 @@ def eval_retrieval(
     output: Annotated[
         Path, typer.Option(help="Directory that holds one sub-directory per variant.")
     ] = Path("evals/runs/retrieval"),
+    mode: Annotated[
+        RetrievalMode | None,
+        typer.Option(help="dense (by meaning), sparse (by keyword) or hybrid. Default: settings."),
+    ] = None,
 ) -> None:
     """Score retrieval on the golden set: is the right passage found, and how high?"""
     settings = get_settings()
     try:
         questions = load_golden_set(dataset)
         corpus = build_corpus(settings)
-        retriever = DenseRetriever(make_embedder(settings), make_store(settings))
+        retriever = wiring.make_retriever(settings, mode)
         report = evaluate_retrieval(questions, corpus.documents, retriever)
     except FileNotFoundError as error:
         typer.echo(f"error: golden set not found: {dataset}", err=True)
@@ -233,6 +245,7 @@ def eval_retrieval(
     run_dir = write_run(report, output, variant, description)
 
     typer.echo(f"Retrieval evaluation: {variant}")
+    typer.echo(f"  mode        {mode or settings.retrieval_mode}")
     typer.echo(f"  collection  {settings.collection_name}")
     typer.echo(
         f"  questions   {len(report.results)} scored, {len(report.failures)} failed, "

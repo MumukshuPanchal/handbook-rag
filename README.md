@@ -41,6 +41,7 @@ make chunks     # clean and chunk it, and print a summary
 make qdrant     # start the Qdrant vector store in Docker
 make index      # embed the chunks and store them; safe to run again
 make search q="how do I expense a laptop"
+uv run handbook-rag search "what is compa-ratio" --mode hybrid   # dense, sparse or hybrid
 ```
 
 The workflow and conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).

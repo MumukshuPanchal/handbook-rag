@@ -30,7 +30,7 @@ flowchart LR
 ```
 
 - **Load and clean.** Reads each Markdown file, separates front matter from the body, removes template shortcodes and raw HTML, and records the title, public URL and handbook section.
-- **Chunk.** Splits a page along its headings, then splits long sections further to stay within a token limit, with a small overlap. Each chunk keeps its heading path (for example `Leave > Parental leave`) and its character offsets in the page.
+- **Chunk.** Packs a page's sections into chunks within a token budget, starting a new chunk at each major heading, and cuts sections that are too long with a small overlap. Each chunk keeps its heading path (for example `Leave > Parental leave`) and its character offsets in the page. Details: [ADR 0009](adr/0009-structure-aware-chunking.md).
 - **Embed.** Computes a dense vector (captures meaning) for each chunk. A sparse vector (captures exact terms) is added when hybrid search arrives in milestone M3.
 - **Store.** Writes vectors and metadata to Qdrant. Writes are idempotent: indexing the same snapshot twice changes nothing.
 
@@ -65,7 +65,7 @@ The first working version (the baseline) uses dense search only and skips steps 
 | Component | Responsibility | Technology | Decision |
 |---|---|---|---|
 | Corpus | The handbook snapshot we index | Markdown files at a pinned commit | [ADR 0002](adr/0002-handbook-corpus.md) |
-| Loader and chunker | Markdown to clean, heading-aware chunks | Our own code | [ADR 0003](adr/0003-own-pipeline-code-instead-of-a-framework.md) |
+| Loader and chunker | Markdown to clean, heading-aware chunks | Our own code | [ADR 0009](adr/0009-structure-aware-chunking.md) |
 | Embedder | Text to dense and sparse vectors | sentence-transformers (dense), BM25 (sparse) | [ADR 0005](adr/0005-local-embedding-and-reranking-models.md) |
 | Vector store | Store and search vectors with metadata | Qdrant | [ADR 0004](adr/0004-qdrant-as-vector-store.md) |
 | Fusion | Merge dense and sparse rankings | Our own code (reciprocal rank fusion) | [ADR 0003](adr/0003-own-pipeline-code-instead-of-a-framework.md) |
@@ -81,7 +81,7 @@ The first working version (the baseline) uses dense search only and skips steps 
 
 | Field | Meaning |
 |---|---|
-| `doc_id` | Path of the file in the handbook repository. Stable across runs. |
+| `doc_id` | Path of the page relative to the handbook content directory. Stable across runs. |
 | `title`, `url` | Page title and public URL |
 | `section` | Top-level handbook area, usable as a filter |
 | `source_commit` | The handbook commit the text came from |

@@ -206,6 +206,29 @@ def _add_piece(pieces: list[_Piece], piece: _Piece, config: ChunkingConfig) -> N
     pieces.append(piece)
 
 
+def split_into_blocks(text: str) -> list[str]:
+    """Split text into its top-level Markdown blocks, keeping each heading with what follows.
+
+    Used when passing a chunk to the model, where each block is one citable unit. A
+    heading by itself says nothing worth citing, so it stays attached to the next block.
+    """
+    blocks: list[str] = []
+    pending_heading = ""
+    for block in _parse_blocks(text):
+        block_text = text[block.start : block.end]
+        if block.kind == "heading":
+            pending_heading += f"{block_text}\n\n"
+        else:
+            blocks.append(pending_heading + block_text)
+            pending_heading = ""
+    if pending_heading.strip():
+        if blocks:
+            blocks[-1] = f"{blocks[-1]}\n\n{pending_heading.strip()}"
+        else:
+            blocks.append(pending_heading.strip())
+    return blocks or ([text] if text.strip() else [])
+
+
 def _parse_blocks(text: str) -> list[_Block]:
     """Find the top-level blocks of a page with their character offsets."""
     line_starts = [0]

@@ -9,7 +9,7 @@ from collections.abc import Sequence
 
 import pytest
 
-from handbook_rag.ingest.chunker import ChunkingConfig, chunk_document
+from handbook_rag.ingest.chunker import ChunkingConfig, chunk_document, split_into_blocks
 from handbook_rag.ingest.models import Chunk, Document
 from tests.support import count_words
 
@@ -302,3 +302,26 @@ def test_chunk_id_changes_when_the_text_changes_in_place() -> None:
 
     assert (before[0].start_char, before[0].end_char) == (after[0].start_char, after[0].end_char)
     assert before[0].chunk_id != after[0].chunk_id
+
+
+def test_split_into_blocks_keeps_each_heading_with_the_block_below_it() -> None:
+    text = (
+        "## Leave\n\nTake time off.\n\n- one\n- two\n\n"
+        "### Sick\n\n| A | B |\n| --- | --- |\n| 1 | 2 |"
+    )
+
+    assert split_into_blocks(text) == [
+        "## Leave\n\nTake time off.",
+        "- one\n- two",
+        "### Sick\n\n| A | B |\n| --- | --- |\n| 1 | 2 |",
+    ]
+
+
+def test_split_into_blocks_keeps_a_trailing_heading() -> None:
+    assert split_into_blocks("Some text.\n\n## See also") == ["Some text.\n\n## See also"]
+
+
+def test_split_into_blocks_of_a_lone_heading_or_nothing() -> None:
+    assert split_into_blocks("## Only a heading") == ["## Only a heading"]
+    assert split_into_blocks("") == []
+    assert split_into_blocks("   \n") == []

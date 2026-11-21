@@ -31,6 +31,13 @@ Evidence is a page and a quote, never a chunk id. Chunk ids change whenever chun
 
 If a quote cannot be found in its page, the run stops. A label that no longer matches the corpus would make every number that depends on it wrong.
 
+## How the golden set is built
+
+1. **Sample passages.** `handbook-rag golden-candidates` draws a seeded sample of chunks to write questions from. Each handbook section gets a share proportional to the square root of its size, so large sections get more questions without crowding out small ones, and at most one chunk is taken per page.
+2. **Draft questions.** Each passage gets one question, a reference answer and an evidence quote, or is skipped, following the [drafting guidelines](../evals/golden/drafting-guidelines.md). Questions the handbook cannot answer are drafted separately and searched for in the corpus before they are kept.
+3. **Check.** `handbook-rag golden-check` verifies that every quote is found word for word in its page. It also reports how much each question shares its wording with its evidence, because a question that copies its source is easy for keyword matching and says little about search by meaning.
+4. **Review.** A person checks each question and sets `review` to `verified`, or removes it.
+
 ## Retrieval metrics
 
 ```bash

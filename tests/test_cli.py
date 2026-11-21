@@ -183,3 +183,49 @@ def test_commands_explain_when_the_vector_store_is_down(monkeypatch: pytest.Monk
 
         assert result.exit_code == 1
         assert "make qdrant" in result.output
+
+
+def test_eval_retrieval_scores_the_golden_set_and_writes_the_run(
+    fake_pipeline: FakeEmbedder, tmp_path: Path
+) -> None:
+    runner.invoke(app, ["index"])
+    dataset = tmp_path / "questions.jsonl"
+    dataset.write_text(
+        json.dumps(
+            {
+                "id": "q001",
+                "question": "how many weeks of paid parental leave do new parents get",
+                "reference_answer": "Sixteen weeks.",
+                "evidence": [{"doc_id": "people/leave.md", "quote": "sixteen weeks of paid leave"}],
+                "type": "answerable",
+                "origin": "hand-written",
+            }
+        )
+        + "\n"
+    )
+    output = tmp_path / "runs"
+
+    result = runner.invoke(
+        app, ["eval-retrieval", "--dataset", str(dataset), "--output", str(output)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "1 scored, 0 failed, 0 unanswerable" in result.output
+    assert "Hit@5       1.000" in result.output
+    assert "Hit@5 on hand-written questions: 1.000 (n=1)" in result.output
+    (row,) = (output / "baseline" / "results.jsonl").read_text().splitlines()
+    assert json.loads(row)["grade"]["hit@1"] == 1.0
+
+
+@pytest.mark.usefixtures("fake_pipeline")
+def test_eval_retrieval_explains_a_missing_or_broken_golden_set(tmp_path: Path) -> None:
+    missing = runner.invoke(app, ["eval-retrieval", "--dataset", str(tmp_path / "none.jsonl")])
+    broken = tmp_path / "broken.jsonl"
+    broken.write_text('{"id": "q001"}\n')
+
+    malformed = runner.invoke(app, ["eval-retrieval", "--dataset", str(broken)])
+
+    assert missing.exit_code == 1
+    assert "golden set not found" in missing.output
+    assert malformed.exit_code == 1
+    assert "broken.jsonl:1" in malformed.output

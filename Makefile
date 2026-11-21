@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant index search
+.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant index search eval-retrieval
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -41,3 +41,6 @@ index: ## Embed the chunks and store them in Qdrant
 
 search: ## Search the index, for example: make search q="how do I expense a laptop"
 	uv run handbook-rag search "$(q)"
+
+eval-retrieval: ## Score retrieval on the golden set
+	uv run handbook-rag eval-retrieval

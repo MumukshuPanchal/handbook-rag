@@ -10,6 +10,8 @@ import typer
 
 from handbook_rag import __version__
 from handbook_rag.config import get_settings
+from handbook_rag.evals.dataset import DatasetError, load_golden_set
+from handbook_rag.evals.retrieval import METRICS, evaluate_retrieval, write_run
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import VectorStoreError
 from handbook_rag.ingest.build import CorpusError, build_corpus
@@ -193,3 +195,57 @@ def search(
         typer.echo(f"{rank}. {result.score:.3f}  {result.chunk.context_header}")
         typer.echo(f"   {result.chunk.url}")
         typer.echo(f"   {preview[:220]}{'...' if len(preview) > 220 else ''}")
+
+
+@app.command(name="eval-retrieval")
+def eval_retrieval(
+    dataset: Annotated[
+        Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
+    ] = Path("evals/golden/questions.jsonl"),
+    variant: Annotated[
+        str, typer.Option(help="Name of this run: 'baseline', then 'v1', 'v2' and so on.")
+    ] = "baseline",
+    description: Annotated[
+        str, typer.Option(help="One line saying what this variant changes.")
+    ] = "Dense retrieval only.",
+    output: Annotated[
+        Path, typer.Option(help="Directory that holds one sub-directory per variant.")
+    ] = Path("evals/runs/retrieval"),
+) -> None:
+    """Score retrieval on the golden set: is the right passage found, and how high?"""
+    settings = get_settings()
+    try:
+        questions = load_golden_set(dataset)
+        corpus = build_corpus(settings)
+        retriever = DenseRetriever(make_embedder(settings), make_store(settings))
+        report = evaluate_retrieval(questions, corpus.documents, retriever)
+    except FileNotFoundError as error:
+        typer.echo(f"error: golden set not found: {dataset}", err=True)
+        raise typer.Exit(code=1) from error
+    except (DatasetError, CorpusError, VectorStoreError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    if not report.results:
+        typer.echo("error: no question could be scored.", err=True)
+        raise typer.Exit(code=1)
+    run_dir = write_run(report, output, variant, description)
+
+    typer.echo(f"Retrieval evaluation: {variant}")
+    typer.echo(f"  collection  {settings.collection_name}")
+    typer.echo(
+        f"  questions   {len(report.results)} scored, {len(report.failures)} failed, "
+        f"{report.not_scored} unanswerable (not scored)"
+    )
+    for metric in METRICS:
+        estimate = report.summary[str(metric["id"])]
+        typer.echo(
+            f"  {metric['label']!s:<10}  {estimate.mean:.3f}  "
+            f"(95% interval {estimate.low:.3f} to {estimate.high:.3f})"
+        )
+    for origin, estimates in report.by_group["origin"].items():
+        hit = estimates["hit@5"]
+        typer.echo(f"  Hit@5 on {origin} questions: {hit.mean:.3f} (n={hit.count})")
+    typer.echo(f"  written to  {run_dir}")
+    if report.failures:
+        raise typer.Exit(code=1)

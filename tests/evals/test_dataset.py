@@ -150,3 +150,19 @@ def test_missing_page_or_quote_fails_loudly() -> None:
         locate_evidence(question, {})
     with pytest.raises(DatasetError, match="quote not found"):
         locate_evidence(question, {PAGE.doc_id: rewritten_page})
+
+
+def test_fingerprint_changes_only_when_something_a_score_depends_on_changes() -> None:
+    original = GoldenQuestion.model_validate(ANSWERABLE).fingerprint
+
+    def fingerprint(**change: Any) -> str:
+        return GoldenQuestion.model_validate({**ANSWERABLE, **change}).fingerprint
+
+    assert len(original) == 16
+    assert fingerprint() == original
+    assert fingerprint(review="verified", note="Checked on the page.", id="q777") == original
+    assert fingerprint(question="How many weeks is parental leave?") != original
+    assert fingerprint(reference_answer="Sixteen weeks.") != original
+    assert (
+        fingerprint(evidence=[{"doc_id": "people/leave.md", "quote": "sixteen weeks"}]) != original
+    )

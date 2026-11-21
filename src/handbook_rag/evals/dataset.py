@@ -5,6 +5,7 @@ change whenever chunking settings change; a quote does not. At evaluation time t
 is located in the page, and a retrieved chunk counts as relevant when it covers it.
 """
 
+import hashlib
 import json
 from collections import Counter
 from collections.abc import Sequence
@@ -61,6 +62,23 @@ class GoldenQuestion(BaseModel):
             return "none"
         parts = self.evidence[0].doc_id.split("/")
         return parts[0] if len(parts) > 1 else "handbook"
+
+    @property
+    def fingerprint(self) -> str:
+        """A short hash of everything a score depends on.
+
+        Two evaluation runs can be compared question by question only if both scored the
+        same label. Rewording the question, changing the reference answer or moving the
+        evidence changes the fingerprint; setting the review status or a note does not.
+        """
+        label = [
+            self.question,
+            self.type,
+            self.reference_answer,
+            [[evidence.doc_id, evidence.quote] for evidence in self.evidence],
+        ]
+        encoded = json.dumps(label, ensure_ascii=False).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()[:16]
 
 
 @dataclass(frozen=True, slots=True)

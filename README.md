@@ -138,10 +138,13 @@ make search q="how do I expense a laptop"
 make traces     # start the trace backend; see docs/observability.md
 make serve      # run the HTTP API at http://127.0.0.1:8000
 uv run handbook-rag search "what is compa-ratio" --rerank
+make ask q="how do I expense a laptop"   # answer with citations; needs a Claude API key
 make golden-check    # verify every test question against the handbook
 make eval-retrieval  # score the default search, as a scratch run named "current"
 make eval-table      # print a results table with one row per run on disk
 make eval-gate       # the retrieval check CI runs, on a slice of the handbook
 ```
+
+Answers are written by Claude. Copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`. The `.env` file is ignored by git, and the key is read only by this application.
 
 The workflow and conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).

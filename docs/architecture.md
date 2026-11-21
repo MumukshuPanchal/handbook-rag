@@ -55,7 +55,7 @@ flowchart LR
 2. **Retrieve candidates** twice: by meaning (dense) and by exact terms (sparse).
 3. **Fuse** the two ranked lists into one with reciprocal rank fusion.
 4. **Rerank** the fused candidates with a cross-encoder, which reads the question and each chunk together and scores how well they match. Keep the top few.
-5. **Generate** an answer. The kept chunks are sent to Claude as documents with citations enabled. The instructions tell the model to answer only from those documents and to say so plainly when they do not contain the answer.
+5. **Generate** an answer. The kept chunks are sent to Claude as search results with citations enabled. The instructions tell the model to answer only from them, and to reply with one fixed sentence when they do not contain the answer. Details: [ADR 0010](adr/0010-search-result-blocks-and-declining.md).
 6. **Return** the answer, its citations (page, section, quoted text, URL), whether the assistant answered or abstained, and a trace ID.
 
 The first working version (the baseline) used dense search only and skipped steps 3 and 4. Hybrid search is now the default, and reranking is available but switched off. Both decisions, with the measurements and the judgement behind them, are in [ADR 0011](adr/0011-hybrid-retrieval-by-default.md).
@@ -70,7 +70,7 @@ The first working version (the baseline) used dense search only and skipped step
 | Vector store | Store and search vectors with metadata | Qdrant | [ADR 0004](adr/0004-qdrant-as-vector-store.md) |
 | Fusion | Merge dense and sparse rankings | Our own code (reciprocal rank fusion) | [ADR 0003](adr/0003-own-pipeline-code-instead-of-a-framework.md) |
 | Reranker | Re-score candidates against the question | sentence-transformers cross-encoder | [ADR 0005](adr/0005-local-embedding-and-reranking-models.md) |
-| Generator | Write a grounded, cited answer | Claude through the Anthropic API | [ADR 0006](adr/0006-claude-with-native-citations-for-generation.md) |
+| Generator | Write a grounded, cited answer | Claude through the Anthropic API | [ADR 0006](adr/0006-claude-with-native-citations-for-generation.md), [ADR 0010](adr/0010-search-result-blocks-and-declining.md) |
 | API | HTTP interface: `POST /search` and `GET /health` today, `POST /ask` with streaming when the answering step lands | FastAPI | This document |
 | Evaluation | Measure retrieval and answer quality | Our own harness | [ADR 0007](adr/0007-evaluation-strategy.md) |
 | Tracing | Record every stage of every request | OpenTelemetry | [ADR 0008](adr/0008-opentelemetry-tracing.md) |
@@ -161,7 +161,7 @@ compose.yaml            API, Qdrant and trace backend
 
 ## Security and safety
 
-- **Retrieved text is data, not instructions.** Handbook text is passed to the model as documents, separate from the instructions, and the instructions say to ignore any directions found inside documents. This limits prompt injection through corpus content.
+- **Retrieved text is data, not instructions.** Handbook text is passed to the model as search result blocks, separate from the instructions, and the instructions say to treat anything inside them as content, never as commands. This limits prompt injection through corpus content.
 - **Abstention over invention.** When the retrieved passages do not contain the answer, the assistant says so. This behaviour is tested with unanswerable questions.
 - **No secrets in git.** Credentials live in the environment.
 - **Minimal data retention.** Questions and answers are not stored outside traces, and traces record metadata only unless content recording is switched on for local debugging.

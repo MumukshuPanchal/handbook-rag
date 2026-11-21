@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from handbook_rag.config import Settings
-from handbook_rag.ingest.chunker import ChunkingConfig, chunk_document
+from handbook_rag.ingest.chunker import chunk_document
 from handbook_rag.ingest.loader import load_documents
 from handbook_rag.ingest.models import Chunk, Document
 from handbook_rag.ingest.tokens import token_counter
@@ -52,11 +52,7 @@ def build_corpus(settings: Settings) -> Corpus:
         base_url=settings.handbook_base_url,
         min_chars=settings.min_page_chars,
     )
-    config = ChunkingConfig(
-        max_tokens=settings.chunk_max_tokens,
-        min_tokens=settings.chunk_min_tokens,
-        overlap_tokens=settings.chunk_overlap_tokens,
-    )
+    config = settings.chunking
     count_tokens = token_counter(settings.embedding_model)
     chunks = [
         chunk

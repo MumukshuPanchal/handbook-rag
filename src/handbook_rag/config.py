@@ -6,12 +6,15 @@ Code reads settings through :func:`get_settings` and never from ``os.environ`` d
 so there is one place that lists everything the application can be configured with.
 """
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from handbook_rag.ingest.chunker import ChunkingConfig
 
 
 class Settings(BaseSettings):
@@ -79,6 +82,46 @@ class Settings(BaseSettings):
     chunk_overlap_tokens: int = Field(
         default=40, ge=0, description="How much of a piece may be repeated in the next one."
     )
+
+    embedding_query_prefix: str = Field(
+        default="Represent this sentence for searching relevant passages: ",
+        description=(
+            "Instruction placed before a question when it is embedded. The default is the "
+            "one the BGE models were trained with. Chunks are embedded without it."
+        ),
+    )
+    embedding_batch_size: int = Field(
+        default=16,
+        gt=0,
+        description=(
+            "How many texts the embedding model processes at once. Larger is not always "
+            "faster: memory use grows with batch size and text length, and on a laptop a "
+            "batch of 64 long chunks was five times slower than 16."
+        ),
+    )
+    qdrant_url: str = Field(
+        default="http://localhost:6333", description="Address of the Qdrant vector store."
+    )
+    search_limit: int = Field(default=5, gt=0, description="How many chunks a search returns.")
+
+    @property
+    def chunking(self) -> ChunkingConfig:
+        """The chunking settings as the chunker takes them."""
+        return ChunkingConfig(
+            max_tokens=self.chunk_max_tokens,
+            min_tokens=self.chunk_min_tokens,
+            overlap_tokens=self.chunk_overlap_tokens,
+        )
+
+    @property
+    def collection_name(self) -> str:
+        """The vector store collection for this corpus, embedding model and chunking.
+
+        Changing any of the three gives a new collection, so vectors produced under
+        different settings are never mixed in one index.
+        """
+        model = re.sub(r"[^a-z0-9]+", "-", self.embedding_model.lower()).strip("-")
+        return f"handbook-{self.handbook_commit[:8]}-{model}-{self.chunking.version}"
 
 
 @lru_cache

@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test check snapshot chunks
+.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant index search
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -19,8 +19,11 @@ format: ## Fix style problems that can be fixed automatically
 typecheck: ## Check type annotations
 	uv run mypy
 
-test: ## Run the tests with coverage
+test: ## Run the fast tests with coverage
 	uv run pytest --cov --cov-report=term-missing
+
+test-slow: ## Run the tests that download a model
+	uv run pytest -m slow
 
 check: lint typecheck test ## Run everything CI runs
 
@@ -29,3 +32,12 @@ snapshot: ## Download the handbook at the pinned commit into data/
 
 chunks: ## Clean and chunk the downloaded handbook, and print a summary
 	uv run handbook-rag chunks
+
+qdrant: ## Start the Qdrant vector store in Docker
+	docker compose up --detach --wait qdrant
+
+index: ## Embed the chunks and store them in Qdrant
+	uv run handbook-rag index
+
+search: ## Search the index, for example: make search q="how do I expense a laptop"
+	uv run handbook-rag search "$(q)"

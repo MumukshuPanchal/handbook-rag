@@ -10,9 +10,13 @@ import typer
 
 from handbook_rag import __version__
 from handbook_rag.config import get_settings
+from handbook_rag.index.indexer import index_chunks
+from handbook_rag.index.store import VectorStoreError
 from handbook_rag.ingest.build import CorpusError, build_corpus
 from handbook_rag.ingest.snapshot import SnapshotError, download_snapshot
 from handbook_rag.ingest.tokens import token_counter
+from handbook_rag.retrieve.dense import DenseRetriever
+from handbook_rag.wiring import make_embedder, make_store
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -118,3 +122,74 @@ def chunks(
             for chunk in corpus.chunks:
                 output.write(json.dumps(dataclasses.asdict(chunk), ensure_ascii=False) + "\n")
         typer.echo(f"  exported  {export}")
+
+
+@app.command()
+def index() -> None:
+    """Embed every chunk and store it in the vector store. Safe to run again."""
+    settings = get_settings()
+    try:
+        store = make_store(settings)
+        corpus = build_corpus(settings)
+    except (CorpusError, VectorStoreError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    embedder = make_embedder(settings)
+    typer.echo(f"Indexing {len(corpus.chunks):,} chunks")
+    typer.echo(f"  collection  {store.collection}")
+    typer.echo(f"  model       {embedder.name} on {embedder.device}")
+
+    last_reported = 0
+
+    def report_progress(done: int, total: int) -> None:
+        nonlocal last_reported
+        percent = 100 * done // total
+        if percent >= last_reported + 10 or done == total:
+            last_reported = percent
+            typer.echo(f"  embedded    {done:,} of {total:,} ({percent}%)")
+
+    try:
+        report = index_chunks(
+            corpus.chunks, embedder=embedder, store=store, on_progress=report_progress
+        )
+    except VectorStoreError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    rate = report.embedded / report.seconds if report.seconds > 0 else 0.0
+    typer.echo("Index ready")
+    typer.echo(f"  chunks      {report.total:,} in the collection")
+    typer.echo(f"  embedded    {report.embedded:,} new ({rate:.0f} per second)")
+    typer.echo(f"  skipped     {report.already_indexed:,} already stored")
+    typer.echo(f"  removed     {report.removed:,} no longer produced")
+    typer.echo(f"  time        {report.seconds:.1f} seconds")
+
+
+@app.command()
+def search(
+    query: Annotated[str, typer.Argument(help="The question to search for.")],
+    limit: Annotated[int | None, typer.Option(help="How many chunks to return.")] = None,
+    section: Annotated[
+        str | None,
+        typer.Option(help="Search only one handbook section, such as 'engineering'."),
+    ] = None,
+) -> None:
+    """Find the chunks closest in meaning to a question."""
+    settings = get_settings()
+    try:
+        store = make_store(settings)
+        retriever = DenseRetriever(make_embedder(settings), store)
+        results = retriever.retrieve(query, limit=limit or settings.search_limit, section=section)
+    except VectorStoreError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    if not results:
+        typer.echo("No results.")
+        raise typer.Exit(code=1)
+    for rank, result in enumerate(results, start=1):
+        preview = " ".join(result.chunk.text.split())
+        typer.echo(f"{rank}. {result.score:.3f}  {result.chunk.context_header}")
+        typer.echo(f"   {result.chunk.url}")
+        typer.echo(f"   {preview[:220]}{'...' if len(preview) > 220 else ''}")

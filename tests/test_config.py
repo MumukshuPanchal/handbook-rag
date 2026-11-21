@@ -56,3 +56,17 @@ def test_get_settings_returns_the_same_object_each_time() -> None:
 
 def test_handbook_is_pinned_to_a_full_commit_hash_by_default() -> None:
     assert re.fullmatch(r"[0-9a-f]{40}", Settings().handbook_commit)
+
+
+def test_collection_name_identifies_corpus_model_and_chunking() -> None:
+    assert Settings().collection_name == (
+        "handbook-e645aac6-baai-bge-small-en-v1-5-v1-max320-min60-overlap40"
+    )
+
+
+def test_collection_name_changes_with_any_of_its_parts() -> None:
+    default = Settings().collection_name
+
+    assert Settings(handbook_commit="b" * 40).collection_name != default
+    assert Settings(embedding_model="BAAI/bge-base-en-v1.5").collection_name != default
+    assert Settings(chunk_max_tokens=200).collection_name != default

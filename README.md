@@ -13,6 +13,7 @@ A knowledge assistant that answers questions from a company handbook, built the 
 | [Decision records](docs/adr/) | Why each major technical choice was made |
 | [Roadmap](docs/roadmap.md) | Milestones and how work flows |
 | [Evaluation](docs/evaluation.md) | The golden set, the metrics and how to read a run |
+| [Experiments](docs/experiments/) | What was tried, with numbers, including what did not work |
 
 ## Planned scope
 

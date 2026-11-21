@@ -1,0 +1,47 @@
+[project]
+name = "handbook-rag"
+version = "0.1.0"
+description = "A knowledge assistant that answers questions from a company handbook with cited, evaluated answers."
+readme = "README.md"
+authors = [{ name = "Mumukshu Panchal" }]
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic-settings>=2.16.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.3,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# E/W: style, F: pyflakes, I: import order, UP: modern syntax, B: likely bugs,
+# SIM: simplifications, C4: comprehensions, PT: pytest style, RUF: ruff's own rules.
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "PT", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+
+[tool.coverage.run]
+source = ["handbook_rag"]
+branch = true
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pre-commit>=4.7.0",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.6",
+]

@@ -11,6 +11,7 @@ import typer
 from handbook_rag import __version__
 from handbook_rag.config import get_settings
 from handbook_rag.evals.dataset import DatasetError, load_golden_set
+from handbook_rag.evals.golden import check_against_corpus, sample_source_chunks
 from handbook_rag.evals.retrieval import METRICS, evaluate_retrieval, write_run
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import VectorStoreError
@@ -249,3 +250,71 @@ def eval_retrieval(
     typer.echo(f"  written to  {run_dir}")
     if report.failures:
         raise typer.Exit(code=1)
+
+
+@app.command(name="golden-candidates")
+def golden_candidates(
+    output: Annotated[Path, typer.Argument(help="Where to write the sampled passages.")],
+    count: Annotated[int, typer.Option(help="How many passages to sample.")] = 180,
+    seed: Annotated[int, typer.Option(help="Seed, so the same sample can be drawn again.")] = 7,
+) -> None:
+    """Sample passages to write golden set questions from, spread across sections."""
+    try:
+        corpus = build_corpus(get_settings())
+    except CorpusError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    sampled = sample_source_chunks(corpus.chunks, count=count, seed=seed)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8") as lines:
+        for number, chunk in enumerate(sampled, start=1):
+            candidate = {
+                "candidate_id": f"c{number:03d}",
+                "doc_id": chunk.doc_id,
+                "title": chunk.title,
+                "heading_path": list(chunk.heading_path),
+                "text": chunk.text,
+            }
+            lines.write(json.dumps(candidate, ensure_ascii=False) + "\n")
+    sections = len({chunk.section for chunk in sampled})
+    typer.echo(f"Sampled {len(sampled)} passages from {sections} sections (seed {seed})")
+    typer.echo(f"  written to  {output}")
+
+
+@app.command(name="golden-check")
+def golden_check(
+    dataset: Annotated[
+        Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
+    ] = Path("evals/golden/questions.jsonl"),
+) -> None:
+    """Check every golden set label against the corpus, and summarise the set."""
+    try:
+        questions = load_golden_set(dataset)
+        corpus = build_corpus(get_settings())
+    except FileNotFoundError as error:
+        typer.echo(f"error: golden set not found: {dataset}", err=True)
+        raise typer.Exit(code=1) from error
+    except (DatasetError, CorpusError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    report = check_against_corpus(questions, corpus.documents)
+
+    def counts(counter: dict[str, int]) -> str:
+        return ", ".join(f"{count} {name}" for name, count in sorted(counter.items()))
+
+    typer.echo(f"Golden set: {report.total} questions")
+    typer.echo(f"  type      {counts(report.by_type)}")
+    typer.echo(f"  origin    {counts(report.by_origin)}")
+    typer.echo(f"  review    {counts(report.by_review)}")
+    typer.echo(f"  sections  {len(report.by_section)} covered")
+    typer.echo(
+        f"  wording   questions share {report.mean_overlap:.0%} of their words with their "
+        f"evidence on average; {len(report.high_overlap)} share 80% or more"
+    )
+    if report.problems:
+        typer.echo(f"  labels    {len(report.problems)} broken:")
+        for problem in report.problems[:20]:
+            typer.echo(f"    - {problem}")
+        raise typer.Exit(code=1)
+    typer.echo("  labels    every quote was found in its page")

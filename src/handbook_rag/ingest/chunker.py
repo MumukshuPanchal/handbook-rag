@@ -18,6 +18,7 @@ How it works, in order:
 Every chunk records the headings above it and its character offsets in the page.
 """
 
+import hashlib
 import itertools
 import re
 import uuid
@@ -165,7 +166,7 @@ def chunk_document(
     token_counts = count_tokens([draft[2] for draft in drafts])
     return [
         Chunk(
-            chunk_id=_chunk_id(document.doc_id, start, end, config.version),
+            chunk_id=_chunk_id(document.doc_id, start, end, config.version, chunk_text),
             doc_id=document.doc_id,
             title=document.title,
             url=document.url,
@@ -383,5 +384,11 @@ def _render(atoms: list[_Atom], text: str) -> tuple[int, int, str]:
     return start, end, f"{header}\n{body}" if header else body
 
 
-def _chunk_id(doc_id: str, start: int, end: int, version: str) -> str:
-    return str(uuid.uuid5(_ID_NAMESPACE, f"{doc_id}|{start}|{end}|{version}"))
+def _chunk_id(doc_id: str, start: int, end: int, version: str, text: str) -> str:
+    """A stable identifier that changes whenever the chunk's position or content does.
+
+    Including the text matters for indexing: a chunk is skipped when its id is already
+    stored, so two different texts must never share an id.
+    """
+    content = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    return str(uuid.uuid5(_ID_NAMESPACE, f"{doc_id}|{start}|{end}|{version}|{content}"))

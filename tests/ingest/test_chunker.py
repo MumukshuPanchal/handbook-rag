@@ -294,3 +294,11 @@ def test_table_header_too_large_to_repeat_is_not_repeated() -> None:
     assert all(c.token_count <= ALLOWED_MAX for c in chunks)
     for row in rows:
         assert any(row in c.text for c in chunks)
+
+
+def test_chunk_id_changes_when_the_text_changes_in_place() -> None:
+    before = chunk(f"## A\n\n{words(8, word='old')}")
+    after = chunk(f"## A\n\n{words(8, word='new')}")
+
+    assert (before[0].start_char, before[0].end_char) == (after[0].start_char, after[0].end_char)
+    assert before[0].chunk_id != after[0].chunk_id

@@ -50,6 +50,9 @@ class GoldenQuestion(BaseModel):
     """Who checked the question, the answer and the evidence. ``checked``: an independent
     checker, a separate model session that did not see how the question was made.
     ``verified``: a person. A model's check is never recorded as a person's review."""
+    evidence_mode: Literal["all", "any"] = "all"
+    """How several pieces of evidence relate. ``all``: the answer needs every piece.
+    ``any``: each piece answers the question on its own, so finding one is enough."""
     unanswerable_kind: Literal["near-miss", "false-premise", "out-of-scope"] | None = None
     """Why the handbook cannot answer. ``near-miss``: it covers the topic but not the detail
     asked. ``false-premise``: the question assumes something the company does not have.
@@ -79,6 +82,7 @@ class GoldenQuestion(BaseModel):
             self.type,
             self.reference_answer,
             [[evidence.doc_id, evidence.quote] for evidence in self.evidence],
+            self.evidence_mode,
         ]
         encoded = json.dumps(label, ensure_ascii=False).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()[:16]
@@ -130,6 +134,8 @@ def check_golden_set(questions: Sequence[GoldenQuestion]) -> list[str]:
             problems.append(f"{q.id}: an unanswerable question needs unanswerable_kind")
         if q.type == "answerable" and q.unanswerable_kind is not None:
             problems.append(f"{q.id}: only an unanswerable question has unanswerable_kind")
+        if q.evidence_mode == "any" and len(q.evidence) < 2:
+            problems.append(f"{q.id}: evidence_mode any needs at least two pieces of evidence")
     return problems
 
 

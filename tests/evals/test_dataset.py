@@ -163,6 +163,7 @@ def test_fingerprint_changes_only_when_something_a_score_depends_on_changes() ->
     assert fingerprint(review="verified", note="Checked on the page.", id="q777") == original
     assert fingerprint(question="How many weeks is parental leave?") != original
     assert fingerprint(reference_answer="Sixteen weeks.") != original
+    assert fingerprint(evidence_mode="any") != original
     assert (
         fingerprint(evidence=[{"doc_id": "people/leave.md", "quote": "sixteen weeks"}]) != original
     )
@@ -175,3 +176,10 @@ def test_a_model_check_and_a_blind_origin_are_recorded() -> None:
 
     assert question.origin == "model-blind"
     assert question.review == "checked"
+
+
+def test_alternative_evidence_needs_at_least_two_pieces(tmp_path: Path) -> None:
+    path = write_lines(tmp_path / "q.jsonl", {**ANSWERABLE, "evidence_mode": "any"})
+
+    with pytest.raises(DatasetError, match="at least two"):
+        load_golden_set(path)

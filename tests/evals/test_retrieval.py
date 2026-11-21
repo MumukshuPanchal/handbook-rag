@@ -201,3 +201,35 @@ def test_run_is_written_as_one_row_per_question_with_a_summary(tmp_path: Path) -
     assert (run_dir / "errors.jsonl").read_text() == ""
     state = json.loads((tmp_path / "retrieval" / "_state.json").read_text())
     assert state["metrics"][0]["id"] == "hit@5"
+
+
+def test_alternative_evidence_is_found_when_any_piece_is_returned() -> None:
+    two_homes = {
+        "id": "q010",
+        "question": "Where is a limit or an entitlement stated?",
+        "reference_answer": "In the leave policy and in the expense policy.",
+        "evidence": [
+            {"doc_id": "people/leave.md", "quote": "sixteen weeks of paid leave"},
+            {"doc_id": "finance/expenses.md", "quote": "one thousand dollars"},
+        ],
+        "type": "answerable",
+        "origin": "model-blind",
+        "review": "checked",
+    }
+    only_one_page = FixedRetriever({"Where is a limit or an entitlement stated?": [LEAVE]})
+
+    needs_all = evaluate_retrieval(
+        [GoldenQuestion.model_validate(two_homes)], DOCUMENTS, only_one_page
+    )
+    needs_any = evaluate_retrieval(
+        [GoldenQuestion.model_validate({**two_homes, "evidence_mode": "any"})],
+        DOCUMENTS,
+        only_one_page,
+    )
+
+    assert needs_all.summary["recall@5"].mean == 0.5
+    assert needs_all.summary["ndcg@10"].mean < 1.0
+    assert needs_any.summary["recall@5"].mean == 1.0
+    assert needs_any.summary["ndcg@10"].mean == 1.0
+    assert needs_any.summary["hit@1"].mean == 1.0
+    assert list(needs_any.by_group["origin"]) == ["model-blind"]

@@ -26,6 +26,7 @@ A golden set is a fixed list of test questions with known answers. It lives in `
 | `type` | `answerable`, or `unanswerable` for questions the handbook cannot answer |
 | `origin` | Who made it: `hand-written`, `model-drafted` (a model that was shown the passage) or `model-blind` (a model that was shown no handbook text; the evidence was found afterwards) |
 | `review` | Who checked it: `pending` (nobody), `checked` (an independent checker, a separate model session that did not see how the question was made) or `verified` (a person) |
+| `evidence_mode` | `all` (the default): the answer needs every piece of evidence. `any`: each piece answers the question on its own, so finding one of them is enough |
 | `unanswerable_kind` | Unanswerable questions only: `near-miss`, `false-premise` or `out-of-scope` |
 | `note` | Optional. Anything a reviewer should know, such as why no page answers the question |
 

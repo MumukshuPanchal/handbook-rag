@@ -114,10 +114,15 @@ def evaluate_retrieval(
         latency = time.perf_counter() - started
 
         coverage = [covered_evidence(result.chunk, spans) for result in retrieved]
-        scores = {f"hit@{k}": hit_at_k(coverage, k) for k in HIT_CUTOFFS}
-        scores["recall@5"] = recall_at_k(coverage, len(spans), 5)
-        scores[f"mrr@{RANKING_CUTOFF}"] = reciprocal_rank_at_k(coverage, RANKING_CUTOFF)
-        scores[f"ndcg@{RANKING_CUTOFF}"] = ndcg_at_k(coverage, len(spans), RANKING_CUTOFF)
+        scored, needed = coverage, len(spans)
+        if question.evidence_mode == "any":
+            # Each piece answers the question on its own, so together they count as one.
+            scored = [frozenset({0}) if covered else frozenset() for covered in coverage]
+            needed = 1
+        scores = {f"hit@{k}": hit_at_k(scored, k) for k in HIT_CUTOFFS}
+        scores["recall@5"] = recall_at_k(scored, needed, 5)
+        scores[f"mrr@{RANKING_CUTOFF}"] = reciprocal_rank_at_k(scored, RANKING_CUTOFF)
+        scores[f"ndcg@{RANKING_CUTOFF}"] = ndcg_at_k(scored, needed, RANKING_CUTOFF)
         items = tuple(
             RetrievedItem(
                 rank=rank,

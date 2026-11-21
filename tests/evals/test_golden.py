@@ -96,6 +96,7 @@ def question(question_id: str, text: str, quote: str | None) -> GoldenQuestion:
             "evidence": [{"doc_id": "finance/expenses.md", "quote": quote}] if quote else [],
             "type": "answerable" if quote else "unanswerable",
             "origin": "model-drafted",
+            "unanswerable_kind": None if quote else "out-of-scope",
         }
     )
 
@@ -119,6 +120,7 @@ def test_check_summarises_the_set_and_flags_copied_wording() -> None:
     assert report.total == 3
     assert report.by_type == {"answerable": 2, "unanswerable": 1}
     assert report.by_section == {"finance": 2}
+    assert report.by_unanswerable_kind == {"out-of-scope": 1}
     assert report.problems == []
     assert report.high_overlap == ["q1"]
     assert 0.3 < report.mean_overlap < 0.7

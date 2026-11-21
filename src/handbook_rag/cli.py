@@ -336,6 +336,8 @@ def golden_check(
 
     typer.echo(f"Golden set: {report.total} questions")
     typer.echo(f"  type      {counts(report.by_type)}")
+    if report.by_unanswerable_kind:
+        typer.echo(f"  declining {counts(report.by_unanswerable_kind)}")
     typer.echo(f"  origin    {counts(report.by_origin)}")
     typer.echo(f"  review    {counts(report.by_review)}")
     typer.echo(f"  sections  {len(report.by_section)} covered")

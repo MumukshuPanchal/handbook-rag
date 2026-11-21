@@ -301,3 +301,68 @@ def test_search_can_rerank_its_results(fake_pipeline: FakeEmbedder) -> None:
     assert found.exit_code == 0, found.output
     assert "finance/expenses" in found.output
     assert "1. 3.000" in found.output
+
+
+def test_golden_candidates_samples_passages_worth_asking_about(
+    fake_pipeline: FakeEmbedder, tmp_path: Path
+) -> None:
+    # The fixture's pages are too short to write a question from, so add one that is not.
+    prose = "Team members submit an expense report within thirty days of the purchase. " * 14
+    write_snapshot(tmp_path / "data", "a" * 40, {"legal/policy.md": f"## Policy\n\n{prose}"})
+    output = tmp_path / "golden" / "candidates.jsonl"
+
+    result = runner.invoke(app, ["golden-candidates", str(output), "--count", "5", "--seed", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert "Sampled 1 passages from 1 sections (seed 1)" in result.output
+    (candidate,) = [json.loads(line) for line in output.read_text().splitlines()]
+    assert candidate["candidate_id"] == "c001"
+    assert candidate["doc_id"] == "legal/policy.md"
+    assert "thirty days" in candidate["text"]
+
+
+def golden_rows(quote: str) -> str:
+    rows = [
+        {
+            "id": "q001",
+            "question": "How long is parental leave?",
+            "reference_answer": "Sixteen weeks, paid.",
+            "evidence": [{"doc_id": "people/leave.md", "quote": quote}],
+            "type": "answerable",
+            "origin": "hand-written",
+        },
+        {
+            "id": "q002",
+            "question": "What is the dress code in the office on Mars?",
+            "type": "unanswerable",
+            "origin": "hand-written",
+            "unanswerable_kind": "false-premise",
+        },
+    ]
+    return "".join(json.dumps(row) + "\n" for row in rows)
+
+
+@pytest.mark.usefixtures("fake_pipeline")
+def test_golden_check_summarises_a_set_whose_labels_match_the_corpus(tmp_path: Path) -> None:
+    dataset = tmp_path / "questions.jsonl"
+    dataset.write_text(golden_rows("sixteen weeks of paid leave"))
+
+    result = runner.invoke(app, ["golden-check", "--dataset", str(dataset)])
+
+    assert result.exit_code == 0, result.output
+    assert "Golden set: 2 questions" in result.output
+    assert "1 answerable, 1 unanswerable" in result.output
+    assert "declining 1 false-premise" in result.output
+    assert "every quote was found in its page" in result.output
+
+
+@pytest.mark.usefixtures("fake_pipeline")
+def test_golden_check_fails_when_a_quote_is_not_in_its_page(tmp_path: Path) -> None:
+    dataset = tmp_path / "questions.jsonl"
+    dataset.write_text(golden_rows("twenty weeks of paid leave"))
+
+    result = runner.invoke(app, ["golden-check", "--dataset", str(dataset)])
+
+    assert result.exit_code == 1
+    assert "1 broken" in result.output
+    assert "q001: quote not found in people/leave.md" in result.output

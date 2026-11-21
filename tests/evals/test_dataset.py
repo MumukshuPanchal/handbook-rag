@@ -35,6 +35,8 @@ UNANSWERABLE: dict[str, Any] = {
     "question": "What is the office dress code on Mars?",
     "type": "unanswerable",
     "origin": "hand-written",
+    "unanswerable_kind": "out-of-scope",
+    "note": "The company has no office on Mars.",
 }
 
 
@@ -50,9 +52,12 @@ def test_loads_answerable_and_unanswerable_questions(tmp_path: Path) -> None:
     assert first.evidence[0].quote == "sixteen weeks of paid leave"
     assert first.section == "people"
     assert first.review == "pending"
+    assert first.unanswerable_kind is None
     assert second.type == "unanswerable"
     assert second.evidence == ()
     assert second.section == "none"
+    assert second.unanswerable_kind == "out-of-scope"
+    assert second.note == "The company has no office on Mars."
 
 
 def test_blank_lines_are_skipped(tmp_path: Path) -> None:
@@ -71,6 +76,7 @@ def test_blank_lines_are_skipped(tmp_path: Path) -> None:
         ({"question": ""}, "question"),
         ({"evidence": []}, "needs evidence"),
         ({"reference_answer": " "}, "needs a reference answer"),
+        ({"unanswerable_kind": "near-miss"}, "only an unanswerable question"),
     ],
 )
 def test_malformed_question_is_rejected_with_its_location(
@@ -108,6 +114,22 @@ def test_unanswerable_question_cannot_carry_evidence(tmp_path: Path) -> None:
     path = write_lines(tmp_path / "q.jsonl", {**UNANSWERABLE, "evidence": ANSWERABLE["evidence"]})
 
     with pytest.raises(DatasetError, match="cannot have evidence"):
+        load_golden_set(path)
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ({"unanswerable_kind": None}, "needs unanswerable_kind"),
+        ({"unanswerable_kind": "too-hard"}, "unanswerable_kind"),
+    ],
+)
+def test_unanswerable_question_must_say_why_it_cannot_be_answered(
+    tmp_path: Path, change: dict[str, Any], expected: str
+) -> None:
+    path = write_lines(tmp_path / "q.jsonl", {**UNANSWERABLE, **change})
+
+    with pytest.raises(DatasetError, match=expected):
         load_golden_set(path)
 
 

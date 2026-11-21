@@ -128,6 +128,7 @@ class GoldenSetReport:
     by_origin: Counter[str]
     by_review: Counter[str]
     by_section: Counter[str]
+    by_unanswerable_kind: Counter[str]
     problems: list[str]
     """Labels that are wrong: a missing page or a quote that is not in its page."""
     mean_overlap: float
@@ -160,6 +161,9 @@ def check_against_corpus(
         by_origin=Counter(q.origin for q in questions),
         by_review=Counter(q.review for q in questions),
         by_section=Counter(q.section for q in questions if q.type == "answerable"),
+        by_unanswerable_kind=Counter(
+            q.unanswerable_kind for q in questions if q.unanswerable_kind is not None
+        ),
         problems=problems,
         mean_overlap=sum(overlaps.values()) / len(overlaps) if overlaps else 0.0,
         high_overlap=sorted(i for i, value in overlaps.items() if value >= high_overlap_threshold),

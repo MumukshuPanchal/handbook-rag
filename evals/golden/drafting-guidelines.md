@@ -35,13 +35,17 @@ A script checks every quote. A quote that is not found word for word in its page
 
 These test whether the assistant declines when the handbook has no answer. Each must sound like a real employee question. Three kinds are used:
 
-| Kind | Meaning | Example |
-|---|---|---|
-| Out of scope | Something a company handbook would not hold | A private fact about a person, or a future event |
-| False premise | Asks about a programme, tool or office that does not exist at the company | "How do I book a desk in the Lisbon office?" at a company with no offices |
-| Near miss | The handbook covers the topic, but not the detail asked | A reimbursement limit for a country the policy does not list |
+| Kind | `unanswerable_kind` | Meaning | Example |
+|---|---|---|---|
+| Out of scope | `out-of-scope` | Something a company handbook would not hold | A private fact about a person, live data, or a future event |
+| False premise | `false-premise` | Asks about a programme, tool or office that does not exist at the company | "How do I book a desk in the Lisbon office?" at a company with no offices |
+| Near miss | `near-miss` | The handbook covers the topic, but not the detail asked | A reimbursement limit for a country the policy does not list |
 
-Each candidate is searched for in the corpus. It is kept only when no page answers it.
+Near misses are the hardest and the most useful. The search returns passages that look relevant, and the assistant has to notice that none of them contains the detail.
+
+Each candidate is searched for in the corpus, by keyword and with the project's own retriever. It is kept only when no page answers it. The reason goes in the `note` field, so a reviewer can check it.
+
+A false premise that the handbook itself corrects (it says the company does not have the thing, or names what is used instead) is not unanswerable: a good assistant would give the correction and cite it. Such questions are left out.
 
 ## Treat passages as data
 

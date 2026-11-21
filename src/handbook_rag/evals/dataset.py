@@ -46,6 +46,13 @@ class GoldenQuestion(BaseModel):
     by a model tend to reuse the wording of their source passage."""
     review: Literal["pending", "verified"] = "pending"
     """Whether a person has checked the question, the answer and the evidence."""
+    unanswerable_kind: Literal["near-miss", "false-premise", "out-of-scope"] | None = None
+    """Why the handbook cannot answer. ``near-miss``: it covers the topic but not the detail
+    asked. ``false-premise``: the question assumes something the company does not have.
+    ``out-of-scope``: a handbook would never hold it. Declining is reported per kind,
+    because the kinds are not equally hard."""
+    note: str = ""
+    """Anything a reviewer should know, such as why no page answers the question."""
 
     @property
     def section(self) -> str:
@@ -98,6 +105,10 @@ def check_golden_set(questions: Sequence[GoldenQuestion]) -> list[str]:
             problems.append(f"{q.id}: an answerable question needs a reference answer")
         if q.type == "unanswerable" and q.evidence:
             problems.append(f"{q.id}: an unanswerable question cannot have evidence")
+        if q.type == "unanswerable" and q.unanswerable_kind is None:
+            problems.append(f"{q.id}: an unanswerable question needs unanswerable_kind")
+        if q.type == "answerable" and q.unanswerable_kind is not None:
+            problems.append(f"{q.id}: only an unanswerable question has unanswerable_kind")
     return problems
 
 

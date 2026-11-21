@@ -26,6 +26,8 @@ A golden set is a fixed list of test questions with known answers. It lives in `
 | `type` | `answerable`, or `unanswerable` for questions the handbook cannot answer |
 | `origin` | `hand-written` or `model-drafted` |
 | `review` | `verified` once a person has checked the question, the answer and the evidence |
+| `unanswerable_kind` | Unanswerable questions only: `near-miss`, `false-premise` or `out-of-scope` |
+| `note` | Optional. Anything a reviewer should know, such as why no page answers the question |
 
 Evidence is a page and a quote, never a chunk id. Chunk ids change whenever chunking settings change; a quote does not. When the evaluation runs, each quote is located in its page, and a retrieved chunk counts as relevant when it contains at least half of the quoted text.
 

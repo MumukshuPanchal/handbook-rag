@@ -62,6 +62,7 @@ QUESTIONS = [
             "question": "What is the dress code on Mars?",
             "type": "unanswerable",
             "origin": "hand-written",
+            "unanswerable_kind": "out-of-scope",
         }
     ),
 ]

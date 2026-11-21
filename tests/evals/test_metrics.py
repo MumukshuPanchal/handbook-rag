@@ -1,0 +1,153 @@
+"""Metric tests use tiny hand-made rankings whose scores can be worked out on paper."""
+
+import math
+
+import pytest
+
+from handbook_rag.evals.dataset import EvidenceSpan
+from handbook_rag.evals.metrics import (
+    covered_evidence,
+    hit_at_k,
+    mean_with_interval,
+    ndcg_at_k,
+    recall_at_k,
+    reciprocal_rank_at_k,
+)
+from handbook_rag.ingest.models import Chunk
+
+MISS: frozenset[int] = frozenset()
+FIRST = frozenset({0})
+SECOND = frozenset({1})
+
+
+def chunk(doc_id: str, start: int, end: int) -> Chunk:
+    return Chunk(
+        chunk_id=f"{doc_id}:{start}",
+        doc_id=doc_id,
+        title="T",
+        url="https://example.com/",
+        section="s",
+        source_commit="a" * 40,
+        heading_path=(),
+        start_char=start,
+        end_char=end,
+        text="x" * (end - start),
+        token_count=1,
+    )
+
+
+SPAN = EvidenceSpan("people/leave.md", start=100, end=200)
+
+
+def test_chunk_containing_the_quote_covers_it() -> None:
+    assert covered_evidence(chunk("people/leave.md", 50, 400), [SPAN]) == {0}
+
+
+def test_chunk_from_another_page_never_covers_it() -> None:
+    assert covered_evidence(chunk("finance/expenses.md", 50, 400), [SPAN]) == set()
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "covers"),
+    [
+        (0, 150, True),  # exactly half of the quote
+        (0, 149, False),  # just under half
+        (151, 400, False),  # just under half, from the other side
+        (150, 400, True),
+        (0, 100, False),  # ends where the quote starts
+        (120, 180, True),  # inside the quote, 60 of 100 characters
+    ],
+)
+def test_partial_overlap_needs_at_least_half_of_the_quote(
+    start: int, end: int, covers: bool
+) -> None:
+    assert bool(covered_evidence(chunk("people/leave.md", start, end), [SPAN])) is covers
+
+
+def test_one_chunk_can_cover_several_pieces_of_evidence() -> None:
+    spans = [SPAN, EvidenceSpan("people/leave.md", 250, 300), EvidenceSpan("other.md", 0, 10)]
+
+    assert covered_evidence(chunk("people/leave.md", 90, 310), spans) == {0, 1}
+
+
+def test_hit_looks_only_at_the_top_k() -> None:
+    ranking = [MISS, MISS, FIRST]
+
+    assert hit_at_k(ranking, 2) == 0.0
+    assert hit_at_k(ranking, 3) == 1.0
+    assert hit_at_k([], 5) == 0.0
+
+
+def test_recall_is_the_share_of_evidence_found() -> None:
+    ranking = [FIRST, MISS, SECOND]
+
+    assert recall_at_k(ranking, evidence_count=2, k=1) == 0.5
+    assert recall_at_k(ranking, evidence_count=2, k=3) == 1.0
+    assert recall_at_k([FIRST, FIRST], evidence_count=2, k=2) == 0.5
+
+
+def test_reciprocal_rank_is_one_over_the_first_relevant_position() -> None:
+    assert reciprocal_rank_at_k([FIRST], 10) == 1.0
+    assert reciprocal_rank_at_k([MISS, MISS, FIRST], 10) == pytest.approx(1 / 3)
+    assert reciprocal_rank_at_k([MISS, MISS, FIRST], 2) == 0.0
+    assert reciprocal_rank_at_k([MISS], 10) == 0.0
+
+
+def test_ndcg_is_one_for_a_perfect_ranking_and_falls_with_rank() -> None:
+    assert ndcg_at_k([FIRST, MISS], evidence_count=1, k=10) == 1.0
+    assert ndcg_at_k([MISS, FIRST], evidence_count=1, k=10) == pytest.approx(1 / math.log2(3))
+    assert ndcg_at_k([MISS, MISS], evidence_count=1, k=10) == 0.0
+
+
+def test_ndcg_with_two_pieces_of_evidence() -> None:
+    ideal = 1 / math.log2(2) + 1 / math.log2(3)
+
+    assert ndcg_at_k([FIRST, SECOND], evidence_count=2, k=10) == pytest.approx(1.0)
+    assert ndcg_at_k([FIRST, MISS, SECOND], evidence_count=2, k=10) == pytest.approx(
+        (1 / math.log2(2) + 1 / math.log2(4)) / ideal
+    )
+
+
+def test_ndcg_does_not_reward_the_same_evidence_twice() -> None:
+    once = ndcg_at_k([FIRST, MISS], evidence_count=2, k=10)
+    twice = ndcg_at_k([FIRST, FIRST], evidence_count=2, k=10)
+
+    assert twice == once
+
+
+def test_metrics_that_need_evidence_reject_questions_without_any() -> None:
+    with pytest.raises(ValueError, match="no evidence"):
+        recall_at_k([MISS], evidence_count=0, k=5)
+    with pytest.raises(ValueError, match="no evidence"):
+        ndcg_at_k([MISS], evidence_count=0, k=5)
+
+
+def test_mean_with_interval_brackets_the_mean() -> None:
+    scores = [1.0] * 70 + [0.0] * 30
+
+    estimate = mean_with_interval(scores)
+
+    assert estimate.mean == pytest.approx(0.70)
+    assert estimate.count == 100
+    assert 0.55 < estimate.low < 0.70 < estimate.high < 0.85
+
+
+def test_interval_narrows_with_more_questions() -> None:
+    small = mean_with_interval([1.0, 0.0] * 10)
+    large = mean_with_interval([1.0, 0.0] * 200)
+
+    assert (large.high - large.low) < (small.high - small.low) / 2
+
+
+def test_interval_is_reproducible_and_collapses_when_all_scores_agree() -> None:
+    scores = [1.0, 0.0, 1.0, 1.0, 0.0, 1.0]
+
+    assert mean_with_interval(scores) == mean_with_interval(scores)
+    assert mean_with_interval([1.0] * 20) == mean_with_interval([1.0] * 20)
+    perfect = mean_with_interval([1.0] * 20)
+    assert (perfect.low, perfect.mean, perfect.high) == (1.0, 1.0, 1.0)
+
+
+def test_mean_of_nothing_is_an_error() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        mean_with_interval([])

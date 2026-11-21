@@ -35,10 +35,14 @@ If a quote cannot be found in its page, the run stops. A label that no longer ma
 
 ## How the golden set is built
 
+The current set, its counts and its known limits are described in its [dataset card](../evals/golden/README.md).
+
 1. **Sample passages.** `handbook-rag golden-candidates` draws a seeded sample of chunks to write questions from. Each handbook section gets a share proportional to the square root of its size, so large sections get more questions without crowding out small ones, and at most one chunk is taken per page.
 2. **Draft questions.** Each passage gets one question, a reference answer and an evidence quote, or is skipped, following the [drafting guidelines](../evals/golden/drafting-guidelines.md). Questions the handbook cannot answer are drafted separately and searched for in the corpus before they are kept.
 3. **Check.** `handbook-rag golden-check` verifies that every quote is found word for word in its page, and on no other page. The handbook repeats some text on several pages (about 1.8% of chunks are exact copies of text elsewhere), and a quote with two homes would score a retriever as wrong for finding the other copy. It also reports how much each question shares its wording with its evidence, because a question that copies its source is easy for keyword matching and says little about search by meaning.
-4. **Review.** A person checks each question and sets `review` to `verified`, or removes it. `make golden-review` writes a page to `data/golden-review.html` that shows every question next to the passage it was written from, with the evidence marked, so the check is a matter of reading.
+4. **Audit.** A second pass, which sees the question, the answer and the quote but not the drafter's reasoning, checks each question against the whole corpus. Its main job is to find a second passage that answers the same question, because the evaluation credits only the recorded one. Questions marked unanswerable are put to the strongest retriever, and the passages it returns are read.
+5. **Check the misses.** After the first evaluation, the passages returned for every missed question are read, to tell a real miss from a valid passage that nobody recorded.
+6. **Review.** A person checks each question and sets `review` to `verified`, or removes it. `make golden-review` writes a page to `data/golden-review.html` that shows every question next to the passage it was written from, with the evidence marked, so the check is a matter of reading.
 
 ## Retrieval metrics
 

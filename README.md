@@ -27,6 +27,8 @@ The assistant is built on the [GitLab Handbook](https://handbook.gitlab.com/), w
 
 `make chunks` cleans the pages and splits them along their headings into 38,881 chunks with a median of 225 tokens, none longer than the embedding model can read. How and why is in [ADR 0009](docs/adr/0009-structure-aware-chunking.md).
 
+The test questions in [`evals/golden/`](evals/golden/README.md) quote short passages from the handbook. That folder is therefore licensed CC BY-SA 4.0 and credits GitLab, separately from the code, which is under the MIT licence.
+
 This project is not affiliated with or endorsed by GitLab.
 
 ## Development

@@ -1,6 +1,6 @@
 # ADR 0002: Use the GitLab handbook as the corpus
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-21
 
 ## Context

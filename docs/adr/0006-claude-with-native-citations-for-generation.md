@@ -1,6 +1,6 @@
 # ADR 0006: Claude with native citations for answer generation
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-21
 
 ## Context
@@ -13,7 +13,7 @@ The common approach is to number the passages in the prompt and ask the model to
 
 Generate answers with Claude through the Anthropic API, using its Citations feature. Each retrieved chunk is sent as a document with citations enabled. The response comes back as text blocks, and each cited block carries the exact quoted text and the document it came from. We map those back to the handbook page and section.
 
-- The model is a configuration value. Which Claude tier becomes the default is decided by running our evaluation across tiers and comparing quality, latency and cost, and the result is recorded in a follow-up ADR.
+- The model is a configuration value. Development starts on Claude Haiku 5.5, the lowest-cost tier. Whether it stays the default is decided by running our evaluation across tiers and comparing quality, latency and cost, and the result is recorded in a follow-up ADR.
 - The generator sits behind a `Generator` interface, so retrieval and evaluation do not depend on the provider.
 - Credentials come from the environment and never live in the repository.
 

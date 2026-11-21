@@ -1,6 +1,6 @@
 # ADR 0007: Evaluation strategy
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-21
 
 ## Context

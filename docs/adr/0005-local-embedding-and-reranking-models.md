@@ -1,6 +1,6 @@
 # ADR 0005: Local open-weight models for embedding and reranking
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-21
 
 ## Context

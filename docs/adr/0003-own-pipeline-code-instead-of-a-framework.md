@@ -1,6 +1,6 @@
 # ADR 0003: Write the pipeline ourselves instead of adopting a RAG framework
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-21
 
 ## Context

@@ -1,6 +1,6 @@
 # ADR 0004: Qdrant as the vector store
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-21
 
 ## Context

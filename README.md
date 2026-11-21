@@ -1,8 +1,17 @@
 # Production RAG Pipeline
 
-A Retrieval-Augmented Generation (RAG) system built the way a production team would build it: answers grounded in source documents and cited, quality measured by an evaluation suite, and every request traced for latency and cost.
+A knowledge assistant that answers questions from a company handbook, built the way a production team would build it: answers grounded in retrieved passages and cited, quality measured by an evaluation suite, and every request traced for latency and cost.
 
-**Status: planning.** The use case, architecture, and roadmap are being defined. This README is updated as each milestone lands.
+**Status: design.** The plan is written and under review. Implementation starts with milestone M0, and this README is updated as each milestone lands.
+
+## Documents
+
+| Document | What it covers |
+|---|---|
+| [Project charter](docs/charter.md) | The problem, the users, success metrics and non-goals |
+| [Architecture](docs/architecture.md) | How the system works, with diagrams and a glossary |
+| [Decision records](docs/adr/) | Why each major technical choice was made |
+| [Roadmap](docs/roadmap.md) | Milestones and how work flows |
 
 ## Planned scope
 

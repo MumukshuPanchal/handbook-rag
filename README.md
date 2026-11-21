@@ -2,7 +2,7 @@
 
 A knowledge assistant that answers questions from a company handbook, built the way a production team would build it: answers grounded in retrieved passages and cited, quality measured by an evaluation suite, and every request traced for latency and cost.
 
-**Status: milestone M0, foundations.** The design is written and the project skeleton is in place. This README is updated as each milestone lands.
+**Status: milestone M1, baseline pipeline, in progress.** The handbook snapshot can be downloaded. Chunking, indexing and answering come next. This README is updated as each milestone lands.
 
 ## Documents
 
@@ -20,13 +20,20 @@ A knowledge assistant that answers questions from a company handbook, built the 
 - **Observability**: traces, latency, and cost for every request
 - **Production engineering**: tested code, CI, containerized services, and written design decisions
 
+## Data
+
+The assistant is built on the [GitLab Handbook](https://handbook.gitlab.com/), which GitLab publishes under the [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) licence. The handbook text is not stored in this repository. `make snapshot` downloads its Markdown pages at a pinned commit (4,206 pages, 43 MB) and writes a manifest that records the source, commit and a checksum of what was fetched. The reasoning is in [ADR 0002](docs/adr/0002-handbook-corpus.md).
+
+This project is not affiliated with or endorsed by GitLab.
+
 ## Development
 
-You need [uv](https://docs.astral.sh/uv/) and `make`.
+You need [uv](https://docs.astral.sh/uv/), `make` and `git`.
 
 ```bash
-make install   # install dependencies and git hooks
-make check     # lint, type check and tests: everything CI runs
+make install    # install dependencies and git hooks
+make check      # lint, type check and tests: everything CI runs
+make snapshot   # download the handbook at the pinned commit into data/
 ```
 
 The workflow and conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).

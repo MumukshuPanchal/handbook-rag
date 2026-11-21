@@ -11,12 +11,26 @@ dependencies = [
     "markdown-it-py>=4.3.0",
     "pydantic-settings>=2.16.3",
     "pyyaml>=6.0.4",
+    "qdrant-client>=1.20.0",
+    "sentence-transformers>=6.3.0",
     "tokenizers>=0.23.3",
+    "torch>=2.15.0",
     "typer>=0.29.2",
 ]
 
 [project.scripts]
 handbook-rag = "handbook_rag.cli:app"
+
+# PyTorch publishes CPU-only builds on its own index. Linux machines (CI and containers)
+# use them, which avoids downloading several gigabytes of GPU libraries they cannot use.
+# macOS gets the default build, which includes Apple GPU support.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["uv_build>=0.10.3,<0.11.0"]
@@ -33,7 +47,15 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "PT", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers --strict-config"
+# Slow tests download a model. They are skipped by default: run them with `make test-slow`.
+addopts = "-ra --strict-markers --strict-config -m 'not slow'"
+markers = ["slow: downloads a model or needs a running service"]
+filterwarnings = [
+    # Tests use Qdrant's embedded mode, where payload indexes are accepted but unused.
+    "ignore:Payload indexes have no effect in the local Qdrant:UserWarning",
+    # Raised on purpose by the test that points the client at an address nothing listens on.
+    "ignore:Failed to obtain server version:UserWarning",
+]
 
 [tool.mypy]
 strict = true

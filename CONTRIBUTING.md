@@ -6,7 +6,7 @@ You need [uv](https://docs.astral.sh/uv/) and `make`. uv installs the right Pyth
 
 ```bash
 make install   # install dependencies and git hooks
-make check     # lint, type check and tests: everything CI runs
+make check     # lint, type check and fast tests: everything CI runs
 ```
 
 Run `make` on its own to list every command.
@@ -35,7 +35,7 @@ Commit types used here:
 
 ## Conventions
 
-- **Tests.** New behaviour comes with tests. Tests live in `tests/` and must not depend on the developer's machine, such as a local `.env` file or network access.
+- **Tests.** New behaviour comes with tests. Tests live in `tests/` and must not depend on the developer's machine, such as a local `.env` file or network access. A test that loads a real model is marked `slow` and runs with `make test-slow`; everything else runs offline in seconds, using small stand-ins for the model and Qdrant's in-memory mode.
 - **Settings.** Configuration goes through `handbook_rag.config.Settings`. Nothing else reads environment variables. Every new setting is added to `.env.example`.
 - **Secrets.** Nothing secret is committed. `.env` is ignored by git, and a hook scans each commit for credentials.
 - **Decisions.** A change to the design gets a decision record in `docs/adr/`, in the same pull request. Records are numbered and not rewritten later; a new record supersedes an old one.

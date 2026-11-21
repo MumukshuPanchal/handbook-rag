@@ -30,13 +30,16 @@ This project is not affiliated with or endorsed by GitLab.
 
 ## Development
 
-You need [uv](https://docs.astral.sh/uv/), `make` and `git`.
+You need [uv](https://docs.astral.sh/uv/), `make`, `git` and Docker.
 
 ```bash
 make install    # install dependencies and git hooks
-make check      # lint, type check and tests: everything CI runs
+make check      # lint, type check and fast tests: everything CI runs
 make snapshot   # download the handbook at the pinned commit into data/
 make chunks     # clean and chunk it, and print a summary
+make qdrant     # start the Qdrant vector store in Docker
+make index      # embed the chunks and store them; safe to run again
+make search q="how do I expense a laptop"
 ```
 
 The workflow and conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).

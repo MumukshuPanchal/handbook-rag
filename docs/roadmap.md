@@ -34,5 +34,5 @@ Taken up only when the milestones above are done:
 1. Every task starts as an issue with a "done when" checklist.
 2. Work happens on a short-lived branch named `type/short-description`.
 3. A pull request links the issue, passes CI, and includes tests and documentation for what it changes.
-4. Pull requests are squash-merged, so `main` has one commit per completed task.
+4. Pull requests are merged by fast-forward, so `main` keeps a linear history in which every commit is a meaningful step.
 5. A decision that changes the design gets a decision record in the same pull request.

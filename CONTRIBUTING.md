@@ -13,11 +13,11 @@ Run `make` on its own to list every command.
 
 ## Workflow
 
-1. **Start from an issue.** Every change implements an issue with a "done when" checklist.
+1. **Start from an issue.** Every feature or fix implements an issue with a "done when" checklist. A small documentation correction can go straight to a pull request.
 2. **Create a branch** named `type/short-description`, for example `feat/markdown-chunker`.
 3. **Commit in small steps** using [Conventional Commits](https://www.conventionalcommits.org/): `type: summary` in the imperative mood. A git hook checks the format.
 4. **Open a pull request** that links the issue with `Closes #N`, explains what changed and why, and says how it was tested.
-5. **CI must be green.** Pull requests are squash-merged, so `main` has one commit per completed task.
+5. **CI must be green.** Pull requests are merged by fast-forward, so every commit lands on `main` unchanged. Make each commit a meaningful step with a clear message.
 
 Commit types used here:
 

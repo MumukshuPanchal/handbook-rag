@@ -1,0 +1,48 @@
+{
+  "metrics": [
+    {
+      "id": "hit@5",
+      "label": "Hit@5",
+      "kind": "binary"
+    },
+    {
+      "id": "hit@1",
+      "label": "Hit@1",
+      "kind": "binary"
+    },
+    {
+      "id": "hit@3",
+      "label": "Hit@3",
+      "kind": "binary"
+    },
+    {
+      "id": "hit@10",
+      "label": "Hit@10",
+      "kind": "binary"
+    },
+    {
+      "id": "recall@5",
+      "label": "Recall@5",
+      "kind": "float",
+      "scale": 1
+    },
+    {
+      "id": "mrr@10",
+      "label": "MRR@10",
+      "kind": "float",
+      "scale": 1
+    },
+    {
+      "id": "ndcg@10",
+      "label": "nDCG@10",
+      "kind": "float",
+      "scale": 1
+    }
+  ],
+  "perf_fields": [
+    {
+      "id": "latency_s",
+      "unit": "s"
+    }
+  ]
+}

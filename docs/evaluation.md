@@ -66,11 +66,41 @@ Each row records the latency of its retrieval, so a variant's gain in quality ca
 | MRR@10 | How high was the first relevant chunk? 1 at rank 1, one half at rank 2, and so on. |
 | nDCG@10 | How good is the ordering overall, compared with the best possible one? |
 
-Every mean is reported with a 95% confidence interval from a bootstrap over the questions. The interval shows how much the number would move with a different sample of questions. A difference between two variants that is smaller than the interval is not evidence that one is better.
+Every mean is reported with a 95% confidence interval from a bootstrap over the questions. The interval shows how much the number would move with a different sample of questions.
 
 Results are also broken down by question origin, because a question drafted by a model tends to reuse the words of its source passage, which flatters keyword-style matching.
 
 Unanswerable questions have no evidence, so they are not scored here. They matter for the answer evaluation, where the assistant must decline.
+
+## Comparing two variants
+
+Two means with their intervals do not yet say which variant is better. To decide that, compare them question by question:
+
+```bash
+make eval-compare base=baseline candidate=v2
+```
+
+```text
+v2 against baseline, on the same 136 questions
+
+  metric     baseline        v2   difference (95% interval)   better  worse   same
+  Hit@5         0.838     0.949   +0.110 (+0.059 to +0.169)       15      0    121  clear
+  Hit@1         0.588     0.728   +0.140 (+0.074 to +0.206)       22      3    111  clear
+```
+
+(Example output, from a run on the draft golden set.)
+
+Both variants answered the same questions, so each question gives a pair of scores. The comparison takes the difference within each pair and puts a confidence interval on the mean of those differences. This is called a paired comparison.
+
+Pairing matters because most of the variation in a score comes from the questions, not from the system: some questions are easy for every variant and some are hard for every variant. Two separate intervals each carry that variation, so they can overlap even when one variant is reliably better. The difference per question cancels it out.
+
+How to read a row:
+
+- **clear** means the interval of the difference excludes zero. Chance is an unlikely explanation.
+- **unclear** means the two variants cannot be told apart with this many questions. That is a finding too: it says not to pay extra latency or complexity for the candidate on this evidence.
+- **better** and **worse** count the questions where the candidate scored higher or lower. A gain of 15 against a loss of 0 is more convincing than 40 against 25, even when the means match. The questions that got worse are the ones to read.
+
+The comparison refuses to run if the two variants did not score exactly the same questions with the same labels. Every row in `results.jsonl` carries a fingerprint of its question, reference answer and evidence, so a run made before the golden set changed cannot be compared by accident with one made after.
 
 ## What a run writes
 
@@ -79,7 +109,7 @@ Each run is a variant: `baseline` first, then `v1`, `v2` and so on. A variant di
 | File | Content |
 |---|---|
 | `results.jsonl` | One row per question: scores, latency and the ranked chunks with the evidence each covers |
-| `summary.json` | Means with confidence intervals, overall and per group |
+| `summary.json` | Means with confidence intervals, overall and per group, the configuration that produced them (retrieval mode, models, chunking, handbook commit) and a fingerprint of the labels that were scored |
 | `errors.jsonl` | Questions that could not be scored because the harness failed |
 | `traces/` | One readable file per question. Not committed. |
 

@@ -4,7 +4,7 @@ from qdrant_client import QdrantClient
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import QdrantVectorStore
 from handbook_rag.retrieve.dense import DenseRetriever
-from tests.support import FakeEmbedder, make_chunk
+from tests.support import FakeEmbedder, FakeSparseEncoder, make_chunk
 
 LEAVE = make_chunk("Parental leave is sixteen weeks of paid leave.")
 EXPENSES = make_chunk(
@@ -21,7 +21,12 @@ INCIDENTS = make_chunk(
 def retriever() -> DenseRetriever:
     embedder = FakeEmbedder()
     store = QdrantVectorStore(QdrantClient(":memory:"), "test-collection")
-    index_chunks([LEAVE, EXPENSES, INCIDENTS], embedder=embedder, store=store)
+    index_chunks(
+        [LEAVE, EXPENSES, INCIDENTS],
+        embedder=embedder,
+        sparse_encoder=FakeSparseEncoder(),
+        store=store,
+    )
     return DenseRetriever(embedder, store)
 
 

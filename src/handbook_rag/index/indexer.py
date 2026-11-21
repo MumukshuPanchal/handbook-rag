@@ -5,6 +5,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from handbook_rag.index.embedder import Embedder
+from handbook_rag.index.sparse import SparseEncoder
 from handbook_rag.index.store import VectorStore
 from handbook_rag.ingest.models import Chunk
 
@@ -24,6 +25,7 @@ def index_chunks(
     chunks: Sequence[Chunk],
     *,
     embedder: Embedder,
+    sparse_encoder: SparseEncoder,
     store: VectorStore,
     batch_size: int = 256,
     on_progress: Callable[[int, int], None] | None = None,
@@ -47,8 +49,8 @@ def index_chunks(
     done = 0
     for start in range(0, len(missing), batch_size):
         batch = missing[start : start + batch_size]
-        vectors = embedder.embed_documents([chunk.text_for_embedding for chunk in batch])
-        store.upsert(batch, vectors)
+        texts = [chunk.text_for_embedding for chunk in batch]
+        store.upsert(batch, embedder.embed_documents(texts), sparse_encoder.encode_documents(texts))
         done += len(batch)
         if on_progress is not None:
             on_progress(done, len(missing))

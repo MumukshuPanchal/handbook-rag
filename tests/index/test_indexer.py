@@ -3,7 +3,7 @@ from qdrant_client import QdrantClient
 
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import QdrantVectorStore
-from tests.support import FakeEmbedder, make_chunk
+from tests.support import FakeEmbedder, FakeSparseEncoder, make_chunk
 
 CHUNKS = [
     make_chunk("Parental leave is sixteen weeks.", heading_path=("Parental leave",)),
@@ -22,7 +22,9 @@ def store() -> QdrantVectorStore:
 def test_first_run_embeds_and_stores_every_chunk(store: QdrantVectorStore) -> None:
     embedder = FakeEmbedder()
 
-    report = index_chunks(CHUNKS, embedder=embedder, store=store)
+    report = index_chunks(
+        CHUNKS, embedder=embedder, sparse_encoder=FakeSparseEncoder(), store=store
+    )
 
     assert (report.total, report.embedded, report.already_indexed, report.removed) == (3, 3, 0, 0)
     assert store.count() == 3
@@ -32,17 +34,19 @@ def test_first_run_embeds_and_stores_every_chunk(store: QdrantVectorStore) -> No
 def test_chunks_are_embedded_with_their_context_header(store: QdrantVectorStore) -> None:
     embedder = FakeEmbedder()
 
-    index_chunks(CHUNKS, embedder=embedder, store=store)
+    index_chunks(CHUNKS, embedder=embedder, sparse_encoder=FakeSparseEncoder(), store=store)
 
     assert "Leave > Parental leave\n\nParental leave is sixteen weeks." in embedder.embedded
 
 
 def test_second_run_does_no_embedding(store: QdrantVectorStore) -> None:
     embedder = FakeEmbedder()
-    index_chunks(CHUNKS, embedder=embedder, store=store)
+    index_chunks(CHUNKS, embedder=embedder, sparse_encoder=FakeSparseEncoder(), store=store)
     embedder.embedded.clear()
 
-    report = index_chunks(CHUNKS, embedder=embedder, store=store)
+    report = index_chunks(
+        CHUNKS, embedder=embedder, sparse_encoder=FakeSparseEncoder(), store=store
+    )
 
     assert (report.embedded, report.already_indexed, report.removed) == (0, 3, 0)
     assert embedder.embedded == []
@@ -53,11 +57,13 @@ def test_only_new_chunks_are_embedded_and_stale_ones_are_removed(
     store: QdrantVectorStore,
 ) -> None:
     embedder = FakeEmbedder()
-    index_chunks(CHUNKS, embedder=embedder, store=store)
+    index_chunks(CHUNKS, embedder=embedder, sparse_encoder=FakeSparseEncoder(), store=store)
     embedder.embedded.clear()
     new_chunk = make_chunk("Book travel through the travel portal.", doc_id="finance/travel.md")
 
-    report = index_chunks([CHUNKS[0], new_chunk], embedder=embedder, store=store)
+    report = index_chunks(
+        [CHUNKS[0], new_chunk], embedder=embedder, sparse_encoder=FakeSparseEncoder(), store=store
+    )
 
     assert (report.total, report.embedded, report.already_indexed, report.removed) == (2, 1, 1, 2)
     assert embedder.embedded == [new_chunk.text_for_embedding]
@@ -70,9 +76,19 @@ def test_progress_is_reported_until_done(store: QdrantVectorStore) -> None:
     index_chunks(
         CHUNKS,
         embedder=FakeEmbedder(),
+        sparse_encoder=FakeSparseEncoder(),
         store=store,
         batch_size=2,
         on_progress=lambda done, total: progress.append((done, total)),
     )
 
     assert progress == [(2, 3), (3, 3)]
+
+
+def test_chunks_are_stored_with_keyword_vectors_too(store: QdrantVectorStore) -> None:
+    sparse = FakeSparseEncoder()
+    index_chunks(CHUNKS, embedder=FakeEmbedder(), sparse_encoder=sparse, store=store)
+
+    results = store.search_sparse(sparse.encode_query("laptop"), limit=3)
+
+    assert [r.chunk.doc_id for r in results] == ["finance/expenses.md"]

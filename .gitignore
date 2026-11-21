@@ -24,6 +24,7 @@ data/
 
 # Evaluation output that is bulky or derived. Scores and summaries are committed.
 evals/runs/**/traces/
+evals/runs/**/retrieved.jsonl
 evals/runs/**/report.html
 evals/runs/**/state.json
 evals/runs/**/trajectory/

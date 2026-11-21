@@ -185,7 +185,11 @@ def test_run_is_written_as_one_row_per_question_with_a_summary(tmp_path: Path) -
     assert rows[0]["status"] == "ok"
     assert rows[0]["tags"] == ["people", "model-drafted", "review:pending"]
     assert rows[0]["grade"]["hit@5"] == 1.0
-    assert rows[0]["retrieved"][1]["covers"] == [0]
+    assert "retrieved" not in rows[0]
+    details = [json.loads(line) for line in (run_dir / "retrieved.jsonl").read_text().splitlines()]
+    assert [detail["prompt_id"] for detail in details] == ["q001", "q002"]
+    assert details[0]["retrieved"][1]["covers"] == [0]
+    assert details[0]["retrieved"][1]["doc_id"] == "people/leave.md"
     summary = json.loads((run_dir / "summary.json").read_text())
     assert summary["questions_scored"] == 2
     assert summary["config"] == {"retrieval_mode": "dense", "rerank": False}

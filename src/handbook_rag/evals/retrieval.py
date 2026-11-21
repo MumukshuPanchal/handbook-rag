@@ -174,6 +174,10 @@ def write_run(
     flow directory, with one row per question in ``results.jsonl``. Failed questions go
     to ``errors.jsonl`` so they can never be mistaken for scored ones.
 
+    ``results.jsonl`` holds only what a comparison needs, so it stays small enough to
+    commit. The ranked chunks behind each score go to ``retrieved.jsonl`` and ``traces/``,
+    which are for debugging on the machine that ran the evaluation.
+
     A number is only useful if it can be traced to what produced it. The summary records
     ``config`` (which models and settings were used) and a fingerprint of the labels that
     were scored, and every row carries the fingerprint of its own label.
@@ -188,7 +192,10 @@ def write_run(
         encoding="utf-8",
     )
 
-    with (run_dir / "results.jsonl").open("w", encoding="utf-8") as output:
+    with (
+        (run_dir / "results.jsonl").open("w", encoding="utf-8") as output,
+        (run_dir / "retrieved.jsonl").open("w", encoding="utf-8") as details,
+    ):
         for result in report.results:
             question = result.question
             row = {
@@ -199,9 +206,13 @@ def write_run(
                 "status": "ok",
                 "grade": result.scores,
                 "latency_s": round(result.latency_s, 4),
-                "retrieved": [asdict(item) for item in result.retrieved],
             }
             output.write(json.dumps(row, ensure_ascii=False) + "\n")
+            detail = {
+                "prompt_id": question.id,
+                "retrieved": [asdict(item) for item in result.retrieved],
+            }
+            details.write(json.dumps(detail, ensure_ascii=False) + "\n")
             trace = [
                 {"role": "user", "content": question.question},
                 {

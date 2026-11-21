@@ -108,10 +108,11 @@ Each run is a variant: `baseline` first, then `v1`, `v2` and so on. A variant di
 
 | File | Content |
 |---|---|
-| `results.jsonl` | One row per question: scores, latency and the ranked chunks with the evidence each covers |
+| `results.jsonl` | One row per question: its scores, latency and label fingerprint. Small, so it is committed and two runs can be compared from a fresh clone |
 | `summary.json` | Means with confidence intervals, overall and per group, the configuration that produced them (retrieval mode, models, chunking, handbook commit) and a fingerprint of the labels that were scored |
 | `errors.jsonl` | Questions that could not be scored because the harness failed |
-| `traces/` | One readable file per question. Not committed. |
+| `retrieved.jsonl` | The ranked chunks behind each score, with the evidence each covers. For debugging; not committed |
+| `traces/` | One readable file per question. Not committed |
 
 A harness failure, such as the vector store being unreachable, is recorded in `errors.jsonl` and never counted as a miss. A score has to describe the retriever, not the plumbing around it.
 

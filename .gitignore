@@ -19,6 +19,9 @@ dist/
 htmlcov/
 .ipynb_checkpoints/
 
+# Downloaded corpus and other local data
+data/
+
 # OS and editor files
 .DS_Store
 .vscode/

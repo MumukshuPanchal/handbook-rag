@@ -35,6 +35,23 @@ class Settings(BaseSettings):
         description="Minimum severity of log messages to emit.",
     )
 
+    handbook_repo_url: str = Field(
+        default="https://gitlab.com/gitlab-com/content-sites/handbook.git",
+        description="Git repository the handbook is downloaded from.",
+    )
+    handbook_commit: str = Field(
+        default="e645aac6dc6fbb0b759b92ed32f016aaed5ef4b8",
+        description="Exact commit of the handbook to index. Changing it changes the corpus.",
+    )
+    handbook_content_path: str = Field(
+        default="content/handbook",
+        description="Directory inside the repository that holds the handbook pages.",
+    )
+    handbook_licence: str = Field(
+        default="CC-BY-SA-4.0",
+        description="SPDX identifier of the licence the handbook text is published under.",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

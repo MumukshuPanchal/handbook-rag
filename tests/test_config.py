@@ -1,22 +1,10 @@
+import re
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from handbook_rag.config import Settings, get_settings
-
-
-@pytest.fixture(autouse=True)
-def isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Run each test in an empty directory with no settings in the environment.
-
-    Without this, a developer's own ``.env`` file or exported variables would leak
-    into the tests and make them pass or fail depending on the machine.
-    """
-    monkeypatch.chdir(tmp_path)
-    for name in ("HANDBOOK_RAG_DATA_DIR", "HANDBOOK_RAG_LOG_LEVEL"):
-        monkeypatch.delenv(name, raising=False)
-    get_settings.cache_clear()
 
 
 def test_defaults_work_without_any_configuration() -> None:
@@ -36,23 +24,21 @@ def test_environment_variable_overrides_default(monkeypatch: pytest.MonkeyPatch)
     assert settings.log_level == "DEBUG"
 
 
-def test_dotenv_file_is_read(tmp_path: Path) -> None:
-    (tmp_path / ".env").write_text("HANDBOOK_RAG_LOG_LEVEL=WARNING\n")
+def test_dotenv_file_is_read() -> None:
+    Path(".env").write_text("HANDBOOK_RAG_LOG_LEVEL=WARNING\n")
 
     assert Settings().log_level == "WARNING"
 
 
-def test_environment_variable_wins_over_dotenv_file(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    (tmp_path / ".env").write_text("HANDBOOK_RAG_LOG_LEVEL=WARNING\n")
+def test_environment_variable_wins_over_dotenv_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    Path(".env").write_text("HANDBOOK_RAG_LOG_LEVEL=WARNING\n")
     monkeypatch.setenv("HANDBOOK_RAG_LOG_LEVEL", "ERROR")
 
     assert Settings().log_level == "ERROR"
 
 
-def test_unrelated_keys_in_dotenv_file_are_ignored(tmp_path: Path) -> None:
-    (tmp_path / ".env").write_text("SOME_OTHER_TOOL_KEY=value\nHANDBOOK_RAG_LOG_LEVEL=DEBUG\n")
+def test_unrelated_keys_in_dotenv_file_are_ignored() -> None:
+    Path(".env").write_text("SOME_OTHER_TOOL_KEY=value\nHANDBOOK_RAG_LOG_LEVEL=DEBUG\n")
 
     assert Settings().log_level == "DEBUG"
 
@@ -66,3 +52,7 @@ def test_invalid_value_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_get_settings_returns_the_same_object_each_time() -> None:
     assert get_settings() is get_settings()
+
+
+def test_handbook_is_pinned_to_a_full_commit_hash_by_default() -> None:
+    assert re.fullmatch(r"[0-9a-f]{40}", Settings().handbook_commit)

@@ -419,6 +419,9 @@ def golden_check(
         f"  wording   questions share {report.mean_overlap:.0%} of their words with their "
         f"evidence on average; {len(report.high_overlap)} share 80% or more"
     )
+    if report.overlap_by_origin:
+        shares = ", ".join(f"{o} {share:.0%}" for o, share in report.overlap_by_origin.items())
+        typer.echo(f"            by origin: {shares}")
     if report.problems:
         typer.echo(f"  labels    {len(report.problems)} broken:")
         for problem in report.problems[:20]:

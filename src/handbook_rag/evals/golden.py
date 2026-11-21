@@ -133,6 +133,9 @@ class GoldenSetReport:
     """Labels that cannot be trusted: a missing page, a quote that is not in its page, or
     a quote that also appears on another page."""
     mean_overlap: float
+    overlap_by_origin: dict[str, float]
+    """The same share, per question origin. A question written without seeing the passage
+    should share far fewer words with it."""
     high_overlap: list[str]
     """Ids of questions that share most of their words with their evidence."""
 
@@ -170,6 +173,10 @@ def check_against_corpus(
             overlaps[question.id] = max(
                 word_overlap(question.question, evidence.quote) for evidence in question.evidence
             )
+    overlap_values: dict[str, list[float]] = defaultdict(list)
+    for question in questions:
+        if question.id in overlaps:
+            overlap_values[question.origin].append(overlaps[question.id])
     return GoldenSetReport(
         total=len(questions),
         by_type=Counter(q.type for q in questions),
@@ -181,5 +188,8 @@ def check_against_corpus(
         ),
         problems=problems,
         mean_overlap=sum(overlaps.values()) / len(overlaps) if overlaps else 0.0,
+        overlap_by_origin={
+            origin: sum(values) / len(values) for origin, values in sorted(overlap_values.items())
+        },
         high_overlap=sorted(i for i, value in overlaps.items() if value >= high_overlap_threshold),
     )

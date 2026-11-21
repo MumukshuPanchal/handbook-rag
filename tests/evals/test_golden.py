@@ -124,6 +124,7 @@ def test_check_summarises_the_set_and_flags_copied_wording() -> None:
     assert report.problems == []
     assert report.high_overlap == ["q1"]
     assert 0.3 < report.mean_overlap < 0.7
+    assert report.overlap_by_origin == {"model-drafted": report.mean_overlap}
 
 
 def test_check_reports_a_quote_that_another_page_repeats() -> None:

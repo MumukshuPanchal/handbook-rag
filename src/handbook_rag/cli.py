@@ -351,7 +351,7 @@ def golden_check(
         for problem in report.problems[:20]:
             typer.echo(f"    - {problem}")
         raise typer.Exit(code=1)
-    typer.echo("  labels    every quote was found in its page")
+    typer.echo("  labels    every quote was found in its page, and on no other page")
 
 
 @app.command(name="golden-review")

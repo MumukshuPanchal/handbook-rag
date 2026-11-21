@@ -130,7 +130,8 @@ class GoldenSetReport:
     by_section: Counter[str]
     by_unanswerable_kind: Counter[str]
     problems: list[str]
-    """Labels that are wrong: a missing page or a quote that is not in its page."""
+    """Labels that cannot be trusted: a missing page, a quote that is not in its page, or
+    a quote that also appears on another page."""
     mean_overlap: float
     high_overlap: list[str]
     """Ids of questions that share most of their words with their evidence."""
@@ -151,6 +152,20 @@ def check_against_corpus(
             locate_evidence(question, pages)
         except DatasetError as error:
             problems.append(str(error))
+        for evidence in question.evidence:
+            # The handbook repeats some text on several pages. A retriever that returns
+            # the other copy has found the answer, yet would be scored as a miss.
+            copies = [
+                document.doc_id
+                for document in documents
+                if document.doc_id != evidence.doc_id and evidence.quote in document.text
+            ]
+            if copies:
+                more = f" and {len(copies) - 1} more" if len(copies) > 1 else ""
+                problems.append(
+                    f"{question.id}: quote also appears word for word in {copies[0]}{more}, "
+                    "so the label is ambiguous"
+                )
         if question.evidence:
             overlaps[question.id] = max(
                 word_overlap(question.question, evidence.quote) for evidence in question.evidence

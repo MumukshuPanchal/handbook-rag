@@ -126,6 +126,21 @@ def test_check_summarises_the_set_and_flags_copied_wording() -> None:
     assert 0.3 < report.mean_overlap < 0.7
 
 
+def test_check_reports_a_quote_that_another_page_repeats() -> None:
+    page = Document("finance/expenses.md", "T", "https://example.com/", "finance", "a" * 40, PROSE)
+    copy = Document("finance/archive.md", "T", "https://example.com/", "finance", "a" * 40, PROSE)
+    other = Document("people/leave.md", "T", "https://example.com/", "people", "a" * 40, "Leave.")
+
+    report = check_against_corpus(
+        [question("q1", "When are expense reports due?", "within thirty days")],
+        [page, copy, other],
+    )
+
+    assert report.problems == [
+        "q1: quote also appears word for word in finance/archive.md, so the label is ambiguous"
+    ]
+
+
 def test_check_reports_a_quote_that_is_not_in_its_page() -> None:
     page = Document("finance/expenses.md", "T", "https://example.com/", "finance", "a" * 40, PROSE)
 

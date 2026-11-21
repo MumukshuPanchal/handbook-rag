@@ -353,7 +353,7 @@ def test_golden_check_summarises_a_set_whose_labels_match_the_corpus(tmp_path: P
     assert "Golden set: 2 questions" in result.output
     assert "1 answerable, 1 unanswerable" in result.output
     assert "declining 1 false-premise" in result.output
-    assert "every quote was found in its page" in result.output
+    assert "every quote was found in its page, and on no other page" in result.output
 
 
 @pytest.mark.usefixtures("fake_pipeline")

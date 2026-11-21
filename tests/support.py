@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from handbook_rag.index.sparse import SparseVector
 from handbook_rag.ingest.models import Chunk
 
 
@@ -73,6 +74,19 @@ class FakeEmbedder:
             vector[zlib.crc32(word.encode()) % self.dimension] += 1.0
         length = math.sqrt(sum(value * value for value in vector)) or 1.0
         return [value / length for value in vector]
+
+
+class FakeSparseEncoder:
+    """A stand-in keyword encoder for tests: one position per distinct word, weight 1."""
+
+    name = "fake-sparse"
+
+    def encode_documents(self, texts: Sequence[str]) -> list[SparseVector]:
+        return [self.encode_query(text) for text in texts]
+
+    def encode_query(self, text: str) -> SparseVector:
+        words = sorted(set(re.findall(r"[a-z0-9]+", text.lower())) - {"the", "a", "of", "is"})
+        return SparseVector([zlib.crc32(word.encode()) for word in words], [1.0] * len(words))
 
 
 def make_chunk(

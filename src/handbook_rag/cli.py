@@ -10,6 +10,7 @@ import typer
 
 from handbook_rag import __version__, wiring
 from handbook_rag.config import get_settings
+from handbook_rag.evals.compare import ComparisonError, compare_runs, metric_labels
 from handbook_rag.evals.dataset import DatasetError, load_golden_set
 from handbook_rag.evals.golden import check_against_corpus, sample_source_chunks
 from handbook_rag.evals.retrieval import METRICS, evaluate_retrieval, write_run
@@ -257,7 +258,8 @@ def eval_retrieval(
     if not report.results:
         typer.echo("error: no question could be scored.", err=True)
         raise typer.Exit(code=1)
-    run_dir = write_run(report, output, variant, description)
+    config = wiring.describe_retrieval(settings, mode, rerank)
+    run_dir = write_run(report, output, variant, description, config)
 
     typer.echo(f"Retrieval evaluation: {variant}")
     reranked = settings.rerank if rerank is None else rerank
@@ -282,6 +284,46 @@ def eval_retrieval(
     typer.echo(f"  written to  {run_dir}")
     if report.failures:
         raise typer.Exit(code=1)
+
+
+@app.command(name="eval-compare")
+def eval_compare(
+    base: Annotated[str, typer.Argument(help="The run to compare against, such as 'baseline'.")],
+    candidate: Annotated[str, typer.Argument(help="The run being judged, such as 'v1'.")],
+    runs: Annotated[
+        Path, typer.Option(help="Directory that holds one sub-directory per run.")
+    ] = Path("evals/runs/retrieval"),
+) -> None:
+    """Compare two runs question by question: is the candidate really better?"""
+    try:
+        comparison = compare_runs(runs / base, runs / candidate)
+    except ComparisonError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    typer.echo(f"{candidate} against {base}, on the same {comparison.questions} questions")
+    typer.echo(f"  {base:<10}  {comparison.base.description}")
+    typer.echo(f"  {candidate:<10}  {comparison.candidate.description}")
+    typer.echo("")
+    typer.echo(
+        f"  {'metric':<9} {base[:9]:>9} {candidate[:9]:>9}   "
+        f"{'difference (95% interval)':<27} better  worse   same"
+    )
+    labels = metric_labels(runs) or {name: name for name in comparison.metrics}
+    for metric_id, label in labels.items():
+        if metric_id not in comparison.metrics:
+            continue
+        metric = comparison.metrics[metric_id]
+        change = metric.change.difference
+        interval = f"{change.mean:+.3f} ({change.low:+.3f} to {change.high:+.3f})"
+        typer.echo(
+            f"  {label:<9} {metric.base.mean:>9.3f} {metric.candidate.mean:>9.3f}   "
+            f"{interval:<27} {metric.change.better:>6} {metric.change.worse:>6} "
+            f"{metric.change.same:>6}  {'clear' if metric.change.is_clear else 'unclear'}"
+        )
+    typer.echo("")
+    typer.echo("  clear    the interval excludes zero: chance is an unlikely explanation")
+    typer.echo("  unclear  the two runs cannot be told apart with this many questions")
 
 
 @app.command(name="golden-candidates")

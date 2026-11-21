@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant index search eval-retrieval golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant index search eval-retrieval eval-compare golden-check golden-review
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -44,6 +44,9 @@ search: ## Search the index, for example: make search q="how do I expense a lapt
 
 eval-retrieval: ## Score retrieval on the golden set
 	uv run handbook-rag eval-retrieval
+
+eval-compare: ## Compare two runs: make eval-compare base=baseline candidate=v1
+	uv run handbook-rag eval-compare $(base) $(candidate)
 
 golden-check: ## Check every golden set label against the corpus
 	uv run handbook-rag golden-check

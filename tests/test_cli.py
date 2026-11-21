@@ -392,3 +392,35 @@ def test_golden_review_defaults_to_the_data_directory(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert (tmp_path / "data" / "golden-review.html").is_file()
+
+
+def test_eval_compare_reports_the_difference_between_two_runs(
+    fake_pipeline: FakeEmbedder, tmp_path: Path
+) -> None:
+    runner.invoke(app, ["index"])
+    dataset = tmp_path / "questions.jsonl"
+    dataset.write_text(golden_rows("sixteen weeks of paid leave"))
+    runs = tmp_path / "runs"
+    common = ["eval-retrieval", "--dataset", str(dataset), "--output", str(runs)]
+    runner.invoke(app, [*common, "--description", "Dense."])
+    runner.invoke(app, [*common, "--variant", "v1", "--mode", "hybrid", "--description", "Hybrid."])
+
+    result = runner.invoke(app, ["eval-compare", "baseline", "v1", "--runs", str(runs)])
+
+    assert result.exit_code == 0, result.output
+    assert "v1 against baseline, on the same 1 questions" in result.output
+    assert "baseline    Dense." in result.output
+    assert "v1          Hybrid." in result.output
+    assert "Hit@5" in result.output
+    assert "+0.000 (+0.000 to +0.000)" in result.output
+    assert "unclear" in result.output
+    summary = json.loads((runs / "v1" / "summary.json").read_text())
+    assert summary["config"]["retrieval_mode"] == "hybrid"
+    assert summary["config"]["rerank"] is False
+
+
+def test_eval_compare_explains_a_run_that_does_not_exist(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["eval-compare", "baseline", "v9", "--runs", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "no run found" in result.output

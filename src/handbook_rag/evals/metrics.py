@@ -113,3 +113,45 @@ def mean_with_interval(
         high=means[int(0.975 * resamples) - 1],
         count=len(values),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class Comparison:
+    """How one system's scores differ from another's on the same questions."""
+
+    difference: Estimate
+    """Mean of candidate minus base, per question, with a 95% confidence interval."""
+    better: int
+    """Questions on which the candidate scored higher."""
+    worse: int
+    same: int
+
+    @property
+    def is_clear(self) -> bool:
+        """Whether the interval excludes zero, so chance is an unlikely explanation."""
+        return self.difference.low > 0 or self.difference.high < 0
+
+
+def paired_difference(
+    base: Sequence[float], candidate: Sequence[float], *, resamples: int = 2000, seed: int = 0
+) -> Comparison:
+    """Compare two systems that were scored on the same questions, in the same order.
+
+    Most of the variation in a score comes from the questions: some are easy for every
+    system and some are hard for every system. Comparing two separate confidence
+    intervals carries that variation twice. Looking at the difference per question
+    removes it, which is why a paired comparison can detect an improvement that the two
+    separate intervals, overlapping, would hide.
+
+    The interval is a bootstrap over the per-question differences. If it excludes zero,
+    the difference is unlikely to be an accident of which questions were sampled.
+    """
+    if len(base) != len(candidate):
+        raise ValueError("A paired comparison needs the same questions on both sides.")
+    differences = [after - before for before, after in zip(base, candidate, strict=True)]
+    return Comparison(
+        difference=mean_with_interval(differences, resamples=resamples, seed=seed),
+        better=sum(difference > 0 for difference in differences),
+        worse=sum(difference < 0 for difference in differences),
+        same=sum(difference == 0 for difference in differences),
+    )

@@ -10,6 +10,7 @@ from handbook_rag.evals.metrics import (
     hit_at_k,
     mean_with_interval,
     ndcg_at_k,
+    paired_difference,
     recall_at_k,
     reciprocal_rank_at_k,
 )
@@ -151,3 +152,55 @@ def test_interval_is_reproducible_and_collapses_when_all_scores_agree() -> None:
 def test_mean_of_nothing_is_an_error() -> None:
     with pytest.raises(ValueError, match="empty"):
         mean_with_interval([])
+
+
+def test_paired_difference_counts_the_questions_that_got_better_and_worse() -> None:
+    base = [1.0, 0.0, 0.0, 1.0, 0.5]
+    candidate = [1.0, 1.0, 0.0, 0.0, 1.0]
+
+    comparison = paired_difference(base, candidate)
+
+    assert (comparison.better, comparison.worse, comparison.same) == (2, 1, 2)
+    assert comparison.difference.mean == pytest.approx(0.1)
+    assert comparison.difference.count == 5
+
+
+def test_pairing_reveals_a_gain_that_two_separate_intervals_hide() -> None:
+    # Half the questions are hard for the base system. The candidate fixes 12 of them and
+    # breaks nothing.
+    base = [1.0] * 50 + [0.0] * 50
+    candidate = [1.0] * 62 + [0.0] * 38
+
+    before, after = mean_with_interval(base), mean_with_interval(candidate)
+    comparison = paired_difference(base, candidate)
+
+    assert before.high > after.low, "the separate intervals overlap"
+    assert comparison.difference.mean == pytest.approx(0.12)
+    assert comparison.difference.low > 0
+    assert comparison.is_clear
+
+
+def test_a_difference_is_unclear_when_gains_and_losses_balance() -> None:
+    base = [1.0, 0.0] * 30
+    candidate = [0.0, 1.0] * 29 + [1.0, 1.0]
+
+    comparison = paired_difference(base, candidate)
+
+    assert comparison.better == 30
+    assert comparison.worse == 29
+    assert comparison.difference.low < 0 < comparison.difference.high
+    assert not comparison.is_clear
+
+
+def test_identical_systems_show_no_difference() -> None:
+    scores = [1.0, 0.0, 1.0]
+
+    comparison = paired_difference(scores, scores)
+
+    assert comparison.same == 3
+    assert not comparison.is_clear
+
+
+def test_paired_comparison_needs_the_same_questions_on_both_sides() -> None:
+    with pytest.raises(ValueError, match="same questions"):
+        paired_difference([1.0, 0.0], [1.0])

@@ -29,11 +29,14 @@ from handbook_rag.evals.gate import (
 from handbook_rag.evals.golden import check_against_corpus, sample_source_chunks
 from handbook_rag.evals.retrieval import METRICS, evaluate_retrieval, write_run
 from handbook_rag.evals.review import render_review_page
+from handbook_rag.generate.claude import GenerationError
+from handbook_rag.generate.pricing import cost_usd
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import VectorStoreError
 from handbook_rag.ingest.build import CorpusError, build_corpus, chunk_documents, load_snapshot
 from handbook_rag.ingest.snapshot import SnapshotError, download_snapshot
 from handbook_rag.ingest.tokens import token_counter
+from handbook_rag.pipeline import answer_question
 from handbook_rag.tracing import record_query, record_results, stage, trace_id, tracing_session
 from handbook_rag.wiring import RetrievalMode
 
@@ -610,3 +613,49 @@ def golden_review(
     )
     typer.echo(f"  written to  {target}")
     typer.echo("  open it in a browser, then set review to verified for each question you accept")
+
+
+@app.command()
+def ask(
+    question: Annotated[str, typer.Argument(help="The question to answer.")],
+    section: Annotated[
+        str | None,
+        typer.Option(help="Use only one handbook section, such as 'engineering'."),
+    ] = None,
+) -> None:
+    """Answer a question from the handbook, with the passages that support the answer."""
+    settings = get_settings()
+    try:
+        answer = answer_question(
+            question,
+            retriever=wiring.make_retriever(settings),
+            generator=wiring.make_generator(settings),
+            limit=settings.answer_context_chunks,
+            section=section,
+            on_text=lambda text: typer.echo(text, nl=False),
+        )
+    except (VectorStoreError, GenerationError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo("")
+
+    if answer.sources:
+        typer.echo("\nSources")
+        for number, chunk in enumerate(answer.sources, start=1):
+            typer.echo(f"  [{number}] {chunk.context_header}")
+            typer.echo(f"      {chunk.url}")
+    elif answer.answered:
+        typer.echo("\nNo passages were cited for this answer. Treat it with caution.")
+
+    cost = cost_usd(answer.model, answer.usage)
+    details = [
+        answer.model,
+        f"{answer.usage.input_tokens:,} tokens in",
+        f"{answer.usage.output_tokens:,} out",
+        f"{answer.seconds:.1f} s",
+    ]
+    if cost is not None:
+        details.insert(3, f"${cost:.5f}")
+    if answer.stop_reason == "max_tokens":
+        details.append("cut off at the token limit")
+    typer.echo("\n" + " | ".join(details))

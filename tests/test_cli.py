@@ -1,5 +1,5 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +10,11 @@ from typer.testing import CliRunner
 from handbook_rag import __version__, wiring
 from handbook_rag.cli import app
 from handbook_rag.config import Settings, get_settings
+from handbook_rag.generate.claude import GenerationError
+from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
+from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
 from handbook_rag.index.store import QdrantVectorStore, ScoredChunk, VectorStoreError
+from handbook_rag.ingest.models import Chunk
 from handbook_rag.retrieve.dense import Retriever
 from tests.support import (
     FakeEmbedder,
@@ -749,3 +753,61 @@ def test_a_missing_model_file_is_not_reported_as_a_missing_golden_set(
     assert "golden set not found" not in result.output
     assert isinstance(result.exception, FileNotFoundError)
     assert "model.safetensors" in str(result.exception)
+
+
+class CannedGenerator:
+    """Answers from the first chunk it is given, citing it."""
+
+    def generate(
+        self,
+        question: str,
+        chunks: Sequence[Chunk],
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Answer:
+        if not chunks:
+            return Answer(question, (Segment(NOT_FOUND_MESSAGE),), False, "fake", "no_context")
+        text = "Sixteen weeks of paid leave."
+        if on_text is not None:
+            on_text(text)
+        return Answer(
+            question=question,
+            segments=(Segment(text, (Citation(chunks[0], chunks[0].text),)),),
+            answered=True,
+            model="claude-haiku-5-5",
+            stop_reason="end_turn",
+            usage=TokenUsage(input_tokens=3000, output_tokens=400),
+            seconds=1.2,
+        )
+
+
+def test_ask_prints_the_answer_its_sources_and_the_cost(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: CannedGenerator())
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
+
+    assert result.exit_code == 0, result.output
+    assert "Sixteen weeks of paid leave." in result.output
+    assert "[1] Leave > Parental leave" in result.output
+    assert "https://handbook.gitlab.com/handbook/people/leave/" in result.output
+    assert "3,000 tokens in" in result.output
+    assert "$0.00050" in result.output
+
+
+def test_ask_reports_a_generation_failure_clearly(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    class FailingGenerator:
+        def generate(self, *_args: object, **_kwargs: object) -> Answer:
+            raise GenerationError("No Claude API credential was found.")
+
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: FailingGenerator())
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["ask", "anything about parental leave"])
+
+    assert result.exit_code == 1
+    assert "No Claude API credential" in result.output

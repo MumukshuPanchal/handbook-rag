@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from handbook_rag.ingest.chunker import ChunkingConfig
@@ -27,6 +27,8 @@ class Settings(BaseSettings):
         # A .env file also holds values meant for other tools, such as API credentials
         # read by an SDK. Ignore them here instead of failing on unknown keys.
         extra="ignore",
+        # Let a field that has an alias also be set by its own name in code and tests.
+        populate_by_name=True,
     )
 
     data_dir: Path = Field(
@@ -176,6 +178,32 @@ class Settings(BaseSettings):
             "trace of errors. Off by default: a trace then holds ids, scores, sizes and "
             "timings, and an error by its kind only. Switch on for local debugging."
         ),
+    )
+    anthropic_api_key: SecretStr | None = Field(
+        default=None,
+        # Read from the standard variable name, without this application's prefix.
+        validation_alias=AliasChoices("ANTHROPIC_API_KEY", "anthropic_api_key"),
+        description=(
+            "Credential for the Claude API. Keep it in .env, which git ignores. When it is "
+            "unset, the SDK looks for a credential in its own standard places."
+        ),
+    )
+    answer_model: str = Field(
+        default="claude-haiku-5-5", description="Claude model that writes the answers."
+    )
+    answer_max_tokens: int = Field(
+        default=4000,
+        gt=0,
+        description="Upper limit on the tokens the model may produce for one answer.",
+    )
+    answer_effort: Literal["low", "medium", "high", "xhigh", "max"] = Field(
+        default="low",
+        description=(
+            "How much reasoning the model spends per answer. Higher is slower and costs more."
+        ),
+    )
+    answer_context_chunks: int = Field(
+        default=5, gt=0, description="How many retrieved chunks the model is given to answer from."
     )
 
     @property

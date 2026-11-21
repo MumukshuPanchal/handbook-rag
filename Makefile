@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant traces up index search serve eval-retrieval eval-compare eval-table eval-gate golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant traces up index search ask serve eval-retrieval eval-compare eval-table eval-gate golden-check golden-review
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -50,6 +50,9 @@ search: ## Search the index, for example: make search q="how do I expense a lapt
 
 serve: ## Run the HTTP API at http://127.0.0.1:8000; its documentation is at /docs
 	uv run handbook-rag serve
+
+ask: ## Answer a question with citations, for example: make ask q="how do I expense a laptop"
+	uv run handbook-rag ask "$(q)"
 
 eval-retrieval: ## Score the default retrieval on the golden set, as the run named "current"
 	uv run handbook-rag eval-retrieval --variant current

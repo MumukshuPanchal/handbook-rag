@@ -25,7 +25,7 @@ def isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     monkeypatch.chdir(workdir)
 
     for name in os.environ:
-        if name.startswith("HANDBOOK_RAG_"):
+        if name.startswith(("HANDBOOK_RAG_", "ANTHROPIC_")):
             monkeypatch.delenv(name)
     get_settings.cache_clear()
 
@@ -80,3 +80,11 @@ def upstream(tmp_path: Path) -> Upstream:
     second_commit = git(repo, "rev-parse", "HEAD")
 
     return Upstream(url=repo.as_uri(), first_commit=first_commit, second_commit=second_commit)
+
+
+@pytest.fixture
+def monkeypatch_environment(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """The process environment as a dictionary whose changes are undone after the test."""
+    environment = dict(os.environ)
+    monkeypatch.setattr(os, "environ", environment)
+    return environment

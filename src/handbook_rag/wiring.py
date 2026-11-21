@@ -7,9 +7,11 @@ nowhere else.
 
 from typing import Literal
 
+import anthropic
 from qdrant_client import QdrantClient
 
 from handbook_rag.config import Settings
+from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.index.embedder import Embedder, SentenceTransformerEmbedder
 from handbook_rag.index.sparse import Bm25Encoder, SparseEncoder
 from handbook_rag.index.store import QdrantVectorStore, VectorStore, VectorStoreError
@@ -136,3 +138,23 @@ def make_retriever(
             retriever, make_reranker(settings), candidates=settings.rerank_candidates
         )
     return retriever
+
+
+def make_generator(settings: Settings) -> ClaudeGenerator:
+    """Build the answer generator.
+
+    The key is passed to the client explicitly when it is set in the settings. It is never
+    exported into the process environment, where other tools could pick it up.
+    """
+    key = settings.anthropic_api_key
+    client = (
+        anthropic.Anthropic(api_key=key.get_secret_value(), timeout=60.0)
+        if key is not None and key.get_secret_value()
+        else anthropic.Anthropic(timeout=60.0)
+    )
+    return ClaudeGenerator(
+        client,
+        model=settings.answer_model,
+        max_tokens=settings.answer_max_tokens,
+        effort=settings.answer_effort,
+    )

@@ -13,7 +13,8 @@ import httpx2
 import pytest
 from anthropic.types import Message
 
-from handbook_rag.generate.claude import ClaudeGenerator, GenerationError
+from handbook_rag.generate.base import GenerationError
+from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE, SYSTEM_PROMPT
 from tests.support import make_chunk
 

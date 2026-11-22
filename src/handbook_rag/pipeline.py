@@ -7,7 +7,7 @@ same code path that users hit is what makes an evaluation result mean something.
 import dataclasses
 from collections.abc import Callable
 
-from handbook_rag.generate.claude import Generator
+from handbook_rag.generate.base import Generator
 from handbook_rag.generate.models import Answer
 from handbook_rag.retrieve.dense import Retriever
 

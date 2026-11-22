@@ -29,7 +29,7 @@ from handbook_rag.evals.gate import (
 from handbook_rag.evals.golden import check_against_corpus, sample_source_chunks
 from handbook_rag.evals.retrieval import METRICS, evaluate_retrieval, write_run
 from handbook_rag.evals.review import render_review_page
-from handbook_rag.generate.claude import GenerationError
+from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.pricing import cost_usd
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import VectorStoreError

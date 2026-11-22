@@ -2,32 +2,17 @@
 
 import time
 from collections.abc import Callable, Sequence
-from typing import Literal, Protocol
+from typing import Literal
 
 import anthropic
 from anthropic.types import Message
 
+from handbook_rag.generate.base import GenerationError, decline_without_context, is_answered
 from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
-from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE, SYSTEM_PROMPT, build_user_content
+from handbook_rag.generate.prompt import SYSTEM_PROMPT, build_user_content
 from handbook_rag.ingest.models import Chunk
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
-
-
-class GenerationError(RuntimeError):
-    """The model could not be reached or refused the request."""
-
-
-class Generator(Protocol):
-    """Anything that can write an answer to a question from a set of chunks."""
-
-    def generate(
-        self,
-        question: str,
-        chunks: Sequence[Chunk],
-        *,
-        on_text: Callable[[str], None] | None = None,
-    ) -> Answer: ...
 
 
 class ClaudeGenerator:
@@ -55,17 +40,7 @@ class ClaudeGenerator:
     ) -> Answer:
         """Write an answer grounded in ``chunks``. ``on_text`` receives text as it arrives."""
         if not chunks:
-            # Nothing was retrieved, so there is nothing to ground an answer in. Say so
-            # without spending a model call.
-            if on_text is not None:
-                on_text(NOT_FOUND_MESSAGE)
-            return Answer(
-                question=question,
-                segments=(Segment(NOT_FOUND_MESSAGE),),
-                answered=False,
-                model=self._model,
-                stop_reason="no_context",
-            )
+            return decline_without_context(question, self._model, on_text)
 
         started = time.perf_counter()
         first_text_at: float | None = None
@@ -119,7 +94,7 @@ class ClaudeGenerator:
         return Answer(
             question=question,
             segments=segments,
-            answered=_is_answered(message, segments),
+            answered=is_answered(segments, refused=message.stop_reason == "refusal"),
             model=message.model,
             stop_reason=message.stop_reason or "unknown",
             usage=TokenUsage(
@@ -154,14 +129,3 @@ def _segments(message: Message, chunks: Sequence[Chunk]) -> tuple[Segment, ...]:
                 )
         segments.append(Segment(text=block.text, citations=tuple(citations)))
     return tuple(segments)
-
-
-def _is_answered(message: Message, segments: Sequence[Segment]) -> bool:
-    """Whether the assistant gave an answer, as opposed to declining or being cut off early."""
-    if message.stop_reason == "refusal":
-        return False
-    text = "".join(segment.text for segment in segments).strip()
-    if not text:
-        return False
-    has_citations = any(segment.citations for segment in segments)
-    return has_citations or NOT_FOUND_MESSAGE.rstrip(".").lower() not in text.lower()

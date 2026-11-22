@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 from handbook_rag import __version__, wiring
 from handbook_rag.cli import app
 from handbook_rag.config import Settings, get_settings
-from handbook_rag.generate.claude import GenerationError
+from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
 from handbook_rag.index.store import QdrantVectorStore, ScoredChunk, VectorStoreError

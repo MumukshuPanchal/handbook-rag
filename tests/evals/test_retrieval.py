@@ -233,3 +233,26 @@ def test_alternative_evidence_is_found_when_any_piece_is_returned() -> None:
     assert needs_any.summary["ndcg@10"].mean == 1.0
     assert needs_any.summary["hit@1"].mean == 1.0
     assert list(needs_any.by_group["origin"]) == ["model-blind"]
+
+
+def test_two_alternatives_found_together_are_not_counted_twice() -> None:
+    two_homes = {
+        "id": "q011",
+        "question": "Where is a limit or an entitlement stated?",
+        "reference_answer": "In the leave policy and in the expense policy.",
+        "evidence": [
+            {"doc_id": "people/leave.md", "quote": "sixteen weeks of paid leave"},
+            {"doc_id": "finance/expenses.md", "quote": "one thousand dollars"},
+        ],
+        "type": "answerable",
+        "origin": "model-blind",
+        "evidence_mode": "any",
+    }
+    both_pages = FixedRetriever({"Where is a limit or an entitlement stated?": [LEAVE, EXPENSES]})
+
+    report = evaluate_retrieval([GoldenQuestion.model_validate(two_homes)], DOCUMENTS, both_pages)
+
+    assert {name: estimate.mean for name, estimate in report.summary.items()} == dict.fromkeys(
+        METRIC_IDS, 1.0
+    )
+    assert report.results[0].retrieved[1].covers == (1,)

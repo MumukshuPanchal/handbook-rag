@@ -109,6 +109,13 @@ def test_ndcg_with_two_pieces_of_evidence() -> None:
     )
 
 
+def test_ndcg_is_one_when_a_single_chunk_covers_every_piece() -> None:
+    both = frozenset({0, 1})
+
+    assert ndcg_at_k([both, MISS], evidence_count=2, k=10) == 1.0
+    assert ndcg_at_k([MISS, both], evidence_count=2, k=10) < 1.0
+
+
 def test_ndcg_does_not_reward_the_same_evidence_twice() -> None:
     once = ndcg_at_k([FIRST, MISS], evidence_count=2, k=10)
     twice = ndcg_at_k([FIRST, FIRST], evidence_count=2, k=10)

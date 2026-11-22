@@ -64,17 +64,19 @@ def ndcg_at_k(coverage: Sequence[frozenset[int]], evidence_count: int, k: int) -
     A chunk earns gain only for evidence that no higher-ranked chunk already covered.
     Overlapping chunks can cover the same passage, and counting it twice would reward
     returning the same information repeatedly.
+
+    The ideal ranking brings one new piece of evidence per position. A single chunk that
+    covers several pieces does better than that, so the score is capped at 1.
     """
     if evidence_count == 0:
         raise ValueError("nDCG is undefined for a question with no evidence.")
     seen: set[int] = set()
     gain = 0.0
     for rank, covered in enumerate(coverage[:k], start=1):
-        if covered - seen:
-            gain += 1.0 / math.log2(rank + 1)
+        gain += len(covered - seen) / math.log2(rank + 1)
         seen |= covered
     ideal = sum(1.0 / math.log2(rank + 1) for rank in range(1, min(evidence_count, k) + 1))
-    return gain / ideal
+    return min(1.0, gain / ideal)
 
 
 @dataclass(frozen=True, slots=True)

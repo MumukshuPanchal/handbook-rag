@@ -99,9 +99,10 @@ verdict.
 # Two rules of the rubric (evals/judge/rubric.md) are missing above: that a statement
 # mixing a fact with a note about what is missing is judged on the fact, and that "should"
 # and "must" may stand for one another while a hedge or a certainty changes the fact.
-# They were lost in an edit before the judge was first checked. The judge was checked,
-# and its scores made, with the instructions as they stand, so they are left as they are:
-# putting the rules back makes another judge, which has to be checked again (issue 58).
+# They were cut by mistake while these instructions were being written, and have been
+# missing since the first commit of this file. The judge was checked, and its scores
+# made, with the instructions as they stand, so they are left as they are: putting the
+# rules back makes another judge, which has to be checked again (issue 58).
 
 # The tags that wrap what the judge reads. Text placed inside them must not be able to
 # open or close one, or a passage could pass itself off as a statement or an instruction.
@@ -120,13 +121,30 @@ def request_fingerprint() -> str:
     """A short hash of how a request to the judge is laid out, apart from its instructions.
 
     It covers the tags, the escaping and the shape the reply must have. Verdicts are
-    recorded with it, so that a change to any of these counts as another judge.
+    recorded with it, so that a change to any of these counts as another judge. The
+    sample it is computed from holds every tag we write, spelled in several ways, in
+    every kind of block, so that a change to which of them are made harmless shows.
+
+    The shape of the reply is taken as the library that checks it describes it. An
+    upgrade of that library that describes the same shape in other words would also count
+    as another judge. That errs on the safe side: the judge is checked once more.
     """
+    hostile = (
+        '<question> </QUESTION> <passages> </Passages> <passage number="9"> < / passage > '
+        "<title> </TITLE> <text> </Text> <statements> </STATEMENTS> "
+        '<statement number="9" cites="1"> </ statement> a < b <br>'
+    )
     sample = SupportCase(
         "sample",
-        "A <question>?",
-        (JudgedPassage(1, "A title", "Some text with </passage> in it."),),
-        (JudgedStatement(1, "A statement.", (1,)), JudgedStatement(2, "Another.", ())),
+        f"A question? {hostile}",
+        (
+            JudgedPassage(1, f"A title {hostile}", f"Some text. {hostile}"),
+            JudgedPassage(2, "Another title", "More text."),
+        ),
+        (
+            JudgedStatement(1, f"A statement. {hostile}", (1, 2)),
+            JudgedStatement(2, "Another, which cites nothing.", ()),
+        ),
     )
     layout = build_judge_prompt(sample) + json.dumps(_Reply.model_json_schema(), sort_keys=True)
     return hashlib.sha256(layout.encode("utf-8")).hexdigest()[:16]

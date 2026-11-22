@@ -237,11 +237,19 @@ def test_a_share_has_an_interval_that_stays_open_at_the_ends(
     assert 0.0 <= estimate.low <= estimate.mean <= estimate.high <= 1.0
 
 
-@pytest.mark.parametrize("total", [1, 7, 41, 1000])
+@pytest.mark.parametrize("total", [1, 7, 20, 21, 22, 41, 1000])
 def test_the_interval_of_a_share_never_leaves_the_range_from_nothing_to_all(total: int) -> None:
-    # Rounding in the arithmetic would otherwise put the ends a hair outside.
+    # Rounding in the arithmetic would otherwise put the ends a hair outside: above 1
+    # for totals such as 20, 21 and 22, and above 0 for a total of 1000.
     assert share_with_interval(0, total).low == 0.0
     assert share_with_interval(total, total).high == 1.0
+
+
+def test_the_ends_of_an_interval_stay_in_order_for_every_small_count() -> None:
+    for total in range(1, 120):
+        for successes in range(total + 1):
+            estimate = share_with_interval(successes, total)
+            assert 0.0 <= estimate.low <= estimate.mean <= estimate.high <= 1.0, (successes, total)
 
 
 @pytest.mark.parametrize(("successes", "total"), [(0, 0), (1, 0), (-1, 5), (6, 5)])

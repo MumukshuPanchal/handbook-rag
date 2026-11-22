@@ -1761,8 +1761,8 @@ def test_eval_support_leaves_out_a_reply_to_a_question_that_was_relabelled_since
     result = runner.invoke(app, judged_run["support"])
 
     assert result.exit_code == 1
-    assert "left out     1 replies to questions that have since been relabelled" in result.output
-    assert "Ask them again with eval-answers." in result.output
+    assert "left out     1 reply to a question that has since been relabelled" in result.output
+    assert "Ask again with eval-answers." in result.output
     assert "the run holds no answer to judge" in result.output
     assert judge.asked == ["q001"]
     run_dir = judged_run["run_dir"]
@@ -1781,6 +1781,37 @@ def test_eval_support_leaves_out_a_reply_to_a_question_that_was_relabelled_since
     assert again.exit_code == 0, again.output
     assert "left out" not in again.output
     assert "Supported by its sources     1.000" in again.output
+
+
+def test_eval_support_leaves_no_old_scores_standing_when_no_saved_reply_still_counts(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    assert runner.invoke(app, judged_run["support"]).exit_code == 0
+    run_dir = judged_run["run_dir"]
+    assert "supported" in json.loads((run_dir / "summary.json").read_text())["metrics"]
+    # Every question is relabelled, so not one saved reply is to a question as it now is.
+    relabelled = [
+        {**ANSWER_QUESTIONS[0], "reference_answer": "Sixteen weeks, paid."},
+        {**ANSWER_QUESTIONS[1], "question": "how much is the allowance for parking"},
+    ]
+    Path(judged_run["answers"][2]).write_text(
+        "".join(json.dumps(question) + "\n" for question in relabelled)
+    )
+
+    result = runner.invoke(app, judged_run["support"])
+
+    assert result.exit_code == 1
+    assert "left out     2 replies to a question that has since been relabelled" in result.output
+    assert "the run holds no answer to judge" in result.output
+    # Nothing is scored, and the files say so instead of keeping the scores from before.
+    assert (run_dir / "results.jsonl").read_text() == ""
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["metrics"] == {}
+    assert (summary["questions_scored"], summary["questions_not_asked"]) == (0, 2)
+    assert "judge" not in summary
+    assert summary["description"] == "Answers by gemini-3.5-flash-lite from 5 passages."
 
 
 def test_eval_support_quotes_only_a_whole_check_that_exists(

@@ -1061,8 +1061,8 @@ def eval_support(
     typer.echo(f"  judge        {settings.judge_model}")
     if outdated:
         typer.echo(
-            f"  left out     {outdated} replies to questions that have since been relabelled. "
-            "Ask them again with eval-answers."
+            f"  left out     {outdated} {'reply' if outdated == 1 else 'replies'} to a question "
+            "that has since been relabelled. Ask again with eval-answers."
         )
     run = _judge_carefully(
         stage,
@@ -1077,18 +1077,22 @@ def eval_support(
     )
     record = judge_record(run_dir, judged)
     answers_stage = answer_runs.answers_stage(run_dir)
+    description = (
+        answer_runs.saved_description(run_dir)
+        or f"Answers by {answers_stage.config().get('answer_model', 'a model')}."
+    )
     if not judged:
-        # Written all the same, without a judged score: after a restart the run's files
-        # must not go on showing a score that has no verdict behind it.
-        if report.scored:
-            answer_runs.write_answer_run(
-                report,
-                runs,
-                variant,
-                answer_runs.saved_description(run_dir) or "Answers.",
-                answers_stage.config(),
-                attempts=answers_stage.attempts(),
-            )
+        # Written all the same, without a judged score. After a restart, or when no saved
+        # reply is to a question as it is labelled now, the run's files must not go on
+        # showing scores that nothing stands behind.
+        answer_runs.write_answer_run(
+            report,
+            runs,
+            variant,
+            description,
+            answers_stage.config(),
+            attempts=answers_stage.attempts(),
+        )
         for failure in run.failures[:5]:
             typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
         if not cases:
@@ -1100,8 +1104,7 @@ def eval_support(
         report,
         runs,
         variant,
-        answer_runs.saved_description(run_dir)
-        or f"Answers by {answers_stage.config().get('answer_model', 'a model')}.",
+        description,
         answers_stage.config(),
         attempts=answers_stage.attempts(),
         judge=record,

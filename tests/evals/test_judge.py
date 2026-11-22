@@ -470,6 +470,53 @@ def test_the_layout_of_a_request_has_a_fingerprint_that_changes_with_it(
     assert request_fingerprint() != before
 
 
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        # Each leaves one of our tags, or one way of spelling them, able to get through.
+        r"<(?=[\s/]*(?:question|passages?|text|statements?)\b)",
+        r"<(?=[\s/]*(?:question|passages?|title|text)\b)",
+        r"<(?=[\s/]*(?:passages?|title|text|statements?)\b)",
+        r"<(?=[\s]*(?:question|passages?|title|text|statements?)\b)",
+    ],
+)
+def test_the_fingerprint_changes_with_which_text_is_made_harmless(
+    monkeypatch: pytest.MonkeyPatch, pattern: str
+) -> None:
+    before = request_fingerprint()
+
+    monkeypatch.setattr(judge_module, "_OUR_TAGS", re.compile(pattern, re.IGNORECASE))
+
+    assert request_fingerprint() != before
+
+
+def test_the_fingerprint_changes_with_the_case_rule_the_reply_shape_and_uncited_statements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = request_fingerprint()
+
+    case_sensitive = re.compile(judge_module._OUR_TAGS.pattern)
+    monkeypatch.setattr(judge_module, "_OUR_TAGS", case_sensitive)
+    assert request_fingerprint() != before
+    monkeypatch.undo()
+
+    class AnotherShape(pydantic.BaseModel):
+        verdicts: list[str]
+
+    monkeypatch.setattr(judge_module, "_Reply", AnotherShape)
+    assert request_fingerprint() != before
+    monkeypatch.undo()
+
+    # The sample holds a statement that cites nothing, so how that is written counts too.
+    real_prompt = judge_module.build_judge_prompt
+    monkeypatch.setattr(
+        judge_module,
+        "build_judge_prompt",
+        lambda case: real_prompt(case).replace('cites="none"', 'cites=""'),
+    )
+    assert request_fingerprint() != before
+
+
 # Each rule of the rubric, and the words the judge's instructions give it in. Two rules
 # are missing from the instructions (None): they were lost in an edit before the judge
 # was first checked, and stay out until it is checked again (issue 58). A rule that is

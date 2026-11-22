@@ -368,6 +368,36 @@ def test_a_labelled_answer_that_cannot_be_trusted_stops_the_check(
         ),
         (
             labelled_row(
+                statements=[{"number": 1, "text": "x", "cites": [True], "expected": "supported"}]
+            ),
+            "cites must be a list of passage numbers",
+        ),
+        (
+            labelled_row(
+                statements=[{"number": 1.9, "text": "x", "cites": [2], "expected": "supported"}]
+            ),
+            "a number must be a whole number, not 1.9",
+        ),
+        (
+            labelled_row(
+                statements=[{"number": True, "text": "x", "cites": [2], "expected": "supported"}]
+            ),
+            "a number must be a whole number, not True",
+        ),
+        (
+            labelled_row(
+                passages=[
+                    {
+                        "number": "2",
+                        "chunk_id": LEAVE.chunk_id,
+                        "text_sha256": text_hash(LEAVE.text),
+                    }
+                ]
+            ),
+            "a number must be a whole number, not '2'",
+        ),
+        (
+            labelled_row(
                 statements=[
                     {
                         "number": 1,

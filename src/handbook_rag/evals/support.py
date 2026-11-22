@@ -161,15 +161,15 @@ def load_labelled_cases(path: Path, chunks: Mapping[str, Chunk]) -> list[Labelle
                         f"changed since {case_id} was labelled."
                     )
                 passages.append(
-                    JudgedPassage(int(passage["number"]), chunk.context_header, chunk.text)
+                    JudgedPassage(_whole(passage["number"]), chunk.context_header, chunk.text)
                 )
             statements = tuple(
-                JudgedStatement(int(s["number"]), str(s["text"]), _numbers(s["cites"]))
+                JudgedStatement(_whole(s["number"]), str(s["text"]), _numbers(s["cites"]))
                 for s in row["statements"]
             )
-            expected = {int(s["number"]): str(s["expected"]) for s in row["statements"]}
+            expected = {_whole(s["number"]): str(s["expected"]) for s in row["statements"]}
             planted = {
-                int(s["number"]): str(s["planted"]) for s in row["statements"] if "planted" in s
+                _whole(s["number"]): str(s["planted"]) for s in row["statements"] if "planted" in s
             }
             kind = str(row["kind"])
             question = str(row["question"])
@@ -195,6 +195,16 @@ def load_labelled_cases(path: Path, chunks: Mapping[str, Chunk]) -> list[Labelle
     if not cases:
         raise DatasetError(f"{path} holds no labelled answer")
     return cases
+
+
+def _whole(value: object) -> int:
+    """A number of a statement or a passage as it must be written: a whole number.
+
+    ``int()`` would turn 1.9 and ``true`` into 1 without a word.
+    """
+    if type(value) is not int:
+        raise TypeError(f"a number must be a whole number, not {value!r}")
+    return value
 
 
 def _numbers(value: object) -> tuple[int, ...]:

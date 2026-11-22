@@ -168,7 +168,7 @@ That is real output from 22 November 2026. A question the handbook does not cove
 
 - **The model.** Answers are written by Gemini (`gemini-3.5-flash-lite`). Copy `.env.example` to `.env` and set `GEMINI_API_KEY`. [Google AI Studio](https://aistudio.google.com/) gives a key free of charge, without setting up billing. The `.env` file is ignored by git, and the key is read only by this application.
 - **A free key is for public text only.** On the free tier Google may use what is sent to improve its products. The handbook is public, so that is fine here. It would not be for private documents.
-- **Citations.** The passages are numbered, the model names the numbers, and code checks that each number belongs to a passage that was really sent. Brackets in code between backticks, such as `argv[1]`, are left alone. That check cannot tell whether the passage supports the statement, which is what the answer evaluation is for.
+- **Citations.** The passages are numbered, the model names the numbers, and code checks that each number belongs to a passage that was really sent. Brackets in code that the parser recognises between backticks, such as `argv[1]`, are left alone. The forms it does not recognise are listed in the decision record. That check cannot tell whether the passage supports the statement, which is what the answer evaluation is for.
 - **Claude instead.** Set `HANDBOOK_RAG_ANSWER_MODEL=claude-haiku-5-5` and `ANTHROPIC_API_KEY`. Claude's API returns the quoted words with every citation, a stronger guarantee. This path is unit-tested and has not been run against the Claude API yet.
 - The reasoning for all of this is in [ADR 0013](docs/adr/0013-gemini-free-tier-with-marker-citations.md).
 

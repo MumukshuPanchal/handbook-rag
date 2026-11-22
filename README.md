@@ -2,7 +2,15 @@
 
 A knowledge assistant that answers questions from a company handbook, built the way a production team would build it: answers grounded in retrieved passages and cited, quality measured by an evaluation suite, and every request traced for latency and cost.
 
-**Status: retrieval is built and measured; answering is next.** The handbook is indexed, hybrid search is the default, and every change is judged on a checked set of test questions. Answering with citations is drafted in an [open pull request](https://github.com/MumukshuPanchal/production-rag-pipeline/pull/29). It has not been run against the model API yet, so it is not merged. This README is updated as each milestone lands.
+**Status: search is built, measured, served and traced; answering is next.**
+
+- The handbook is indexed, and hybrid search is the default, chosen on a checked set of test questions.
+- It runs as a service: an HTTP API, and `docker compose up` for the whole system.
+- Every request is traced, stage by stage.
+- CI fails when retrieval breaks.
+- Answering with citations is drafted in an [open pull request](https://github.com/MumukshuPanchal/production-rag-pipeline/pull/29). It has not been run against the model API yet, so it is not merged.
+
+This README is updated as each milestone lands.
 
 ## Documents
 
@@ -71,16 +79,26 @@ curl -s -X POST localhost:8000/search \
 - **Not built for the open internet.** There is no authentication, no rate limit and no limit on requests in flight. The service listens on this machine only unless `HANDBOOK_RAG_API_HOST` says otherwise.
 - `POST /ask`, which answers with citations and streams the answer, arrives with the answering step.
 
+## Tracing
+
+Every request is one trace, with a span for each stage, so a slow or wrong result can be followed to the stage that caused it.
+
+![One search as a trace: the request, both searches, the embedding model, each call to the vector store, the merge and the reranker, each with its duration](docs/images/trace-reranked-search.png)
+
+`make traces` starts the viewer. [docs/observability.md](docs/observability.md) explains how to read a trace, what is deliberately left out of one, and what the first traces showed.
+
 ## Run it with Docker
 
 One command starts the API, the vector store and the trace backend. Only Docker is needed.
 
 ```bash
-docker compose up --detach                          # build the image and start everything
+docker compose up --detach --build                  # build the image and start everything
 docker compose run --rm api handbook-rag snapshot   # download the handbook (43 MB)
 docker compose run --rm api handbook-rag index      # embed it and store it in Qdrant
 curl -s localhost:8000/health
 ```
+
+The first build downloads about half a gigabyte and took four minutes here. The image is 2.2 GB, most of it PyTorch.
 
 | Address | What is there |
 |---|---|
@@ -88,8 +106,11 @@ curl -s localhost:8000/health
 | <http://localhost:16686> | Traces of every request |
 | <http://localhost:6333/dashboard> | Qdrant's own dashboard |
 
-- **Indexing is the slow step.** In a container the embedding model runs on the CPU: at the speed measured in CI that is 45 to 56 minutes for the whole handbook. Until it has finished, `/health` answers 503 and says the index is missing. Indexing can be stopped and started again; it skips what is already stored.
-- **Indexed already with `make index`?** The containers use the same Qdrant, so there is nothing to do again.
+- **Indexing is the slow step.** In a container the embedding model runs on the CPU: at the speed measured in CI that is 45 to 56 minutes for the whole handbook. Indexing can be stopped and started again; it skips what is already stored.
+- **Wait for `Index ready`.** Before the first chunks are stored, `/health` answers 503 and says the index has not been built. It turns 200 as soon as some chunks are stored, while indexing is still running, and searches then see only part of the handbook.
+- **Indexed already with `make index`?** The containers use the same Qdrant, so there is nothing to do again, as long as the settings that name the index (the handbook commit, the models, the chunk sizes) are the defaults.
+- **Settings.** The containers do not read a `.env` file. They use the defaults, plus what `compose.yaml` lists under `environment:`.
+- **Port 8000.** The API container holds it, so stop it with `docker compose stop api` before running `make serve`.
 - Everything listens on this machine only. Nothing here has authentication.
 
 ## Data

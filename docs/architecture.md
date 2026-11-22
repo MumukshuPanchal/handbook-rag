@@ -157,7 +157,7 @@ compose.yaml            API, Qdrant and trace backend
 
 ## Deployment view
 
-`docker compose up` starts three containers: the API, Qdrant, and the trace backend. Indexing is a one-off command run against the same Qdrant instance. Embedding and reranking models run inside the API process: on CPU in the container, and on a GPU when one is available.
+`docker compose up` starts three containers: the API, Qdrant, and the trace backend. Indexing is a one-off command run against the same Qdrant instance. Embedding and reranking models run inside the API process: on CPU in the container, and on a GPU when one is available. The image is built in two stages and runs as an unprivileged user; the handbook snapshot and the model files live in volumes, so they are downloaded once.
 
 ## Security and safety
 

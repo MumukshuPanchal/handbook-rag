@@ -71,6 +71,27 @@ curl -s -X POST localhost:8000/search \
 - **Not built for the open internet.** There is no authentication, no rate limit and no limit on requests in flight. The service listens on this machine only unless `HANDBOOK_RAG_API_HOST` says otherwise.
 - `POST /ask`, which answers with citations and streams the answer, arrives with the answering step.
 
+## Run it with Docker
+
+One command starts the API, the vector store and the trace backend. Only Docker is needed.
+
+```bash
+docker compose up --detach                          # build the image and start everything
+docker compose run --rm api handbook-rag snapshot   # download the handbook (43 MB)
+docker compose run --rm api handbook-rag index      # embed it and store it in Qdrant
+curl -s localhost:8000/health
+```
+
+| Address | What is there |
+|---|---|
+| <http://localhost:8000/docs> | The API and its documentation |
+| <http://localhost:16686> | Traces of every request |
+| <http://localhost:6333/dashboard> | Qdrant's own dashboard |
+
+- **Indexing is the slow step.** In a container the embedding model runs on the CPU: at the speed measured in CI that is 45 to 56 minutes for the whole handbook. Until it has finished, `/health` answers 503 and says the index is missing. Indexing can be stopped and started again; it skips what is already stored.
+- **Indexed already with `make index`?** The containers use the same Qdrant, so there is nothing to do again.
+- Everything listens on this machine only. Nothing here has authentication.
+
 ## Data
 
 The assistant is built on the [GitLab Handbook](https://handbook.gitlab.com/), which GitLab publishes under the [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) licence. The handbook text is not stored in this repository. `make snapshot` downloads its Markdown pages at a pinned commit (4,206 pages, 43 MB) and writes a manifest that records the source, commit and a checksum of what was fetched. The reasoning is in [ADR 0002](docs/adr/0002-handbook-corpus.md).

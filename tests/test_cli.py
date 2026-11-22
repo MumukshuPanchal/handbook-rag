@@ -521,6 +521,8 @@ def test_eval_retrieval_takes_its_mode_and_reranking_from_the_settings(
     # The settings are read once and then cached, so they are set before any command runs.
     monkeypatch.setenv("HANDBOOK_RAG_RETRIEVAL_MODE", "sparse")
     monkeypatch.setenv("HANDBOOK_RAG_RERANK", "true")
+    reranker = FakeReranker()
+    monkeypatch.setattr("handbook_rag.wiring.make_reranker", lambda _settings: reranker)
     runner.invoke(app, ["index"])
     dataset = tmp_path / "questions.jsonl"
     dataset.write_text(golden_rows("sixteen weeks of paid leave"))
@@ -528,8 +530,14 @@ def test_eval_retrieval_takes_its_mode_and_reranking_from_the_settings(
     common = ["eval-retrieval", "--dataset", str(dataset), "--output", str(runs)]
 
     from_settings = runner.invoke(app, common)
+    reranked_by_the_first_run = len(reranker.calls)
     without_reranking = runner.invoke(app, [*common, "--variant", "v1", "--no-rerank"])
 
+    # What ran, and not only what was written down: keyword search never embeds the
+    # question, and the reranker is called once for the one answerable question.
+    assert fake_pipeline.queries == []
+    assert reranked_by_the_first_run == 1
+    assert len(reranker.calls) == 1, "--no-rerank must not call the reranker"
     assert from_settings.exit_code == 0, from_settings.output
     assert "mode        sparse, reranked with" in from_settings.output
     assert run_summary(runs, "current")["description"] == (

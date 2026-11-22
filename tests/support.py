@@ -60,12 +60,14 @@ class FakeEmbedder:
 
     def __init__(self) -> None:
         self.embedded: list[str] = []
+        self.queries: list[str] = []
 
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         self.embedded.extend(texts)
         return [self._vector(text) for text in texts]
 
     def embed_query(self, text: str) -> list[float]:
+        self.queries.append(text)
         return self._vector(text)
 
     def _vector(self, text: str) -> list[float]:

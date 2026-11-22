@@ -231,7 +231,7 @@ The judge is given the question, the passages an answer cites, and the answer cu
 | `unsupported` | At least one fact is not: it is missing, different, wider than the passage, or the statement asserts a fact and cites nothing |
 | `no_claim` | The statement asserts nothing about the handbook, such as a lead-in or a sentence saying what is not covered |
 
-An answer is **supported** when none of its statements is unsupported. Code decides that from the verdicts. The full rules are in [the rubric](../evals/judge/rubric.md). The judge's instructions give the same rules.
+An answer is **supported** when none of its statements is unsupported. Code decides that from the verdicts. The full rules are in [the rubric](../evals/judge/rubric.md), which is what the readers who made the labels worked from. The judge's instructions give the same rules except two, which were lost from them in an edit before the judge was first checked: that a statement mixing a fact with a note about what is missing is judged on the fact, and that "should" and "must" may stand for one another while a hedge or a certainty changes the fact. The check below measured the judge as it was instructed, without them. Putting them back makes another judge, which has to be checked again ([issue 58](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/58)). A test now compares the two rule by rule.
 
 A reply from the judge is used only if it gives exactly one verdict for each statement. A reply that leaves one out, or that was cut off, is an error and is tried again. It is never read as "supported".
 
@@ -261,8 +261,8 @@ How far this goes:
 
 - **41 of 41 is not certainty.** The interval reaches down to 0.914: a judge that misses one fault in twelve could still have caught all of these.
 - **The planted faults were written by a model**, and real answers held only one fault. The check shows that the judge catches faults like the planted ones.
-- **On dropped limits the judge is as lenient as most readers.** Three statements are labelled `unclear`: each leaves out a limit or an exception that its passage states, two readers called them supported and the third unsupported. The judge said supported each time. It did catch all five planted faults of that kind, which were more blunt.
-- **In one long answer the judge's numbering slipped.** The answer has nine statements, the third of which holds a lead-in and the first item of a list. From the fourth statement on, each of the judge's reasons is about the statement before, so the last statement was never judged. Every verdict was `supported`, so the score did not change. A rough check found no other answer like it among the 23 with three or more statements.
+- **On dropped limits the judge is as lenient as most readers.** Three statements are labelled `unclear`: each leaves out a limit or an exception that its passage states, two readers called them supported and the third unsupported. The judge said supported each time, though for one of the three that says little: it is in the answer where the judge lost count, described next. It did catch all five planted faults of that kind, which were more blunt ([issue 59](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/59)).
+- **In one long answer the judge's numbering slipped.** The answer has nine statements, the third of which holds a lead-in and the first item of a list. From the fourth statement on, each of the judge's reasons is about the statement before, so the last statement was never judged. No verdict in it was `unsupported`, so the score did not change. A rough check found no other answer like it among the 23 labelled answers with three or more statements, 18 of them real and 5 copies ([issue 58](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/58)).
 - **The judge is the answer model.** The labels were made by models of another family, which is some protection, and no person has checked them.
 - **Sampling is left at the model's defaults**, so a second check could differ. That was not measured.
 
@@ -286,7 +286,9 @@ Scoring cost no request: the check had already read these 129 answers, and a ver
 | Rule | Why |
 |---|---|
 | A verdict is saved under a hash of everything the judge read | An answer that is asked again reads differently, and is judged again |
-| Verdicts record the judge's model and a hash of its instructions, and verdicts of another judge are refused | Reworded instructions are another judge, whose agreement has to be measured again |
+| Verdicts record the judge's model, a hash of its instructions and a hash of how a request is laid out, and verdicts of another judge are refused | Reworded instructions, or a request laid out another way, are another judge, whose agreement has to be measured again |
+| A check is quoted only when it is whole | A check that judged part of the labelled answers would be quoted as if it were all |
+| A reply to a question that has since been relabelled is left out | It is a reply to another test |
 | The agreement is quoted beside the score only if it was measured with the same judge | A check of one judge says nothing about another |
 | A score from a judge with no check on record prints with a warning | An unchecked judge can be wrong in either direction |
 | An answer the judge could not rule on has no verdict | It is counted neither as supported nor as unsupported |

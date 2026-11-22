@@ -37,7 +37,7 @@ A statement names its passages by number. A passage is recorded by chunk id, wit
 
 ## How it was made: three readers
 
-The readers decided by [the rubric](rubric.md), which is also what the judge is instructed with.
+The readers decided by [the rubric](rubric.md). The judge's instructions give the same rules except two that were lost from them in an edit, as the [evaluation guide](../../docs/evaluation.md#what-the-judge-decides) describes.
 
 | Step | Reader | Model | What happened |
 |---|---|---|---|
@@ -52,7 +52,7 @@ What the comparison showed:
 - **On one of the two disagreements, both readers were wrong.** The statement says what the handbook does not specify and adds one fact, which its cited passage backs. One reader wrote that it cites nothing, the other that it only notes what is missing. The third reader checked both claims against the statement and labelled it supported.
 - **Three statements are labelled `unclear`.** On each, the third reader ruled `unsupported` where both earlier readers had said `supported`: an answer that left out "except in the circumstances set out below", one that left out that a pension plan is for full-time staff, and one that applied a rule about one kind of meeting to another. Readers with the same rule in front of them split, so no verdict is forced. These statements are in the file with all three verdicts, and are left out of every agreement figure. Two of them also appear in a copy, which makes five lines.
 
-The rubric changed while the labels were made. The first reader's notes showed where two careful readers would split, and rules were added for limits and exceptions, for permission and obligation, for a name written in two ways, and for a passage that can be read in two ways. Only the eight statements the third reader settled were read under the final wording. The other 256 labels were made under an earlier wording, and on each of them two readers agreed.
+The rubric changed while the labels were made. The first reader's notes showed where two careful readers would split, and rules were added for limits and exceptions, for permission and obligation, for a name written in two ways, and for a passage that can be read in two ways. Only the eight statements the third reader settled were read under the final wording. With their copies those are 11 of the 264 lines. The other 253 were labelled under an earlier wording, and on each of them two readers agreed.
 
 ## Known limits
 

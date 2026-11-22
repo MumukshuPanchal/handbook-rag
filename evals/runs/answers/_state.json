@@ -6,6 +6,11 @@
       "kind": "binary"
     },
     {
+      "id": "supported",
+      "label": "Supported by its sources",
+      "kind": "binary"
+    },
+    {
       "id": "answered",
       "label": "Answers when it should",
       "kind": "binary"

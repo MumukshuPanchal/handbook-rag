@@ -1,0 +1,4 @@
+{"case": "q092", "statement": 2, "kind": "real", "expected": "no_claim", "judged": "unsupported", "reason": "The statement asserts that the handbook covers no additional sources, which is a claim made without a supporting citation."}
+{"case": "q104", "statement": 3, "kind": "real", "expected": "supported", "judged": "no_claim", "reason": "This is a lead-in with no content of its own."}
+{"case": "q112", "statement": 2, "kind": "real", "expected": "supported", "judged": "no_claim", "reason": "This statement describes the content of the passages and does not assert a fact about the handbook."}
+{"case": "u004", "statement": 2, "kind": "real", "expected": "no_claim", "judged": "supported", "reason": "The passage does not state the specific monetary amount allocated."}

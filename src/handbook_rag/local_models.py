@@ -13,7 +13,7 @@ model's folder from the cache.
 
 import logging
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 
 # PyTorch logs a note from this module each time it is imported on macOS. The note is
 # about a feature this program does not use.
@@ -44,18 +44,33 @@ def load_local_first[T](load: Callable[..., T], model_name: str, **options: obje
         return load(model_name, **options)
 
 
-@contextmanager
-def _no_progress_bars() -> Iterator[None]:
-    """Hide the bar that counts weights as they are read from disk.
+def _no_progress_bars() -> AbstractContextManager[None]:
+    """Hide the bar that counts a model's weights as they are read from disk.
 
-    Reading takes well under a second, so the bar only adds a line to every command.
+    For the embedding model the bar is over in under a tenth of a second, so it only
+    adds a line to every command.
     """
     from transformers.utils import logging as transformers_logging
 
-    was_shown = transformers_logging.is_progress_bar_enabled()
-    transformers_logging.disable_progress_bar()  # type: ignore[no-untyped-call]
+    return _switched_off(
+        transformers_logging.is_progress_bar_enabled,
+        transformers_logging.disable_progress_bar,
+        transformers_logging.enable_progress_bar,
+    )
+
+
+@contextmanager
+def _switched_off(
+    is_on: Callable[[], bool], switch_off: Callable[[], object], switch_on: Callable[[], object]
+) -> Iterator[None]:
+    """Switch something off for a block, and leave it afterwards as it was found.
+
+    It comes back on even when the block fails, and stays off if it was off before.
+    """
+    was_on = is_on()
+    switch_off()
     try:
         yield
     finally:
-        if was_shown:
-            transformers_logging.enable_progress_bar()  # type: ignore[no-untyped-call]
+        if was_on:
+            switch_on()

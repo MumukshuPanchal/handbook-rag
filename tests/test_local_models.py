@@ -1,16 +1,18 @@
 """Models are read from disk first, and the Hub is asked only for what is missing."""
 
+import importlib.util
 import logging
 import os
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager, nullcontext
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from pathlib import Path
 
 import pytest
 
 from handbook_rag import local_models
-from handbook_rag.local_models import load_local_first, quiet_model_libraries
+from handbook_rag.local_models import _switched_off, load_local_first, quiet_model_libraries
 
 TORCH_NOTE_LOGGER = "torch.distributed.elastic.multiprocessing.redirects"
 NOT_ON_DISK = OSError("couldn't find them in the cached files")
@@ -115,6 +117,67 @@ def test_progress_is_hidden_while_reading_from_disk_and_shown_for_a_download(
     load_local_first(load, "some/model")
 
     assert events == ["bars hidden", "read from disk", "bars back", "download"]
+
+
+class Switch:
+    """Something that can be on or off, such as a library's progress bars."""
+
+    def __init__(self, *, on: bool) -> None:
+        self.on = on
+
+    def is_on(self) -> bool:
+        return self.on
+
+    def switch_off(self) -> None:
+        self.on = False
+
+    def switch_on(self) -> None:
+        self.on = True
+
+    def off_for_a_block(self) -> AbstractContextManager[None]:
+        return _switched_off(self.is_on, self.switch_off, self.switch_on)
+
+
+def test_a_switch_is_off_inside_the_block_and_on_again_after_it() -> None:
+    switch = Switch(on=True)
+
+    with switch.off_for_a_block():
+        assert not switch.on
+
+    assert switch.on
+
+
+def test_a_switch_comes_back_on_when_the_block_fails() -> None:
+    switch = Switch(on=True)
+
+    with pytest.raises(ValueError, match="not an embedding model"), switch.off_for_a_block():
+        raise ValueError("this is not an embedding model")
+
+    assert switch.on
+
+
+def test_a_switch_that_was_off_is_left_off() -> None:
+    switch = Switch(on=False)
+
+    with switch.off_for_a_block():
+        assert not switch.on
+
+    assert not switch.on
+
+
+def test_the_silenced_logger_is_the_one_that_writes_the_note() -> None:
+    # PyTorch's source is read, not imported: importing it takes seconds. If PyTorch
+    # moves or rewords the note, this fails, and the silencing needs another look.
+    torch = importlib.util.find_spec("torch")
+    assert torch is not None
+    assert torch.origin is not None
+    (logger_name,) = local_models._NOISY_LOGGERS
+    module = Path(torch.origin).parent.joinpath(*logger_name.split(".")[1:]).with_suffix(".py")
+
+    source = module.read_text(encoding="utf-8")
+
+    assert "logger = logging.getLogger(__name__)" in source
+    assert 'logger.warning("NOTE: Redirects are currently not supported in MacOs.")' in source
 
 
 def test_the_note_pytorch_logs_on_import_is_silenced() -> None:

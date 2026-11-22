@@ -37,7 +37,7 @@ A statement names its passages by number. A passage is recorded by chunk id, wit
 
 ## How it was made: three readers
 
-The readers decided by [the rubric](rubric.md). The judge's instructions give the same rules except two that were cut from them by mistake, as the [evaluation guide](../../docs/evaluation.md#what-the-judge-decides) describes.
+The readers decided by [the rubric](rubric.md). The judge's instructions give the same rules except two that have been missing from them since they were first committed, as the [evaluation guide](../../docs/evaluation.md#what-the-judge-decides) describes.
 
 | Step | Reader | Model | What happened |
 |---|---|---|---|
@@ -50,7 +50,7 @@ What the comparison showed:
 - **The first two readers agreed on 262 of 264 statements** (0.992, Cohen's kappa 0.974).
 - **The second reader marked all 40 planted faults as unsupported**, without knowing they were planted. That is the evidence that each planted fault is real and can be found by reading.
 - **On one of the two disagreements, both readers were wrong.** The statement says what the handbook does not specify and adds one fact, which its cited passage backs. One reader wrote that it cites nothing, the other that it only notes what is missing. The third reader checked both claims against the statement and labelled it supported.
-- **Three statements are labelled `unclear`.** On each, the third reader ruled `unsupported` where both earlier readers had said `supported`: an answer that left out "except in the circumstances set out below", one that left out that a pension plan is for full-time staff, and one that applied a rule about one kind of meeting to another. The readers split although the rubric had by then been reworded for exactly this kind of statement, so no verdict is forced. These statements are in the file with all three verdicts, and are left out of every agreement figure. Two of them also appear in a copy, which makes five lines.
+- **Three statements are labelled `unclear`.** On each, the third reader ruled `unsupported` where both earlier readers had said `supported`: an answer that left out "except in the circumstances set out below", one that left out that a pension plan is for full-time staff, and one that applied a rule about one kind of meeting to another. The three did not read the same wording of the rule about limits and exceptions: it was being reworded as the labels were made, and only the third reader had the final one. The split may lie between the wordings as much as between the readers, so no verdict is forced. These statements are in the file with all three verdicts, and are left out of every agreement figure. Two of them also appear in a copy, which makes five lines.
 
 The rubric changed while the labels were made. The first reader's notes showed where two careful readers would split, and rules were added for limits and exceptions, for permission and obligation, for a name written in two ways, and for a passage that can be read in two ways. Only the eight statements the third reader settled were read under the final wording. With their copies those are 11 of the 264 lines. The other 253 were labelled under an earlier wording, and on each of them two readers agreed.
 

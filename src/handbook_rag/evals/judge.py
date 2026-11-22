@@ -99,10 +99,10 @@ verdict.
 # Two rules of the rubric (evals/judge/rubric.md) are missing above: that a statement
 # mixing a fact with a note about what is missing is judged on the fact, and that "should"
 # and "must" may stand for one another while a hedge or a certainty changes the fact.
-# They were cut by mistake while these instructions were being written, and have been
-# missing since the first commit of this file. The judge was checked, and its scores
-# made, with the instructions as they stand, so they are left as they are: putting the
-# rules back makes another judge, which has to be checked again (issue 58).
+# They have been missing since the first commit of this file. The judge was checked,
+# and its scores made, with the instructions as they stand, so they are left as they
+# are: putting the rules back makes another judge, which has to be checked again
+# (issue 58).
 
 # The tags that wrap what the judge reads. Text placed inside them must not be able to
 # open or close one, or a passage could pass itself off as a statement or an instruction.

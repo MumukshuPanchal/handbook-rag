@@ -58,7 +58,7 @@ flowchart LR
 5. **Generate** an answer. The kept chunks are sent to Claude as documents with citations enabled. The instructions tell the model to answer only from those documents and to say so plainly when they do not contain the answer.
 6. **Return** the answer, its citations (page, section, quoted text, URL), whether the assistant answered or abstained, and a trace ID.
 
-The first working version (the baseline) used dense search only and skipped steps 3 and 4. Hybrid search is now the default, and reranking is available but switched off. Both were decided from measurements ([ADR 0011](adr/0011-hybrid-retrieval-by-default.md)).
+The first working version (the baseline) used dense search only and skipped steps 3 and 4. Hybrid search is now the default, and reranking is available but switched off. Both decisions, with the measurements and the judgement behind them, are in [ADR 0011](adr/0011-hybrid-retrieval-by-default.md).
 
 ## Components
 

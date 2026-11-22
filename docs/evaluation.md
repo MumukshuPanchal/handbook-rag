@@ -77,7 +77,7 @@ Each row records the latency of its retrieval, so a variant's gain in quality ca
 
 Every mean is reported with a 95% confidence interval from a bootstrap over the questions. The interval shows how much the number would move with a different sample of questions.
 
-Results are also broken down by question origin, because a question drafted by a model tends to reuse the words of its source passage, which flatters keyword-style matching.
+Results are also broken down by question origin, because a question drafted by a model that could see the passage may reuse its words, which may flatter keyword-style matching. A simple count of shared words does not show this for the current set (see the [dataset card](../evals/golden/README.md)), so it is a precaution, not a finding.
 
 Unanswerable questions have no evidence, so they are not scored here. They matter for the answer evaluation, where the assistant must decline.
 

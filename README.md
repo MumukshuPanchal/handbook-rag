@@ -2,7 +2,7 @@
 
 A knowledge assistant that answers questions from a company handbook, built the way a production team would build it: answers grounded in retrieved passages and cited, quality measured by an evaluation suite, and every request traced for latency and cost.
 
-**Status: retrieval is built and measured; answering is next.** The handbook is indexed, hybrid search is the default, and every change is judged on a checked set of test questions. Answering with citations is drafted in an [open pull request](https://github.com/MumukshuPanchal/production-rag-pipeline/pull/29). It has not been run against the model API yet, so it is not part of this branch. This README is updated as each milestone lands.
+**Status: retrieval is built and measured; answering is next.** The handbook is indexed, hybrid search is the default, and every change is judged on a checked set of test questions. Answering with citations is drafted in an [open pull request](https://github.com/MumukshuPanchal/production-rag-pipeline/pull/29). It has not been run against the model API yet, so it is not merged. This README is updated as each milestone lands.
 
 ## Documents
 
@@ -24,7 +24,7 @@ A knowledge assistant that answers questions from a company handbook, built the 
 
 ## Results so far
 
-Retrieval on 132 test questions over 38,881 chunks of the handbook. These are the first four rows that `uv run handbook-rag eval-table --metric hit@5 --metric hit@1 --metric mrr@10` prints from the runs in [`evals/runs/retrieval`](evals/runs/retrieval). The later rows are the experiments linked below.
+Retrieval on 132 test questions over 38,881 chunks of the handbook. These are the rows `baseline` to `v3` of what `uv run handbook-rag eval-table --metric hit@5 --metric hit@1 --metric mrr@10` prints from the runs in [`evals/runs/retrieval`](evals/runs/retrieval). The rows after them are the experiments linked below.
 
 | Run | What it is | Questions | Hit@5 (95% interval) | Hit@1 | MRR@10 | Median time |
 |---|---|---|---|---|---|---|

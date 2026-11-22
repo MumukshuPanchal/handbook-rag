@@ -9,6 +9,8 @@ comparable.
 from collections.abc import Sequence
 from typing import Protocol
 
+from handbook_rag.local_models import load_local_first, quiet_model_libraries
+
 
 class Embedder(Protocol):
     """Anything that can embed chunks and questions into the same vector space."""
@@ -41,9 +43,10 @@ class SentenceTransformerEmbedder:
     ) -> None:
         # Imported here because loading PyTorch takes seconds, and commands that never
         # embed anything should not pay for it.
+        quiet_model_libraries()
         from sentence_transformers import SentenceTransformer
 
-        self._model = SentenceTransformer(model_name, device=device)
+        self._model = load_local_first(SentenceTransformer, model_name, device=device)
         self._name = model_name
         self._query_prefix = query_prefix
         self._batch_size = batch_size

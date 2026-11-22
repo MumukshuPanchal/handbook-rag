@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from handbook_rag.index.store import ScoredChunk
+from handbook_rag.local_models import load_local_first, quiet_model_libraries
 from handbook_rag.retrieve.dense import Retriever
 from handbook_rag.tracing import record_query, record_results, stage
 
@@ -30,9 +31,10 @@ class CrossEncoderReranker:
 
     def __init__(self, model_name: str, *, batch_size: int = 16, device: str | None = None) -> None:
         # Imported here because loading PyTorch takes seconds.
+        quiet_model_libraries()
         from sentence_transformers import CrossEncoder
 
-        self._model = CrossEncoder(model_name, device=device)
+        self._model = load_local_first(CrossEncoder, model_name, device=device)
         self._name = model_name
         self._batch_size = batch_size
 

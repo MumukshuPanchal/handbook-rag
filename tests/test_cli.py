@@ -461,7 +461,7 @@ def test_eval_table_prints_one_row_per_run(fake_pipeline: FakeEmbedder, tmp_path
     assert lines[2].startswith("| baseline | Dense. | 1 | 1.000 (1.000 to 1.000) | 1.000 |")
     assert lines[3].startswith("| v1 | Hybrid. | 1 | 1.000 (1.000 to 1.000) | 1.000 |")
     assert unknown.exit_code == 1
-    assert "no such metric" in unknown.output
+    assert "no run has the metric: bleu" in unknown.output
     assert empty.exit_code == 1
     assert "no runs found" in empty.output
 
@@ -998,7 +998,7 @@ def test_eval_answers_asks_every_question_once_and_writes_the_run(
     # One attempt per request, so the run knows how many it sent.
     assert model.built_with == [{"attempts": 1}]
     assert "2 in the golden set, 0 already answered, 2 to ask now" in result.output
-    assert "at most 10 requests a minute" in result.output
+    assert "at most 10 requests a minute, so at least 1 min" in result.output
     assert "2 scored, 0 failed, 0 not asked yet" in result.output
     assert "at most 2 now, 2 for this run in all" in result.output
     assert "Right call                   1.000  (95% interval 1.000 to 1.000, n=2)" in result.output
@@ -1012,7 +1012,7 @@ def test_eval_answers_asks_every_question_once_and_writes_the_run(
     run_dir = tmp_path / "runs" / "baseline"
     assert len((run_dir / "answers.jsonl").read_text().splitlines()) == 2
     summary = json.loads((run_dir / "summary.json").read_text())
-    assert summary["description"] == "Answers by gemini-3.5-flash-lite from five passages."
+    assert summary["description"] == "Answers by gemini-3.5-flash-lite from 5 passages."
     assert summary["config"]["answer_model"] == "gemini-3.5-flash-lite"
     assert summary["config"]["retrieval_mode"] == "hybrid"
     assert summary["attempts"] == 2
@@ -1114,17 +1114,133 @@ def test_eval_answers_reports_a_question_that_kept_failing(
 
     assert result.exit_code == 1
     assert "1 scored, 1 failed, 0 not asked yet" in result.output
+    # Each of the two tries is shown as it fails, and the question is listed at the end.
+    assert result.output.count("failed  u001  The Gemini API sent a reply that could not") == 2
     assert "failed: u001: The Gemini API sent a reply that could not be read." in result.output
     assert "Run the same command again to continue this run." in result.output
     errors = (tmp_path / "runs" / "current" / "errors.jsonl").read_text()
     assert json.loads(errors)["question_id"] == "u001"
 
 
-def test_eval_answers_without_a_key_says_where_to_put_one(answer_run: list[str]) -> None:
+def test_eval_answers_without_a_key_says_where_to_put_one_and_leaves_no_run_behind(
+    answer_run: list[str], tmp_path: Path
+) -> None:
     result = runner.invoke(app, answer_run)
 
     assert result.exit_code == 1
     assert "GEMINI_API_KEY" in result.output
+    assert not (tmp_path / "runs").exists()
+
+
+def test_eval_answers_shows_the_cause_when_a_limit_ended_a_run_that_answered_nothing(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str]
+) -> None:
+    model = EvalModel(error=GenerationError("Today's limit is used up."))
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+
+    result = runner.invoke(app, [*answer_run, "--max-requests", "1"])
+
+    assert result.exit_code == 1
+    assert "no question was answered" in result.output
+    assert "the limit of 1 requests for this run was reached" in result.output
+    # The reason the one request failed is shown as well, not only the limit.
+    assert "Today's limit is used up." in result.output
+
+
+def test_eval_answers_counts_a_request_before_it_is_sent(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    class Interrupted(EvalModel):
+        def generate(
+            self,
+            question: str,
+            chunks: Sequence[Chunk],
+            *,
+            on_text: Callable[[str], None] | None = None,
+        ) -> Answer:
+            if self.questions:
+                raise KeyboardInterrupt  # Ctrl-C during the second request
+            return super().generate(question, chunks, on_text=on_text)
+
+    model = Interrupted()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+
+    result = runner.invoke(app, answer_run)
+
+    assert result.exit_code != 0
+    run_dir = tmp_path / "runs" / "current"
+    # Both requests are counted, and the reply that arrived is kept.
+    assert json.loads((run_dir / "run.json").read_text())["attempts"] == 2
+    assert len((run_dir / "answers.jsonl").read_text().splitlines()) == 1
+
+
+def test_eval_answers_describes_the_run_by_the_passages_it_really_gave(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HANDBOOK_RAG_ANSWER_CONTEXT_CHUNKS", "1")
+    get_settings.cache_clear()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", EvalModel().build)
+
+    assert runner.invoke(app, answer_run).exit_code == 0
+
+    summary = json.loads((tmp_path / "runs" / "current" / "summary.json").read_text())
+    assert summary["description"] == "Answers by gemini-3.5-flash-lite from 1 passages."
+    assert summary["config"]["answer_context_chunks"] == 1
+
+
+def test_answer_runs_can_be_compared_and_tabled_like_retrieval_runs(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    class AnswersEverything(EvalModel):
+        """A worse assistant: it answers the question about parking too."""
+
+        def generate(
+            self,
+            question: str,
+            chunks: Sequence[Chunk],
+            *,
+            on_text: Callable[[str], None] | None = None,
+        ) -> Answer:
+            return super().generate(question.replace("parking", "car"), chunks, on_text=on_text)
+
+    runs = str(tmp_path / "runs")
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", EvalModel().build)
+    assert runner.invoke(app, [*answer_run, "--variant", "baseline"]).exit_code == 0
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", AnswersEverything().build)
+    assert runner.invoke(app, [*answer_run, "--variant", "v1"]).exit_code == 0
+    # A third run that stopped before it reached the unanswerable question.
+    assert (
+        runner.invoke(app, [*answer_run, "--variant", "v2", "--max-requests", "1"]).exit_code == 0
+    )
+
+    compared = runner.invoke(app, ["eval-compare", "baseline", "v1", "--runs", runs])
+
+    assert compared.exit_code == 0, compared.output
+    assert "v1 against baseline, on the same 2 questions" in compared.output
+    lines = {line.split()[0]: line for line in compared.output.splitlines() if line.strip()}
+    assert "-0.500" in lines["Right"]
+    # A score that applies to one of the two questions says so.
+    assert "(on 1 questions)" in lines["Declines"]
+    assert "(on 1 questions)" in lines["Answers"]
+    assert "(on" not in lines["Right"]
+
+    table = runner.invoke(
+        app, ["eval-table", "--runs", runs, "--metric", "right_call", "--metric", "declined"]
+    )
+
+    assert table.exit_code == 0, table.output
+    rows = table.output.splitlines()
+    assert rows[0].startswith(
+        "| Run | What it is | Questions | Right call (95% interval) | Declines"
+    )
+    assert rows[2].startswith(
+        "| baseline | Answers by gemini-3.5-flash-lite from 5 passages. | 2 | 1.000"
+    )
+    assert "| 1.000 |" in rows[2]
+    assert "| 0.000 |" in rows[3]
+    everything = runner.invoke(app, ["eval-table", "--runs", runs])
+    assert everything.exit_code == 0, everything.output
+    assert len(everything.output.splitlines()) == 5
 
 
 def test_eval_answers_explains_a_missing_golden_set(

@@ -70,6 +70,84 @@ def test_a_run_compared_with_itself_shows_no_difference(tmp_path: Path) -> None:
     assert not comparison.metrics["hit@5"].change.is_clear
 
 
+def write_graded_run(flow_dir: Path, name: str, grades: dict[str, dict[str, float]]) -> Path:
+    """Write a run whose questions do not all have the same scores, as an answer run does."""
+    run_dir = flow_dir / name
+    run_dir.mkdir(parents=True)
+    rows = [
+        {"prompt_id": q, "status": "ok", "fingerprint": f"label-{q}", "grade": grade}
+        for q, grade in grades.items()
+    ]
+    (run_dir / "results.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    (run_dir / "summary.json").write_text(json.dumps({"description": name}))
+    return run_dir
+
+
+def test_a_score_is_compared_on_the_questions_that_have_it_in_both_runs(tmp_path: Path) -> None:
+    # An answer run: the unanswerable question has no score for answering, and a score
+    # about citations exists only where the assistant answered.
+    base = write_graded_run(
+        tmp_path,
+        "baseline",
+        {
+            "q1": {"right_call": 1.0, "answered": 1.0, "fully_cited": 0.0},
+            "q2": {"right_call": 0.0, "answered": 0.0},
+            "u1": {"right_call": 1.0, "declined": 1.0},
+        },
+    )
+    candidate = write_graded_run(
+        tmp_path,
+        "v1",
+        {
+            "q1": {"right_call": 1.0, "answered": 1.0, "fully_cited": 1.0},
+            "q2": {"right_call": 1.0, "answered": 1.0, "fully_cited": 1.0},
+            "u1": {"right_call": 0.0, "declined": 0.0, "fully_cited": 0.0},
+        },
+    )
+
+    comparison = compare_runs(base, candidate)
+
+    assert comparison.questions == 3
+    assert list(comparison.metrics) == ["right_call", "answered", "fully_cited", "declined"]
+    counts = {name: m.change.difference.count for name, m in comparison.metrics.items()}
+    assert counts == {"right_call": 3, "answered": 2, "fully_cited": 1, "declined": 1}
+    # Only q1 was answered in both runs, so only q1 is compared on citations.
+    cited = comparison.metrics["fully_cited"]
+    assert (cited.base.mean, cited.candidate.mean, cited.change.better) == (0.0, 1.0, 1)
+    assert comparison.metrics["answered"].change.difference.mean == 0.5
+    assert comparison.metrics["declined"].change.worse == 1
+
+
+def test_a_score_that_no_question_has_in_both_runs_is_left_out(tmp_path: Path) -> None:
+    base = write_graded_run(tmp_path, "baseline", {"q1": {"right_call": 1.0, "answered": 1.0}})
+    candidate = write_graded_run(tmp_path, "v1", {"q1": {"right_call": 1.0, "fully_cited": 1.0}})
+
+    assert list(compare_runs(base, candidate).metrics) == ["right_call"]
+
+
+def test_a_question_with_a_character_some_tools_take_for_a_line_end_is_one_row(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "baseline"
+    run_dir.mkdir()
+    row = {
+        "prompt_id": "q1",
+        "prompt": "What is the policy on\u2028leave?",
+        "status": "ok",
+        "fingerprint": "label-q1",
+        "grade": {"hit@5": 1.0},
+        "latency_s": 0.02,
+    }
+    (run_dir / "results.jsonl").write_text(json.dumps(row, ensure_ascii=False) + "\n")
+    estimate = {"mean": 1.0, "low": 1.0, "high": 1.0, "count": 1}
+    (run_dir / "summary.json").write_text(
+        json.dumps({"description": "One.", "questions_scored": 1, "metrics": {"hit@5": estimate}})
+    )
+
+    assert load_run(run_dir).scores == {"q1": {"hit@5": 1.0}}
+    assert overview_of_runs(tmp_path)[0].median_latency_s == 0.02
+
+
 def test_runs_that_scored_different_questions_cannot_be_compared(tmp_path: Path) -> None:
     base = write_run(tmp_path, "baseline", {"q1": 1.0, "q2": 0.0})
     candidate = write_run(tmp_path, "v1", {"q1": 1.0, "q3": 1.0})
@@ -173,6 +251,28 @@ def test_results_table_is_markdown_with_an_interval_on_the_first_metric(tmp_path
         "|---|---|---|---|---|---|",
         "| baseline | Dense only. | 1 | 0.800 (0.750 to 0.840) | 0.700 | 30 ms |",
         "| v1 | Hybrid. | 1 | 0.900 (0.850 to 0.940) | 0.800 | 221 ms |",
+    ]
+
+
+def test_a_run_without_one_of_the_scores_gets_an_empty_cell(tmp_path: Path) -> None:
+    # A run that stopped early may not have reached a question the score applies to.
+    write_summarised_run(tmp_path, "baseline", 0.8, [0.030], "Whole.")
+    write_summarised_run(tmp_path, "v1", 0.9, [0.221], "Stopped early.")
+    summary_path = tmp_path / "v1" / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    del summary["metrics"]["mrr@10"]
+    summary_path.write_text(json.dumps(summary))
+
+    labels = {"hit@5": "Hit@5", "mrr@10": "MRR@10"}
+    overviews = overview_of_runs(tmp_path)
+
+    assert results_table(overviews, labels, ["hit@5", "mrr@10"]).splitlines()[2:] == [
+        "| baseline | Whole. | 1 | 0.800 (0.750 to 0.840) | 0.700 | 30 ms |",
+        "| v1 | Stopped early. | 1 | 0.900 (0.850 to 0.940) |  | 221 ms |",
+    ]
+    assert results_table(overviews, labels, ["mrr@10", "hit@5"]).splitlines()[2:] == [
+        "| baseline | Whole. | 1 | 0.700 (0.750 to 0.840) | 0.800 | 30 ms |",
+        "| v1 | Stopped early. | 1 |  | 0.900 | 221 ms |",
     ]
 
 

@@ -28,7 +28,12 @@ from handbook_rag.evals.gate import (
     shown_with_minimum,
 )
 from handbook_rag.evals.golden import check_against_corpus, sample_source_chunks
-from handbook_rag.evals.retrieval import METRICS, evaluate_retrieval, write_run
+from handbook_rag.evals.retrieval import (
+    METRICS,
+    FailedQuestion,
+    evaluate_retrieval,
+    write_run,
+)
 from handbook_rag.evals.review import render_review_page
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.models import Answer
@@ -400,10 +405,12 @@ def eval_compare(
         metric = comparison.metrics[metric_id]
         change = metric.change.difference
         interval = f"{change.mean:+.3f} ({change.low:+.3f} to {change.high:+.3f})"
+        scored = metric.change.difference.count
         typer.echo(
             f"  {label:<9} {metric.base.mean:>9.3f} {metric.candidate.mean:>9.3f}   "
             f"{interval:<27} {metric.change.better:>6} {metric.change.worse:>6} "
             f"{metric.change.same:>6}  {'clear' if metric.change.is_clear else 'unclear'}"
+            + (f"  (on {scored} questions)" if scored != comparison.questions else "")
         )
     typer.echo("")
     typer.echo("  clear    the interval excludes zero: chance is an unlikely explanation")
@@ -428,9 +435,9 @@ def eval_table(
         raise typer.Exit(code=1) from error
     labels = metric_labels(runs) or {name: name for name in overviews[0].metrics}
     chosen = metric or list(labels)
-    unknown = [name for name in chosen if any(name not in o.metrics for o in overviews)]
+    unknown = [name for name in chosen if all(name not in o.metrics for o in overviews)]
     if unknown:
-        typer.echo(f"error: no such metric in every run: {', '.join(unknown)}", err=True)
+        typer.echo(f"error: no run has the metric: {', '.join(unknown)}", err=True)
         raise typer.Exit(code=1)
     typer.echo(results_table(overviews, labels, chosen), nl=False)
 
@@ -479,11 +486,12 @@ def eval_answers(
     try:
         questions = _load_questions(dataset)
         corpus = build_corpus(settings)
-        saved = answer_runs.open_run(run_dir, config, restart=restart)
         retriever = wiring.make_retriever(settings)
-        # One attempt per request: the run then knows how many requests it has sent, and
-        # tries a failed question again itself.
+        # One attempt per request: no request is then sent a second time unseen, and the
+        # run tries a failed question again itself.
         generator = wiring.make_generator(settings, attempts=1)
+        # Last, so that a run that cannot start leaves nothing behind.
+        saved = answer_runs.open_run(run_dir, config, restart=restart)
     except (
         DatasetError,
         CorpusError,
@@ -509,7 +517,7 @@ def eval_answers(
     )
     if to_ask:
         typer.echo(
-            f"  pace         at most {pace:g} requests a minute, so about "
+            f"  pace         at most {pace:g} requests a minute, so at least "
             f"{max(1, round(to_ask / pace))} min"
         )
 
@@ -524,6 +532,9 @@ def eval_answers(
             f"{'answered' if record.answered else 'declined'}  {record.seconds:.1f} s"
         )
 
+    def show_failure(failure: FailedQuestion) -> None:
+        typer.echo(f"        failed  {failure.question_id}  {failure.message}")
+
     def ask_one(question: str) -> Answer:
         return answer_question(
             question,
@@ -532,30 +543,41 @@ def eval_answers(
             limit=settings.answer_context_chunks,
         )
 
+    pacer = answer_runs.Pacer(pace)
+
+    def before_each_request() -> None:
+        pacer.wait()
+        # Counted before the request is sent, so an interrupted run has still counted it.
+        answer_runs.add_attempts(run_dir)
+
     try:
         run = answer_runs.run_answers(
             questions,
             corpus.documents,
             ask_one,
             saved=saved,
-            wait=answer_runs.Pacer(pace).wait,
+            wait=before_each_request,
             on_record=keep,
+            on_failure=show_failure,
             max_attempts=max_requests,
         )
     except DatasetError as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=1) from error
-    attempts = answer_runs.add_attempts(run_dir, run.attempts)
+    attempts = answer_runs.attempts_so_far(run_dir)
 
     report = answer_runs.summarise_answers(questions, run.records, run.failures)
     if not report.scored:
+        for failure in report.failures[:5]:
+            typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
         typer.echo(f"error: no question was answered. {run.stopped or ''}".rstrip(), err=True)
         raise typer.Exit(code=1)
     answer_runs.write_answer_run(
         report,
         output,
         variant,
-        description or f"Answers by {settings.answer_model} from five passages.",
+        description
+        or f"Answers by {settings.answer_model} from {settings.answer_context_chunks} passages.",
         config,
         attempts=attempts,
     )

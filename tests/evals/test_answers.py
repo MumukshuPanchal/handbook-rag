@@ -15,6 +15,7 @@ from handbook_rag.evals.answers import (
     Statement,
     add_attempts,
     append_record,
+    attempts_so_far,
     in_run_order,
     load_records,
     open_run,
@@ -25,6 +26,7 @@ from handbook_rag.evals.answers import (
     write_answer_run,
 )
 from handbook_rag.evals.dataset import DatasetError, GoldenQuestion, locate_evidence
+from handbook_rag.evals.retrieval import FailedQuestion
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
@@ -169,6 +171,15 @@ def test_a_record_names_citations_by_passage_number_and_marks_the_evidence() -> 
     assert (record.answered, record.stop_reason, record.model) == (True, "end_turn", "fake-model")
 
 
+def test_a_citation_of_a_passage_the_model_was_not_given_is_a_fault_and_says_so() -> None:
+    answer = reply(
+        LEAVE_QUESTION, Segment("Sixteen weeks.", (Citation(LEAVE_CHUNK),)), given=(EXPENSE_CHUNK,)
+    )
+
+    with pytest.raises(ValueError, match="q001 cites a passage the model was not given"):
+        record_answer(LEAVE_QUESTION, answer, [])
+
+
 # Scores
 
 
@@ -244,6 +255,8 @@ def test_answering_an_unanswerable_question_is_a_wrong_call() -> None:
         ((Segment("Sixteen weeks.", (Citation(LEAVE_CHUNK),)), Segment(" \n\n")), 1.0),
         ((Segment("Sixteen weeks.", (Citation(LEAVE_CHUNK),)), Segment(" - ")), 1.0),
         ((Segment("Sixteen weeks.", (Citation(LEAVE_CHUNK),)), Segment(" Paid.")), 0.0),
+        # A number is a statement too.
+        ((Segment("Sixteen weeks.", (Citation(LEAVE_CHUNK),)), Segment(" 16")), 0.0),
         ((Segment("Sixteen weeks."),), 0.0),
     ],
 )
@@ -354,6 +367,24 @@ def test_a_question_that_fails_is_asked_once_more_after_the_others(error: Except
     # Three questions, and one more try for the one that failed.
     assert run.attempts == 4
     assert run.stopped is None
+
+
+def test_each_failure_is_passed_on_as_it_happens_even_one_that_is_made_good() -> None:
+    seen: list[FailedQuestion] = []
+
+    run = run_answers(
+        QUESTIONS,
+        DOCUMENTS,
+        failing_first(1, GenerationError("The Gemini API returned an error (503).")),
+        on_failure=seen.append,
+    )
+
+    # The second try succeeded, so the run reports no failure. The first one was still seen.
+    assert run.failures == []
+    assert [(failure.question_id, failure.error_class) for failure in seen] == [
+        (in_run_order(QUESTIONS)[0].id, "GenerationError")
+    ]
+    assert "503" in seen[0].message
 
 
 def test_a_question_that_fails_twice_is_reported_and_never_scored() -> None:
@@ -594,10 +625,95 @@ def test_restarting_discards_the_saved_replies_and_takes_the_new_settings(tmp_pa
 
 
 def test_replies_without_a_record_of_their_settings_are_not_adopted(tmp_path: Path) -> None:
-    (tmp_path / "answers.jsonl").write_text("{}\n")
+    open_run(tmp_path, CONFIG)
+    append_record(tmp_path, run_answers(QUESTIONS, DOCUMENTS, careful).records["q001"])
+    (tmp_path / "run.json").unlink()
 
     with pytest.raises(SavedRunError, match="nothing records the settings"):
         open_run(tmp_path, CONFIG)
+
+
+def test_a_run_that_holds_no_reply_takes_new_settings(tmp_path: Path) -> None:
+    # For example a run whose every request failed, or one that never got to ask.
+    open_run(tmp_path, CONFIG)
+    add_attempts(tmp_path, 3)
+    changed = {**CONFIG, "answer_model": "another-model"}
+
+    assert open_run(tmp_path, changed) == {}
+
+    # The requests it spent stay counted.
+    assert json.loads((tmp_path / "run.json").read_text()) == {"config": changed, "attempts": 3}
+
+
+@pytest.mark.parametrize(
+    "damaged", ["{", "[]", '{"attempts": 2}', '{"config": {}, "attempts": "x"}']
+)
+def test_a_damaged_record_of_the_settings_is_reported_and_can_be_discarded(
+    tmp_path: Path, damaged: str
+) -> None:
+    open_run(tmp_path, CONFIG)
+    (tmp_path / "run.json").write_text(damaged)
+
+    with pytest.raises(SavedRunError, match=r"run\.json cannot be read .*--restart"):
+        open_run(tmp_path, CONFIG)
+    with pytest.raises(SavedRunError, match=r"run\.json cannot be read"):
+        add_attempts(tmp_path)
+
+    assert open_run(tmp_path, CONFIG, restart=True) == {}
+    assert attempts_so_far(tmp_path) == 0
+
+
+def test_settings_match_whatever_shape_they_were_given_in(tmp_path: Path) -> None:
+    # A tuple is saved as a list, and must still be the same settings when read back.
+    config: dict[str, object] = {"answer_model": "fake-model", "sizes": (320, 60)}
+    open_run(tmp_path, config)
+    append_record(tmp_path, run_answers(QUESTIONS, DOCUMENTS, careful).records["q001"])
+
+    assert set(open_run(tmp_path, config)) == {"q001"}
+
+
+def test_restarting_removes_everything_the_run_wrote(tmp_path: Path) -> None:
+    run = run_answers(QUESTIONS, DOCUMENTS, careful)
+    open_run(tmp_path / "baseline", CONFIG)
+    for record in run.records.values():
+        append_record(tmp_path / "baseline", record)
+    report = summarise_answers(QUESTIONS, run.records)
+    run_dir = write_answer_run(report, tmp_path, "baseline", "First.", CONFIG, attempts=3)
+    assert (run_dir / "summary.json").is_file()
+
+    open_run(run_dir, CONFIG, restart=True)
+
+    # Nothing is left that describes the discarded replies.
+    assert sorted(path.name for path in run_dir.iterdir()) == ["run.json", "traces"]
+    assert list((run_dir / "traces").iterdir()) == []
+
+
+def test_the_count_of_attempts_survives_an_interruption(tmp_path: Path) -> None:
+    open_run(tmp_path, CONFIG)
+    calls = 0
+
+    def ask(question_text: str) -> Answer:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise KeyboardInterrupt  # someone pressed Ctrl-C during the second request
+        return careful(question_text)
+
+    def count_the_request() -> None:
+        # What the command does before each request: count it, then send it.
+        add_attempts(tmp_path)
+
+    with pytest.raises(KeyboardInterrupt):
+        run_answers(
+            QUESTIONS,
+            DOCUMENTS,
+            ask,
+            wait=count_the_request,
+            on_record=lambda question, record: append_record(tmp_path, record),
+        )
+
+    assert attempts_so_far(tmp_path) == 2
+    assert len(open_run(tmp_path, CONFIG)) == 1
 
 
 def test_attempts_add_up_over_invocations(tmp_path: Path) -> None:
@@ -608,7 +724,7 @@ def test_attempts_add_up_over_invocations(tmp_path: Path) -> None:
     assert json.loads((tmp_path / "run.json").read_text())["config"] == CONFIG
 
 
-def test_a_line_cut_short_at_the_end_is_dropped_and_one_in_the_middle_is_reported(
+def test_a_line_cut_short_at_the_end_is_dropped_and_a_damaged_line_is_reported(
     tmp_path: Path,
 ) -> None:
     records = run_answers(QUESTIONS, DOCUMENTS, careful).records
@@ -617,16 +733,52 @@ def test_a_line_cut_short_at_the_end_is_dropped_and_one_in_the_middle_is_reporte
     append_record(tmp_path, records["q002"])
     answers = tmp_path / "answers.jsonl"
     whole = answers.read_text()
+    first, second = whole.splitlines()
 
-    # The process was killed while it wrote the last line.
+    # The process was killed while it wrote the last line: no line break ends it.
     answers.write_text(whole[:-40])
     assert set(load_records(answers)) == {"q001"}
 
-    # A damaged line with a good one after it is not a crash while writing.
-    first, second = whole.splitlines()
+    # A finished line that cannot be read is damage, wherever it is.
     answers.write_text(f"{first[:-40]}\n{second}\n")
     with pytest.raises(SavedRunError, match=r"answers\.jsonl:1 cannot be read"):
         load_records(answers)
+    answers.write_text(f"{first}\n{second[:-40]}\n")
+    with pytest.raises(SavedRunError, match=r"answers\.jsonl:2 cannot be read"):
+        load_records(answers)
+
+
+def test_a_reply_saved_after_a_cut_line_is_not_lost(tmp_path: Path) -> None:
+    records = run_answers(QUESTIONS, DOCUMENTS, careful).records
+    open_run(tmp_path, CONFIG)
+    append_record(tmp_path, records["q001"])
+    answers = tmp_path / "answers.jsonl"
+    with answers.open("a") as output:
+        output.write('{"question_id": "q002", "fingerprint": "abc", "pass')  # killed here
+
+    # The next invocation removes the cut line before it saves anything.
+    assert set(open_run(tmp_path, CONFIG)) == {"q001"}
+    append_record(tmp_path, records["q002"])
+    append_record(tmp_path, records["u001"])
+
+    assert open_run(tmp_path, CONFIG) == records
+    assert answers.read_text().count("\n") == 3
+
+
+@pytest.mark.parametrize("character", ["\u2028", "\u2029", "\x85", "\x0b", "\x0c", "\r"])
+def test_a_reply_may_hold_characters_that_some_tools_take_for_the_end_of_a_line(
+    tmp_path: Path, character: str
+) -> None:
+    record = run_answers(QUESTIONS, DOCUMENTS, careful).records["q001"]
+    odd = dataclasses.replace(record, statements=(Statement(f"Sixteen{character}weeks.", (2,)),))
+    open_run(tmp_path, CONFIG)
+    append_record(tmp_path, odd)
+    append_record(tmp_path, dataclasses.replace(record, question_id="q002"))
+
+    assert open_run(tmp_path, CONFIG) == {
+        "q001": odd,
+        "q002": dataclasses.replace(record, question_id="q002"),
+    }
 
 
 def test_a_line_that_is_not_a_reply_is_reported(tmp_path: Path) -> None:
@@ -760,6 +912,28 @@ def test_the_slowest_reply_in_twenty_is_the_95_percent_mark() -> None:
     assert report.timing["median_seconds"] == 10.5
 
 
+def test_a_failure_of_a_question_that_was_later_answered_is_not_reported() -> None:
+    run = run_answers(QUESTIONS, DOCUMENTS, careful)
+    earlier = [FailedQuestion("q001", "GenerationError", "busy")]
+
+    report = summarise_answers(QUESTIONS, run.records, earlier)
+
+    assert report.failures == []
+    assert report.not_asked == 0
+    assert len(report.scored) == 3
+
+
+def test_a_reply_without_a_time_to_first_text_is_left_out_of_that_median() -> None:
+    records = dict(run_answers(QUESTIONS, DOCUMENTS, careful).records)
+    records["q001"] = dataclasses.replace(records["q001"], seconds_to_first_text=None)
+    records["q002"] = dataclasses.replace(records["q002"], seconds_to_first_text=3.0)
+
+    report = summarise_answers(QUESTIONS, records)
+
+    # The median of 3.0 and 1.0. Counting the missing one as zero would give 1.0.
+    assert report.timing["median_seconds_to_first_text"] == 2.0
+
+
 def test_a_summary_of_nothing_is_empty() -> None:
     report = summarise_answers(QUESTIONS, {})
 
@@ -828,6 +1002,52 @@ def test_a_run_is_written_in_the_layout_the_other_tools_read(tmp_path: Path) -> 
     assert "Reference answer: Sixteen weeks." in trace[3]["content"]
     refused = json.loads((run_dir / "traces" / "u001_rep0.json").read_text())
     assert "does not answer this (near-miss). No page mentions parking." in refused[3]["content"]
+
+
+def test_the_fingerprint_of_the_labels_does_not_depend_on_the_order_of_the_questions(
+    tmp_path: Path,
+) -> None:
+    records = run_answers(QUESTIONS, DOCUMENTS, careful).records
+
+    for name, questions in (("a", QUESTIONS), ("b", list(reversed(QUESTIONS)))):
+        report = summarise_answers(questions, records)
+        write_answer_run(report, tmp_path, name, "Same replies.", CONFIG, attempts=3)
+
+    first, second = (
+        json.loads((tmp_path / name / "summary.json").read_text())["labels_fingerprint"]
+        for name in ("a", "b")
+    )
+    assert first == second
+
+
+def test_traces_of_questions_that_are_no_longer_scored_are_removed(tmp_path: Path) -> None:
+    records = run_answers(QUESTIONS, DOCUMENTS, careful).records
+    write_answer_run(
+        summarise_answers(QUESTIONS, records), tmp_path, "baseline", "All.", CONFIG, attempts=3
+    )
+    assert len(list((tmp_path / "baseline" / "traces").iterdir())) == 3
+
+    write_answer_run(
+        summarise_answers([LEAVE_QUESTION], records),
+        tmp_path,
+        "baseline",
+        "One.",
+        CONFIG,
+        attempts=3,
+    )
+
+    assert [p.name for p in (tmp_path / "baseline" / "traces").iterdir()] == ["q001_rep0.json"]
+
+
+def test_a_killed_write_never_leaves_half_a_file(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    open_run(run_dir, CONFIG)
+
+    add_attempts(run_dir, 7)
+
+    # The file is replaced in one step, and the partial copy does not stay behind.
+    assert sorted(path.name for path in run_dir.iterdir()) == ["run.json"]
+    assert attempts_so_far(run_dir) == 7
 
 
 def test_passages_are_kept_by_id_and_not_by_their_text(tmp_path: Path) -> None:

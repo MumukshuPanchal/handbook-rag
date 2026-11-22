@@ -71,6 +71,15 @@ def metric_labels(flow_dir: Path) -> dict[str, str]:
     return {str(metric["id"]): str(metric.get("label", metric["id"])) for metric in declared}
 
 
+def _lines(path: Path) -> list[str]:
+    """The rows of a JSON Lines file, split at line breaks only.
+
+    A row may hold other characters that some tools treat as the end of a line, and
+    splitting there would cut the row in two.
+    """
+    return [line for line in path.read_text(encoding="utf-8").split("\n") if line.strip()]
+
+
 def load_run(run_dir: Path) -> RunScores:
     """Read the per-question scores of one run."""
     results = run_dir / "results.jsonl"
@@ -78,7 +87,7 @@ def load_run(run_dir: Path) -> RunScores:
         raise ComparisonError(f"no run found at {run_dir}")
     scores: dict[str, dict[str, float]] = {}
     fingerprints: dict[str, str] = {}
-    for line in results.read_text(encoding="utf-8").splitlines():
+    for line in _lines(results):
         row = json.loads(line)
         if row.get("status") != "ok":
             continue
@@ -126,11 +135,21 @@ def compare_runs(base_dir: Path, candidate_dir: Path) -> RunComparison:
         )
 
     order = sorted(base.scores)
-    metric_ids = [name for name in base.scores[order[0]] if name in candidate.scores[order[0]]]
+    # Not every score applies to every question: a retrieval score needs evidence, and a
+    # score about an answer needs an answer. Each metric is compared on the questions for
+    # which both runs have it, which keeps the comparison paired.
+    metric_ids = list(dict.fromkeys(name for question in order for name in base.scores[question]))
     metrics: dict[str, MetricComparison] = {}
     for metric in metric_ids:
-        before = [base.scores[question][metric] for question in order]
-        after = [candidate.scores[question][metric] for question in order]
+        shared = [
+            question
+            for question in order
+            if metric in base.scores[question] and metric in candidate.scores[question]
+        ]
+        if not shared:
+            continue
+        before = [base.scores[question][metric] for question in shared]
+        after = [candidate.scores[question][metric] for question in shared]
         metrics[metric] = MetricComparison(
             base=mean_with_interval(before),
             candidate=mean_with_interval(after),
@@ -154,7 +173,7 @@ def overview_of_runs(flow_dir: Path) -> list[RunOverview]:
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         latencies = [
             float(row["latency_s"])
-            for line in (summary_path.parent / "results.jsonl").read_text("utf-8").splitlines()
+            for line in _lines(summary_path.parent / "results.jsonl")
             if "latency_s" in (row := json.loads(line))
         ]
         overviews.append(
@@ -188,14 +207,18 @@ def results_table(
     header.append("Median time")
     lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
     for overview in overviews:
-        first = overview.metrics[headline]
+        # A run that stopped early may lack a score, and is shown with an empty cell.
+        first = overview.metrics.get(headline)
         cells = [
             overview.name,
             overview.description,
             str(overview.questions),
-            f"{first.mean:.3f} ({first.low:.3f} to {first.high:.3f})",
+            "" if first is None else f"{first.mean:.3f} ({first.low:.3f} to {first.high:.3f})",
         ]
-        cells += [f"{overview.metrics[metric].mean:.3f}" for metric in metric_ids[1:]]
+        cells += [
+            f"{overview.metrics[metric].mean:.3f}" if metric in overview.metrics else ""
+            for metric in metric_ids[1:]
+        ]
         latency = overview.median_latency_s
         cells.append("" if latency is None else f"{latency * 1000:.0f} ms")
         lines.append("| " + " | ".join(cells) + " |")

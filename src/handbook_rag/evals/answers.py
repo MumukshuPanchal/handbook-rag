@@ -19,12 +19,14 @@ keeps failing stops itself.
 
 import hashlib
 import json
+import os
 import statistics
 import time
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 from handbook_rag.evals.dataset import EvidenceSpan, GoldenQuestion, locate_evidence
 from handbook_rag.evals.metrics import Estimate, covered_evidence, mean_with_interval
@@ -80,7 +82,8 @@ class AnswerRecord:
     """The assistant's reply to one golden question, kept so it can be scored again later.
 
     It holds what the model was given and what it wrote, by passage number. The text of
-    the passages is not copied: a chunk id finds it again in the corpus.
+    the passages is not copied: a chunk id finds it again in the corpus. The statements
+    are the model's own words, which may repeat a few of a passage's.
     """
 
     question_id: str
@@ -130,6 +133,13 @@ def record_answer(
     numbers = {
         scored.chunk.chunk_id: number for number, scored in enumerate(answer.retrieved, start=1)
     }
+    for segment in answer.segments:
+        for citation in segment.citations:
+            if citation.chunk.chunk_id not in numbers:
+                raise ValueError(
+                    f"The reply to {question.id} cites a passage the model was not given "
+                    f"({citation.chunk.chunk_id}). That is a fault in the generator."
+                )
     return AnswerRecord(
         question_id=question.id,
         fingerprint=question.fingerprint,
@@ -224,7 +234,8 @@ class AnswerRun:
     failures: list[FailedQuestion] = field(default_factory=list)
     """Questions that were asked and got no reply, after one more try."""
     attempts: int = 0
-    """Questions put to the pipeline this time. Each sends at most one request."""
+    """Questions put to the pipeline this time. Each sends at most one request: none
+    when the search fails or finds nothing, because the model is then never called."""
     stopped: str | None = None
     """Why the run ended before every question was asked, if it did."""
 
@@ -247,14 +258,17 @@ def run_answers(
     saved: Mapping[str, AnswerRecord] | None = None,
     wait: Callable[[], None] | None = None,
     on_record: Callable[[GoldenQuestion, AnswerRecord], None] | None = None,
+    on_failure: Callable[[FailedQuestion], None] | None = None,
     max_attempts: int | None = None,
     failures_before_stopping: int = 3,
 ) -> AnswerRun:
     """Ask every question that has no saved reply yet.
 
     ``ask`` answers one question through the whole pipeline. ``wait`` is called before
-    each question and returns when the next request may start. ``on_record`` receives each
-    new reply as soon as it arrives, which is where it is saved.
+    each question and returns when the next request may start: it is where the pace is
+    kept and the attempt is counted. ``on_record`` receives each new reply as soon as it
+    arrives, which is where it is saved. ``on_failure`` receives each failure as it
+    happens, including one that a second try then makes good.
 
     A question that fails, because the model or the vector store could not be reached, is
     asked once more after all the others. A failure is never scored as a wrong answer.
@@ -292,6 +306,8 @@ def run_answers(
                 answer = ask(question.question)
             except (GenerationError, VectorStoreError) as error:
                 failed[question.id] = FailedQuestion(question.id, type(error).__name__, str(error))
+                if on_failure is not None:
+                    on_failure(failed[question.id])
                 again.append(question)
                 failures_in_a_row += 1
                 if failures_in_a_row >= failures_before_stopping:
@@ -320,17 +336,31 @@ def open_run(
 
     A run is one configuration: one model, one prompt, one way of searching. Replies made
     with another configuration are never mixed in. The caller chooses: a new name for the
-    new configuration, or ``restart`` to discard what the run holds.
+    new configuration, or ``restart`` to discard what the run holds. A run that holds no
+    reply yet simply takes the new settings, since there is nothing to mix.
+
+    A line cut short at the end of the saved replies, left by a run that was killed while
+    it wrote, is removed here. Left in place, the next reply would be written onto it.
     """
     run_dir.mkdir(parents=True, exist_ok=True)
     run_file, answers_file = run_dir / RUN_FILE, run_dir / ANSWERS_FILE
     wanted = json.loads(json.dumps(dict(config)))
     if restart:
-        answers_file.unlink(missing_ok=True)
-        run_file.unlink(missing_ok=True)
-    if run_file.is_file():
-        stored = json.loads(run_file.read_text(encoding="utf-8")).get("config", {})
-        if stored != wanted:
+        _discard(run_dir)
+    _remove_cut_line(answers_file)
+    saved = load_records(answers_file)
+    if not run_file.is_file():
+        if saved:
+            raise SavedRunError(
+                f"{answers_file} holds replies, but nothing records the settings that made "
+                "them. Give this run another name, or discard them with --restart."
+            )
+        _write_json(run_file, {"config": wanted, "attempts": 0})
+        return saved
+    state = _run_state(run_file)
+    stored = state["config"]
+    if stored != wanted:
+        if saved:
             changed = sorted(
                 key for key in {*stored, *wanted} if stored.get(key) != wanted.get(key)
             )
@@ -338,23 +368,53 @@ def open_run(
                 f"the run in {run_dir} was made with other settings ({', '.join(changed)}). "
                 "Give this run another name, or discard its saved replies with --restart."
             )
-    elif answers_file.is_file():
+        _write_json(run_file, {**state, "config": wanted})
+    return saved
+
+
+def _discard(run_dir: Path) -> None:
+    """Remove everything a run has written, so that nothing of it outlives a restart."""
+    for name in (ANSWERS_FILE, RUN_FILE, "results.jsonl", "errors.jsonl", "summary.json"):
+        (run_dir / name).unlink(missing_ok=True)
+    (run_dir / "change.md").unlink(missing_ok=True)
+    _clear_traces(run_dir)
+
+
+def _clear_traces(run_dir: Path) -> None:
+    for trace in (run_dir / "traces").glob("*.json"):
+        trace.unlink()
+
+
+def _run_state(run_file: Path) -> dict[str, Any]:
+    """What a run recorded about itself: its settings and its count of attempts."""
+    try:
+        state = json.loads(run_file.read_text(encoding="utf-8"))
+        if not isinstance(state, dict) or not isinstance(state.get("config"), dict):
+            raise TypeError("it does not hold a run's settings")
+        attempts = int(state.get("attempts", 0))
+    except (ValueError, TypeError) as error:
         raise SavedRunError(
-            f"{answers_file} holds replies, but nothing records the settings that made them. "
-            "Give this run another name, or discard them with --restart."
-        )
-    else:
-        _write_json(run_file, {"config": wanted, "attempts": 0})
-    return load_records(answers_file)
+            f"{run_file} cannot be read ({error}). Discard the run with --restart."
+        ) from error
+    return {**state, "attempts": attempts}
 
 
-def add_attempts(run_dir: Path, attempts: int) -> int:
-    """Add this invocation's attempts to the run's count, and return the new total."""
+def add_attempts(run_dir: Path, attempts: int = 1) -> int:
+    """Add to the run's count of attempts, and return the new total.
+
+    The count is written before each request is sent, not after the run: a run that is
+    interrupted has then still counted every request it sent.
+    """
     run_file = run_dir / RUN_FILE
-    state = json.loads(run_file.read_text(encoding="utf-8"))
-    state["attempts"] = int(state.get("attempts", 0)) + attempts
+    state = _run_state(run_file)
+    state["attempts"] += attempts
     _write_json(run_file, state)
     return int(state["attempts"])
+
+
+def attempts_so_far(run_dir: Path) -> int:
+    """How many questions this run has put to the pipeline since it was started or restarted."""
+    return int(_run_state(run_dir / RUN_FILE)["attempts"])
 
 
 def append_record(run_dir: Path, record: AnswerRecord) -> None:
@@ -366,20 +426,24 @@ def append_record(run_dir: Path, record: AnswerRecord) -> None:
 def load_records(path: Path) -> dict[str, AnswerRecord]:
     """Read saved replies. The latest reply to a question wins.
 
-    A run can be killed while it writes. Its last line may then be cut short, and is
-    dropped: that question is simply asked again. A broken line anywhere else means the
-    file was edited or damaged, which is reported.
+    Every reply is one line that ends in a line break. Text after the last line break is
+    a line that a killed run did not finish, and is left out: that question is asked
+    again. A finished line that cannot be read means the file was edited or damaged,
+    which is reported.
+
+    Lines are split at line breaks only. A reply may hold other characters that some
+    tools treat as the end of a line, and splitting there would cut it in two.
     """
     if not path.is_file():
         return {}
     records: dict[str, AnswerRecord] = {}
-    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    for number, line in enumerate(lines, start=1):
+    finished = path.read_text(encoding="utf-8").split("\n")[:-1]
+    for number, line in enumerate(finished, start=1):
+        if not line.strip():
+            continue
         try:
             row = json.loads(line)
         except json.JSONDecodeError as error:
-            if number == len(lines):
-                break
             raise SavedRunError(f"{path}:{number} cannot be read: {error}") from error
         try:
             record = AnswerRecord(
@@ -399,6 +463,15 @@ def load_records(path: Path) -> dict[str, AnswerRecord]:
             raise SavedRunError(f"{path}:{number} is not a saved reply: {error}") from error
         records[record.question_id] = record
     return records
+
+
+def _remove_cut_line(path: Path) -> None:
+    """Cut the file back to its last finished line."""
+    if not path.is_file():
+        return
+    saved = path.read_bytes()
+    if saved and not saved.endswith(b"\n"):
+        _replace(path, saved[: saved.rfind(b"\n") + 1])
 
 
 @dataclass(frozen=True, slots=True)
@@ -514,6 +587,8 @@ def write_answer_run(
     """
     run_dir = flow_dir / variant
     (run_dir / "traces").mkdir(parents=True, exist_ok=True)
+    # A trace from an earlier invocation may be of a question that is no longer scored.
+    _clear_traces(run_dir)
     _write_json(
         flow_dir / "_state.json",
         {"metrics": METRICS, "perf_fields": [{"id": "latency_s", "unit": "s"}]},
@@ -590,4 +665,11 @@ def _trace(item: ScoredAnswer) -> list[dict[str, str]]:
 
 
 def _write_json(path: Path, value: object) -> None:
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    _replace(path, (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+
+
+def _replace(path: Path, content: bytes) -> None:
+    """Write a file in one step, so that a kill never leaves half of it."""
+    partial = path.with_name(path.name + ".partial")
+    partial.write_bytes(content)
+    os.replace(partial, path)

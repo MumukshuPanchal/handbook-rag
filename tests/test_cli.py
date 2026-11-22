@@ -1,4 +1,5 @@
 import dataclasses
+import hashlib
 import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -11,10 +12,12 @@ from typer.testing import CliRunner
 from handbook_rag import __version__, wiring
 from handbook_rag.cli import app
 from handbook_rag.config import Settings, get_settings
+from handbook_rag.evals.judge import JudgeError, Judgement, StatementVerdict, SupportCase
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
 from handbook_rag.index.store import QdrantVectorStore, ScoredChunk, VectorStoreError
+from handbook_rag.ingest.build import build_corpus
 from handbook_rag.ingest.models import Chunk
 from handbook_rag.retrieve.dense import Retriever
 from tests.support import (
@@ -981,7 +984,7 @@ def answer_run(
     """An indexed fake handbook, a two-question golden set, and no waiting between requests."""
     golden = tmp_path / "questions.jsonl"
     golden.write_text("".join(json.dumps(question) + "\n" for question in ANSWER_QUESTIONS))
-    monkeypatch.setattr("handbook_rag.evals.answers.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("handbook_rag.evals.careful.time.sleep", lambda _seconds: None)
     assert runner.invoke(app, ["index"]).exit_code == 0
     return ["eval-answers", "--dataset", str(golden), "--output", str(tmp_path / "runs")]
 
@@ -1339,3 +1342,401 @@ def test_eval_answers_stops_on_a_broken_label_before_any_request(
     assert result.exit_code == 1
     assert "quote not found in people/leave.md" in result.output
     assert model.questions == []
+
+
+# eval-judge and eval-support: a real run sends one request per answer, so these use a
+# stand-in judge.
+
+
+class FakeJudge:
+    """Calls a statement unsupported when it says "eighteen", and counts what it is asked."""
+
+    model = "gemini-3.5-flash-lite"
+
+    def __init__(self, *, lenient: bool = False, error: JudgeError | None = None) -> None:
+        self.asked: list[str] = []
+        self.built_with: list[dict[str, Any]] = []
+        self._lenient = lenient
+        self._error = error
+
+    def build(self, _settings: Settings, **options: Any) -> "FakeJudge":
+        self.built_with.append(options)
+        return self
+
+    def judge(self, case: SupportCase) -> Judgement:
+        self.asked.append(case.case_id)
+        if self._error is not None:
+            raise self._error
+        return Judgement(
+            case_id=case.case_id,
+            verdicts=tuple(
+                StatementVerdict(
+                    statement.number,
+                    "unsupported"
+                    if "eighteen" in statement.text.lower() and not self._lenient
+                    else "supported",
+                    "A reason.",
+                )
+                for statement in case.statements
+            ),
+            model="gemini-3.5-flash-lite",
+            input_tokens=900,
+            output_tokens=60,
+            seconds=1.5,
+        )
+
+
+@pytest.fixture
+def judged_run(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> dict[str, Any]:
+    """An answer run made with the stand-in model, and labelled answers that match it.
+
+    The labelled answers are built the way the real ones were: from the replies the run
+    saved. One is the reply as it is, and one is a copy with a planted wrong number.
+    """
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", EvalModel().build)
+    assert runner.invoke(app, [*answer_run, "--variant", "baseline"]).exit_code == 0
+    run_dir = tmp_path / "runs" / "baseline"
+    (reply,) = (
+        row
+        for row in map(json.loads, (run_dir / "answers.jsonl").read_text().splitlines())
+        if row["answered"]
+    )
+    chunks = {chunk.chunk_id: chunk for chunk in build_corpus(get_settings()).chunks}
+    cited = reply["statements"][0]["cites"]
+    passages = [
+        {
+            "number": passage["number"],
+            "chunk_id": passage["chunk_id"],
+            "text_sha256": hashlib.sha256(
+                chunks[passage["chunk_id"]].text.encode("utf-8")
+            ).hexdigest()[:16],
+        }
+        for passage in reply["passages"]
+        if passage["number"] in cited
+    ]
+    real = {
+        "case": "q001",
+        "question_id": "q001",
+        "kind": "real",
+        "question": ANSWER_QUESTIONS[0]["question"],
+        "passages": passages,
+        "statements": [
+            {
+                "number": 1,
+                "text": "Sixteen weeks of paid leave.",
+                "cites": cited,
+                "expected": "supported",
+            }
+        ],
+    }
+    planted = {
+        **real,
+        "case": "q001-v1",
+        "kind": "number",
+        "statements": [
+            {
+                "number": 1,
+                "text": "Eighteen weeks of paid leave.",
+                "cites": cited,
+                "expected": "unsupported",
+                "planted": "number",
+                "change": "sixteen became eighteen",
+            }
+        ],
+    }
+    labelled = tmp_path / "cases.jsonl"
+    labelled.write_text(json.dumps(real) + "\n" + json.dumps(planted) + "\n")
+    checks = tmp_path / "judge"
+    return {
+        "judge": ["eval-judge", "--cases", str(labelled), "--output", str(checks)],
+        "support": [
+            "eval-support",
+            "--dataset",
+            answer_run[2],
+            "--runs",
+            str(tmp_path / "runs"),
+            "--variant",
+            "baseline",
+        ],
+        "answers": [*answer_run, "--variant", "baseline"],
+        "run_dir": run_dir,
+        "checks": checks,
+        "labelled": labelled,
+        "planted": planted,
+    }
+
+
+def test_eval_judge_checks_the_judge_against_labelled_answers(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+
+    result = runner.invoke(app, [*judged_run["judge"], "--variant", "baseline"])
+
+    assert result.exit_code == 0, result.output
+    assert sorted(judge.asked) == ["q001", "q001-v1"]
+    assert judge.built_with == [{"attempts": 1}]
+    assert "2 to read, 0 already judged, 2 to judge now" in result.output
+    assert "q001-v1  UNSUPPORTED" in result.output
+    assert "judged       2 of 2 answers, 0 failed" in result.output
+    assert "at most 2 now, 2 for this check in all" in result.output
+    assert "2 compared with their labels, 0 left out" in result.output
+    assert "Same decision                1.000" in result.output
+    assert "Faults caught (recall)       1.000  (95% interval 1.000 to 1.000, n=1)" in result.output
+    assert "Alarms that were right       1.000" in result.output
+    assert "Kappa                        1.000" in result.output
+    assert "Caught, number: 1 of 1" in result.output
+    assert "Run the same command again" not in result.output
+
+    run_dir = judged_run["checks"] / "baseline"
+    assert len((run_dir / "judgements.jsonl").read_text().splitlines()) == 2
+    assert (run_dir / "disagreements.jsonl").read_text() == ""
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["config"]["judge_model"] == "gemini-3.5-flash-lite"
+    assert (summary["answers_labelled"], summary["answers_judged"]) == (2, 2)
+    assert summary["attempts"] == 2
+    assert summary["agreement"]["recall"]["mean"] == 1.0
+    assert summary["agreement"]["caught"] == {"number": [1, 1]}
+    assert (summary["input_tokens"], summary["output_tokens"]) == (1800, 120)
+
+    again = runner.invoke(app, [*judged_run["judge"], "--variant", "baseline"])
+
+    assert again.exit_code == 0, again.output
+    assert len(judge.asked) == 2
+    assert "2 to read, 2 already judged, 0 to judge now" in again.output
+    assert "Faults caught (recall)       1.000" in again.output
+
+
+def test_eval_judge_shows_what_a_lenient_judge_let_through(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", FakeJudge(lenient=True).build)
+
+    result = runner.invoke(app, judged_run["judge"])
+
+    # A poor judge is a finding, not a failure of the command.
+    assert result.exit_code == 0, result.output
+    assert "Faults caught (recall)       0.000" in result.output
+    assert "Alarms that were right" not in result.output
+    assert "Caught, number: 0 of 1" in result.output
+    (missed,) = map(
+        json.loads,
+        (judged_run["checks"] / "current" / "disagreements.jsonl").read_text().splitlines(),
+    )
+    assert missed == {
+        "case": "q001-v1",
+        "statement": 1,
+        "kind": "number",
+        "expected": "unsupported",
+        "judged": "supported",
+        "reason": "A reason.",
+    }
+
+
+def test_eval_judge_fails_clearly_when_the_judge_cannot_be_reached(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge(error=JudgeError("The Gemini API returned an error (429): Quota exceeded."))
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+
+    result = runner.invoke(app, judged_run["judge"])
+
+    assert result.exit_code == 1
+    assert "no answer was judged" in result.output
+    assert "Quota exceeded." in result.output
+    assert not (judged_run["checks"] / "current" / "summary.json").exists()
+    # Each answer was tried, and one of them once more before the run was sure.
+    state = json.loads((judged_run["checks"] / "current" / "run.json").read_text())
+    assert state["attempts"] == len(judge.asked) == 3
+
+
+def test_eval_judge_does_not_mix_the_verdicts_of_two_judges(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    assert runner.invoke(app, judged_run["judge"]).exit_code == 0
+
+    monkeypatch.setenv("HANDBOOK_RAG_JUDGE_MODEL", "gemini-9-judge")
+    get_settings.cache_clear()
+    refused = runner.invoke(app, judged_run["judge"])
+
+    assert refused.exit_code == 1
+    assert "was made with other settings (judge_model)" in refused.output
+    assert len(judge.asked) == 2
+
+    restarted = runner.invoke(app, [*judged_run["judge"], "--restart"])
+
+    assert restarted.exit_code == 0, restarted.output
+    assert len(judge.asked) == 4
+
+
+def test_eval_judge_stops_when_a_passage_no_longer_reads_as_it_was_labelled(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any], tmp_path: Path
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    stale = {**judged_run["planted"]}
+    stale["passages"] = [{**stale["passages"][0], "text_sha256": "0" * 16}]
+    changed = tmp_path / "changed.jsonl"
+    changed.write_text(json.dumps(stale) + "\n")
+
+    result = runner.invoke(app, ["eval-judge", "--cases", str(changed)])
+
+    assert result.exit_code == 1
+    assert "has changed since q001-v1 was labelled" in result.output
+    assert judge.asked == []
+
+
+def test_eval_support_judges_the_saved_answers_and_adds_the_score_to_the_run(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+
+    result = runner.invoke(app, judged_run["support"])
+
+    assert result.exit_code == 0, result.output
+    # Only the answer is judged: the reply that declined has nothing to check.
+    assert judge.asked == ["q001"]
+    assert judge.built_with == [{"attempts": 1}]
+    assert "1 to read, 0 already judged, 1 to judge now" in result.output
+    assert "judged       1 of 1 answers, 0 of them taken from an earlier check" in result.output
+    assert "Supported by its sources     1.000  (95% interval 1.000 to 1.000, n=1)" in result.output
+    assert "Right call                   1.000" in result.output
+    assert (
+        "judge        gemini-3.5-flash-lite read 1 answers: 1 statements supported, "
+        "0 unsupported, 0 without a claim" in result.output
+    )
+    # A score from a judge that nobody has checked is said to be just that.
+    assert "judge check  none." in result.output
+
+    run_dir = judged_run["run_dir"]
+    assert len((run_dir / "support.jsonl").read_text().splitlines()) == 1
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["metrics"]["supported"] == {"mean": 1.0, "low": 1.0, "high": 1.0, "count": 1}
+    assert summary["judge"]["answers_judged"] == 1
+    assert summary["judge"]["statements"] == {"supported": 1, "unsupported": 0, "no_claim": 0}
+    assert summary["judge"]["attempts"] == 1
+    assert summary["judge"]["check"] is None
+    # What the answer stage recorded is kept as it was.
+    assert summary["description"] == "Answers by gemini-3.5-flash-lite from 5 passages."
+    assert summary["attempts"] == 2
+    rows = {
+        row["prompt_id"]: row["grade"]
+        for row in map(json.loads, (run_dir / "results.jsonl").read_text().splitlines())
+    }
+    assert rows["q001"]["supported"] == 1.0
+    assert "supported" not in rows["u001"]
+
+    # Scoring the run again keeps the judged score, and judging again asks nothing.
+    rescored = runner.invoke(app, judged_run["answers"])
+    assert rescored.exit_code == 0, rescored.output
+    assert "Supported by its sources     1.000" in rescored.output
+    again = runner.invoke(app, judged_run["support"])
+    assert again.exit_code == 0, again.output
+    assert "1 to read, 1 already judged, 0 to judge now" in again.output
+    assert judge.asked == ["q001"]
+
+
+def test_eval_support_uses_a_check_again_and_quotes_its_agreement(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    assert runner.invoke(app, [*judged_run["judge"], "--variant", "baseline"]).exit_code == 0
+    assert len(judge.asked) == 2
+    check = str(judged_run["checks"] / "baseline")
+
+    result = runner.invoke(app, [*judged_run["support"], "--checked", check])
+
+    assert result.exit_code == 0, result.output
+    # The check had read exactly this answer, so its verdict is used and no request is sent.
+    assert len(judge.asked) == 2
+    assert "1 to read, 1 already judged, 0 to judge now" in result.output
+    assert "judged       1 of 1 answers, 1 of them taken from an earlier check" in result.output
+    assert "at most 0 now, 0 for this stage in all" in result.output
+    assert (
+        "judge check  it caught 1 of 1 statements labelled unsupported, and 0 of its 1 alarms "
+        f"were false ({check})" in result.output
+    )
+    run_dir = judged_run["run_dir"]
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["judge"]["check"]["run"] == check
+    assert summary["judge"]["check"]["agreement"]["recall"]["count"] == 1
+    # The borrowed verdict is copied, so the run can be read without the check.
+    assert len((run_dir / "support.jsonl").read_text().splitlines()) == 1
+
+
+def test_eval_support_does_not_quote_the_check_of_another_judge(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    assert runner.invoke(app, [*judged_run["judge"], "--variant", "baseline"]).exit_code == 0
+    monkeypatch.setenv("HANDBOOK_RAG_JUDGE_MODEL", "gemini-9-judge")
+    get_settings.cache_clear()
+
+    result = runner.invoke(
+        app, [*judged_run["support"], "--checked", str(judged_run["checks"] / "baseline")]
+    )
+
+    assert result.exit_code == 1
+    assert "was made with another judge" in result.output
+    assert not (judged_run["run_dir"] / "support.jsonl").exists()
+
+
+def test_eval_support_scores_an_answer_the_judge_faults_as_unsupported(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    class SaysEighteen(EvalModel):
+        def generate(
+            self,
+            question: str,
+            chunks: Sequence[Chunk],
+            *,
+            on_text: Callable[[str], None] | None = None,
+        ) -> Answer:
+            answer = super().generate(question, chunks, on_text=on_text)
+            if not answer.answered:
+                return answer
+            wrong = Segment("Eighteen weeks of paid leave.", answer.segments[0].citations)
+            return dataclasses.replace(answer, segments=(wrong,))
+
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", SaysEighteen().build)
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", FakeJudge().build)
+    assert runner.invoke(app, answer_run).exit_code == 0
+
+    result = runner.invoke(
+        app, ["eval-support", "--dataset", answer_run[2], "--runs", str(tmp_path / "runs")]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "q001  UNSUPPORTED" in result.output
+    assert "Supported by its sources     0.000" in result.output
+    assert "0 statements supported, 1 unsupported" in result.output
+    # Code alone had no way to see it: the statement names the right passage.
+    assert "Cites the evidence           1.000" in result.output
+
+
+def test_eval_support_needs_an_answer_run_and_a_judge_that_answers(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any], tmp_path: Path
+) -> None:
+    judge = FakeJudge(error=JudgeError("The judge's reply was not in the agreed form: x"))
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+
+    missing = runner.invoke(app, ["eval-support", "--runs", str(tmp_path / "nowhere")])
+    failing = runner.invoke(app, judged_run["support"])
+
+    assert missing.exit_code == 1
+    assert "holds no replies. Make the answer run first, with eval-answers." in missing.output
+    assert failing.exit_code == 1
+    assert "no answer was judged" in failing.output
+    assert "not in the agreed form" in failing.output
+    # The run's scores are left as the answer stage wrote them.
+    summary = json.loads((judged_run["run_dir"] / "summary.json").read_text())
+    assert "supported" not in summary["metrics"]
+    assert "judge" not in summary

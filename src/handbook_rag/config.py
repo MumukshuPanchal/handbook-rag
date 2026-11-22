@@ -239,6 +239,33 @@ class Settings(BaseSettings):
         ),
     )
 
+    judge_model: str = Field(
+        default="gemini-3.5-flash-lite",
+        description=(
+            "Model that judges answers in an evaluation. It must be an exact Gemini model "
+            "name. The default is the answer model, because it is the only one a free key "
+            "allows enough requests for. A model judging its own answers tends to be "
+            "lenient, which is why the judge is checked against labelled answers first."
+        ),
+    )
+    judge_max_tokens: int = Field(
+        default=2000,
+        gt=0,
+        description="Upper limit on the tokens the judge may produce for one answer.",
+    )
+
+    @field_validator("judge_model")
+    @classmethod
+    def _judge_model_is_an_exact_gemini_model(cls, value: str) -> str:
+        if not value.startswith("gemini-") or value == "gemini-":
+            raise ValueError(f"must be a Gemini model (gemini-...), not {value!r}")
+        if value.endswith("-latest"):
+            raise ValueError(
+                f"must be an exact model name: {value!r} is an alias that moves to a new "
+                "model without notice, and verdicts would stop being comparable"
+            )
+        return value
+
     @field_validator("answer_model")
     @classmethod
     def _answer_model_names_a_provider(cls, value: str) -> str:

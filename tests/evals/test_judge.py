@@ -318,6 +318,13 @@ def test_a_reply_without_any_candidate_is_not_read() -> None:
         judge_with(FakeClient(empty)).judge(CASE)
 
 
+def test_a_reply_that_ended_properly_and_holds_no_text_is_refused() -> None:
+    client = FakeClient(response(None))
+
+    with pytest.raises(JudgeError, match="not in the agreed form"):
+        judge_with(client).judge(CASE)
+
+
 def test_an_answer_without_statements_is_refused_before_any_request() -> None:
     client = FakeClient()
     nothing = SupportCase("q001", "How long?", (), ())

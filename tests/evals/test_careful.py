@@ -2,7 +2,7 @@
 
 import pytest
 
-from handbook_rag.evals.careful import run_carefully
+from handbook_rag.evals.careful import Pacer, run_carefully
 
 
 class Busy(Exception):
@@ -66,3 +66,34 @@ def test_nothing_pending_means_nothing_is_tried() -> None:
     )
 
     assert (run.attempts, run.failures, run.stopped, waits) == (0, [], None, [])
+
+
+def test_the_run_rests_after_a_failure_but_not_before_it_gives_up() -> None:
+    events: list[str] = []
+
+    def attempt(item: str) -> None:
+        events.append(f"try {item}")
+        if item != "d":
+            raise Busy("overloaded")
+
+    def rest() -> None:
+        events.append("rest")
+
+    recovered = run_carefully(["a", "d"], attempt, name=str, errors=(Busy,), rest=rest)
+    assert events == ["try a", "rest", "try d", "try a", "rest"]
+    assert [failure.question_id for failure in recovered.failures] == ["a"]
+
+    events.clear()
+    stopped = run_carefully(["a", "b", "c", "e"], attempt, name=str, errors=(Busy,), rest=rest)
+
+    # A rest after the first and the second failure. The third ends the run at once.
+    assert events == ["try a", "rest", "try b", "rest", "try c"]
+    assert stopped.stopped is not None
+
+
+def test_a_rest_is_a_sleep_of_the_given_length() -> None:
+    slept: list[float] = []
+
+    Pacer(10, sleep=slept.append).rest(30)
+
+    assert slept == [30]

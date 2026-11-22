@@ -37,6 +37,10 @@ class Pacer:
                 self._sleep(remaining)
         self._last = self._clock()
 
+    def rest(self, seconds: float) -> None:
+        """Pause after a failed request, to give a busy service time to recover."""
+        self._sleep(seconds)
+
 
 @dataclass(slots=True)
 class CarefulRun:
@@ -59,6 +63,7 @@ def run_carefully[T](
     things: str = "questions",
     wait: Callable[[], None] | None = None,
     on_failure: Callable[[FailedQuestion], None] | None = None,
+    rest: Callable[[], None] | None = None,
     max_attempts: int | None = None,
     failures_before_stopping: int = 3,
 ) -> CarefulRun:
@@ -70,6 +75,8 @@ def run_carefully[T](
     passed on. ``wait`` is called before each try and returns when the next request may
     start: it is where the pace is kept and the attempt is counted. ``on_failure``
     receives each failure as it happens, including one that a second try then makes good.
+    ``rest`` is called after each failure, before anything else is tried: a pause there
+    lets a service that is briefly overloaded recover, and costs no request.
 
     An item that fails is tried once more after all the others. When several items fail
     one after another, the pass stops: the cause is then almost certainly the day's
@@ -102,6 +109,8 @@ def run_carefully[T](
                         f"{failures_in_a_row} {things} in a row failed. The last error: {error}"
                     )
                     break
+                if rest is not None:
+                    rest()
                 continue
             failures_in_a_row = 0
             failed.pop(name(item), None)

@@ -10,10 +10,8 @@ import pytest
 
 from handbook_rag.evals.answers import (
     METRIC_IDS,
-    Pacer,
     Passage,
     ReplyError,
-    SavedRunError,
     Statement,
     add_attempts,
     append_record,
@@ -28,8 +26,10 @@ from handbook_rag.evals.answers import (
     summarise_answers,
     write_answer_run,
 )
+from handbook_rag.evals.careful import Pacer
 from handbook_rag.evals.dataset import DatasetError, GoldenQuestion, locate_evidence
 from handbook_rag.evals.retrieval import FailedQuestion
+from handbook_rag.evals.stage import SavedRunError
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
@@ -851,7 +851,8 @@ def test_the_latest_reply_to_a_question_wins(tmp_path: Path) -> None:
 def test_an_assistant_that_does_everything_right_scores_one_on_every_metric() -> None:
     run = run_answers(QUESTIONS, DOCUMENTS, careful)
 
-    report = summarise_answers(QUESTIONS, run.records)
+    # The judge found both answers backed by the passages they cite.
+    report = summarise_answers(QUESTIONS, run.records, supported={"q001": True, "q002": True})
 
     assert set(report.summary) == set(METRIC_IDS)
     assert {name: estimate.mean for name, estimate in report.summary.items()} == dict.fromkeys(
@@ -860,6 +861,7 @@ def test_an_assistant_that_does_everything_right_scores_one_on_every_metric() ->
     # Each mean says how many questions it rests on.
     assert {name: estimate.count for name, estimate in report.summary.items()} == {
         "right_call": 3,
+        "supported": 2,
         "answered": 2,
         "declined": 1,
         "evidence_in_context": 2,
@@ -867,6 +869,25 @@ def test_an_assistant_that_does_everything_right_scores_one_on_every_metric() ->
         "cites_evidence": 2,
     }
     assert (report.not_asked, report.failures) == (0, [])
+
+
+def test_the_judged_score_is_given_only_to_answers_the_judge_has_ruled_on() -> None:
+    run = run_answers(QUESTIONS, DOCUMENTS, careful)
+
+    unjudged = summarise_answers(QUESTIONS, run.records)
+    partly = summarise_answers(
+        QUESTIONS, run.records, supported={"q001": False, "u001": True, "q999": True}
+    )
+
+    # Without a judge there is no such score: code cannot compute it.
+    assert "supported" not in unjudged.summary
+    # One answer was judged and found wanting. The other answer was not judged, and is
+    # counted neither way. A reply that declined has nothing to judge, whatever is passed.
+    assert (partly.summary["supported"].mean, partly.summary["supported"].count) == (0.0, 1)
+    grades = {item.question.id: item.scores for item in partly.scored}
+    assert grades["q001"]["supported"] == 0.0
+    assert "supported" not in grades["q002"]
+    assert "supported" not in grades["u001"]
 
 
 def test_an_assistant_that_does_everything_wrong_scores_zero() -> None:
@@ -1098,7 +1119,7 @@ def test_a_killed_write_never_leaves_half_a_file(
         replaced.append((source.name, target.name, target.read_text()))
         real_replace(source, target)
 
-    monkeypatch.setattr("handbook_rag.evals.answers.os.replace", watching_replace)
+    monkeypatch.setattr("handbook_rag.evals.stage.os.replace", watching_replace)
 
     add_attempts(run_dir, 7)
 

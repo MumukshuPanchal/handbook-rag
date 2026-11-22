@@ -3,14 +3,17 @@
 import dataclasses
 import json
 import time
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
 from handbook_rag import __version__, wiring
 from handbook_rag.config import get_settings
 from handbook_rag.evals import answers as answer_runs
+from handbook_rag.evals.agreement import measure_agreement
+from handbook_rag.evals.careful import Pacer
 from handbook_rag.evals.compare import (
     ComparisonError,
     compare_runs,
@@ -28,6 +31,8 @@ from handbook_rag.evals.gate import (
     shown_with_minimum,
 )
 from handbook_rag.evals.golden import check_against_corpus, sample_source_chunks
+from handbook_rag.evals.judge import Judgement, SupportCase, SupportJudge
+from handbook_rag.evals.metrics import Estimate
 from handbook_rag.evals.retrieval import (
     METRICS,
     FailedQuestion,
@@ -35,12 +40,31 @@ from handbook_rag.evals.retrieval import (
     write_run,
 )
 from handbook_rag.evals.review import render_review_page
+from handbook_rag.evals.stage import SavedRunError, Stage
+from handbook_rag.evals.support import (
+    CHECK_FILE,
+    UNCLEAR,
+    JudgeRun,
+    agreement_headline,
+    case_key,
+    judge_check_stage,
+    judge_record,
+    judgement_row,
+    labelled_pairs,
+    load_judgements,
+    load_labelled_cases,
+    run_judge,
+    saved_support,
+    support_cases,
+    support_stage,
+)
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.models import Answer
 from handbook_rag.generate.pricing import cost_usd
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import VectorStoreError
 from handbook_rag.ingest.build import CorpusError, build_corpus, chunk_documents, load_snapshot
+from handbook_rag.ingest.models import Chunk
 from handbook_rag.ingest.snapshot import SnapshotError, download_snapshot
 from handbook_rag.ingest.tokens import token_counter
 from handbook_rag.pipeline import answer_question
@@ -48,6 +72,10 @@ from handbook_rag.tracing import record_query, record_results, stage, trace_id, 
 from handbook_rag.wiring import RetrievalMode
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
+
+# How long an evaluation waits after a request fails. An overloaded model usually
+# recovers within a minute or two, and waiting costs no request.
+REST_AFTER_FAILURE_SECONDS = 30.0
 
 _RUN_DESCRIPTIONS = {
     "dense": "Dense retrieval only.",
@@ -441,7 +469,9 @@ def eval_table(
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=1) from error
     labels = metric_labels(runs) or {name: name for name in overviews[0].metrics}
-    chosen = metric or list(labels)
+    # Asked for nothing in particular: every score that at least one run has. A score
+    # the flow declares and no run has yet, such as a judged one, is simply not shown.
+    chosen = metric or [name for name in labels if any(name in o.metrics for o in overviews)]
     unknown = [name for name in chosen if all(name not in o.metrics for o in overviews)]
     if unknown:
         typer.echo(f"error: no run has the metric: {', '.join(unknown)}", err=True)
@@ -507,7 +537,7 @@ def eval_answers(
         CorpusError,
         VectorStoreError,
         GenerationError,
-        answer_runs.SavedRunError,
+        SavedRunError,
     ) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=1) from error
@@ -553,7 +583,7 @@ def eval_answers(
             limit=settings.answer_context_chunks,
         )
 
-    pacer = answer_runs.Pacer(pace)
+    pacer = Pacer(pace)
 
     def before_each_request() -> None:
         pacer.wait()
@@ -569,6 +599,7 @@ def eval_answers(
             wait=before_each_request,
             on_record=keep,
             on_failure=show_failure,
+            rest=lambda: pacer.rest(REST_AFTER_FAILURE_SECONDS),
             max_attempts=max_requests,
         )
     except (DatasetError, answer_runs.ReplyError) as error:
@@ -576,12 +607,19 @@ def eval_answers(
         raise typer.Exit(code=1) from error
     attempts = answer_runs.attempts_so_far(run_dir)
 
-    report = answer_runs.summarise_answers(questions, run.records, run.failures)
+    try:
+        report, judged = _score_answers(
+            run_dir, questions, run.records, run.failures, corpus.chunks
+        )
+    except (DatasetError, SavedRunError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
     if not report.scored:
         for failure in report.failures[:5]:
             typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
         typer.echo(f"error: no question was answered. {run.stopped or ''}".rstrip(), err=True)
         raise typer.Exit(code=1)
+    judge = judge_record(run_dir, judged)
     answer_runs.write_answer_run(
         report,
         output,
@@ -590,6 +628,7 @@ def eval_answers(
         or f"Answers by {settings.answer_model} from {settings.answer_context_chunks} passages.",
         config,
         attempts=attempts,
+        judge=judge,
     )
 
     typer.echo(
@@ -597,14 +636,52 @@ def eval_answers(
         f"{report.not_asked} not asked yet"
     )
     typer.echo(f"  requests     at most {run.attempts} now, {attempts} for this run in all")
-    for metric in answer_runs.METRICS:
-        estimate = report.summary.get(metric["id"])
-        if estimate is None:
-            continue
+    _echo_answer_scores(report, judge)
+    typer.echo(f"  written to   {run_dir}")
+    if run.stopped is not None:
+        typer.echo(f"  stopped: {run.stopped}")
+    for failure in report.failures[:5]:
+        typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
+    if report.not_asked or report.failures:
+        typer.echo("  Run the same command again to continue this run.")
+    # A limit the caller set is a planned stop. Any other early end is a failure.
+    planned = max_requests is not None and run.attempts >= max_requests
+    if report.failures or (run.stopped is not None and not planned):
+        raise typer.Exit(code=1)
+
+
+def _score_answers(
+    run_dir: Path,
+    questions: Sequence[GoldenQuestion],
+    records: Mapping[str, answer_runs.AnswerRecord],
+    failures: Sequence[FailedQuestion],
+    chunks: Sequence[Chunk],
+) -> tuple[answer_runs.AnswerReport, dict[str, Judgement]]:
+    """Score a run's replies, with the judge's verdicts on them where it has any."""
+    judged: dict[str, Judgement] = {}
+    if support_stage(run_dir).rows_path.is_file():
+        cases = support_cases(questions, records, {chunk.chunk_id: chunk for chunk in chunks})
+        judged = saved_support(run_dir, cases)
+    supported = {case_id: judgement.supported for case_id, judgement in judged.items()}
+    report = answer_runs.summarise_answers(
+        questions, records, failures, supported=supported or None
+    )
+    return report, judged
+
+
+def _echo_estimate(label: str, estimate: Estimate | None) -> None:
+    if estimate is not None:
         typer.echo(
-            f"  {metric['label']:<28} {estimate.mean:.3f}  "
+            f"  {label:<28} {estimate.mean:.3f}  "
             f"(95% interval {estimate.low:.3f} to {estimate.high:.3f}, n={estimate.count})"
         )
+
+
+def _echo_answer_scores(
+    report: answer_runs.AnswerReport, judge: Mapping[str, object] | None
+) -> None:
+    for metric in answer_runs.METRICS:
+        _echo_estimate(metric["label"], report.summary.get(metric["id"]))
     for kind, estimates in report.by_group["unanswerable_kind"].items():
         declined = estimates["declined"]
         typer.echo(f"  Declined, {kind} questions: {declined.mean:.3f} (n={declined.count})")
@@ -622,16 +699,377 @@ def eval_answers(
             f"  tokens       {report.tokens['input_mean']:,.0f} in and "
             f"{report.tokens['output_mean']:,.0f} out per question"
         )
+    if judge is not None:
+        _echo_judge_record(judge)
+
+
+def _echo_judge_record(judge: Mapping[str, Any]) -> None:
+    """Say who judged, and how far that judge agreed with labelled answers."""
+    statements = judge["statements"]
+    typer.echo(
+        f"  judge        {judge['config']['judge_model']} read {judge['answers_judged']} "
+        f"answers: {statements['supported']} statements supported, "
+        f"{statements['unsupported']} unsupported, {statements['no_claim']} without a claim"
+    )
+    check = judge.get("check")
+    if not check:
+        typer.echo(
+            "  judge check  none. This judge has not been checked against labelled answers, "
+            "so its score cannot be trusted yet. Run eval-judge, then eval-support --checked."
+        )
+        return
+    agreement = check["agreement"]
+    recall, precision = agreement["recall"], agreement["precision"]
+    caught = "no unsupported statement among the labels"
+    if recall is not None:
+        caught = (
+            f"caught {round(recall['mean'] * recall['count'])} of {recall['count']} "
+            "statements labelled unsupported"
+        )
+    alarms = ""
+    if precision is not None:
+        wrong = precision["count"] - round(precision["mean"] * precision["count"])
+        alarms = f", and {wrong} of its {precision['count']} alarms were false"
+    typer.echo(f"  judge check  it {caught}{alarms} ({check['run']})")
+
+
+def _judge_carefully(
+    stage: Stage,
+    cases: Sequence[SupportCase],
+    judge: SupportJudge,
+    *,
+    pace: float,
+    max_requests: int | None,
+    reuse: Mapping[str, Judgement],
+) -> JudgeRun:
+    """Judge the cases that have no saved verdict, saving each verdict as it arrives.
+
+    A verdict taken from another run is copied into this stage's own file, so that the
+    stage can be read without the run it borrowed from.
+    """
+    own = load_judgements(stage.rows_path)
+    known = {**reuse, **own}
+    to_judge = sum(1 for case in cases if case_key(case) not in known)
+    typer.echo(
+        f"  answers      {len(cases)} to read, {len(cases) - to_judge} already judged, "
+        f"{to_judge if max_requests is None else min(to_judge, max_requests)} to judge now"
+    )
+    if to_judge:
+        typer.echo(
+            f"  pace         at most {pace:g} requests a minute, so at least "
+            f"{max(1, round(min(to_judge, max_requests or to_judge) / pace))} min"
+        )
+    pacer = Pacer(pace)
+    judged_now = 0
+
+    def before_each_request() -> None:
+        pacer.wait()
+        # Counted before the request is sent, so an interrupted run has still counted it.
+        stage.add_attempts()
+
+    def keep(case: SupportCase, judgement: Judgement, new: bool) -> None:
+        nonlocal judged_now
+        if case_key(case) not in own:
+            stage.append(judgement_row(case, judgement))
+        if new:
+            judged_now += 1
+            typer.echo(
+                f"  {judged_now:>4}  {case.case_id}  "
+                f"{'supported' if judgement.supported else 'UNSUPPORTED'}  "
+                f"{judgement.seconds:.1f} s"
+            )
+
+    def show_failure(failure: FailedQuestion) -> None:
+        typer.echo(f"        failed  {failure.question_id}  {failure.message}")
+
+    return run_judge(
+        cases,
+        judge,
+        saved=known,
+        wait=before_each_request,
+        on_judgement=keep,
+        on_failure=show_failure,
+        rest=lambda: pacer.rest(REST_AFTER_FAILURE_SECONDS),
+        max_attempts=max_requests,
+    )
+
+
+def _judge_stopped_badly(run: JudgeRun, max_requests: int | None) -> bool:
+    """Whether a judge run ended in a way the caller did not plan."""
+    planned = max_requests is not None and run.attempts >= max_requests
+    return bool(run.failures) or (run.stopped is not None and not planned)
+
+
+@app.command(name="eval-judge")
+def eval_judge(
+    cases: Annotated[
+        Path, typer.Option(help="Labelled answers: a JSON Lines file with one answer per line.")
+    ] = Path("evals/judge/support/cases.jsonl"),
+    variant: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Name of this check. The default, 'current', is a scratch run that git "
+                "ignores. Name a check to keep it: 'baseline', then 'v1' and so on."
+            )
+        ),
+    ] = "current",
+    output: Annotated[
+        Path, typer.Option(help="Directory that holds one sub-directory per check.")
+    ] = Path("evals/runs/judge"),
+    max_requests: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Stop after this many requests. Run the command again to continue the check.",
+        ),
+    ] = None,
+    restart: Annotated[
+        bool,
+        typer.Option(
+            "--restart", help="Discard the verdicts this check has saved, and start again."
+        ),
+    ] = False,
+) -> None:
+    """Check the judge against labelled answers. One real request for each answer.
+
+    The labelled answers hold real answers and copies with one planted fault. The check
+    reports how many faults the judge catches and how many false alarms it raises.
+    """
+    settings = get_settings()
+    config = wiring.describe_judge(settings)
+    run_dir = output / variant
+    stage = judge_check_stage(run_dir)
+    try:
+        if not restart:
+            stage.check(config)
+        corpus = build_corpus(settings)
+        labelled = load_labelled_cases(cases, {chunk.chunk_id: chunk for chunk in corpus.chunks})
+        judge = wiring.make_judge(settings, attempts=1)
+        stage.open(config, restart=restart)
+    except (DatasetError, CorpusError, GenerationError, SavedRunError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    typer.echo(f"Judge check: {variant}")
+    typer.echo(f"  judge        {settings.judge_model}")
+    run = _judge_carefully(
+        stage,
+        [case.case for case in labelled],
+        judge,
+        pace=settings.eval_requests_per_minute,
+        max_requests=max_requests,
+        reuse={},
+    )
+    pairs = labelled_pairs(labelled, run.judgements)
+    if not pairs:
+        for failure in run.failures[:5]:
+            typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
+        typer.echo(f"error: no answer was judged. {run.stopped or ''}".rstrip(), err=True)
+        raise typer.Exit(code=1)
+    agreement = measure_agreement(pairs)
+    unclear = sum(
+        1
+        for case in labelled
+        if case.case.case_id in run.judgements
+        for verdict in case.expected.values()
+        if verdict == UNCLEAR
+    )
+    disagreements = [
+        {
+            "case": pair.case_id,
+            "statement": pair.statement,
+            "kind": pair.kind,
+            "expected": pair.expected,
+            "judged": pair.judged,
+            "reason": next(
+                verdict.reason
+                for verdict in run.judgements[pair.case_id].verdicts
+                if verdict.number == pair.statement
+            ),
+        }
+        for pair in pairs
+        if pair.expected != pair.judged
+    ]
+    (run_dir / "disagreements.jsonl").write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in disagreements),
+        encoding="utf-8",
+    )
+    judged = list(run.judgements.values())
+    summary = {
+        "description": f"{settings.judge_model} judging the labelled answers in {cases}.",
+        "config": config,
+        "answers_labelled": len(labelled),
+        "answers_judged": len(judged),
+        "answers_failed": len(run.failures),
+        "attempts": stage.attempts(),
+        "statements_left_out_as_unclear": unclear,
+        "agreement": agreement_headline(agreement),
+        "input_tokens": sum(judgement.input_tokens for judgement in judged),
+        "output_tokens": sum(judgement.output_tokens for judgement in judged),
+        "median_seconds": sorted(judgement.seconds for judgement in judged)[len(judged) // 2],
+    }
+    (run_dir / "summary.json").write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    typer.echo(
+        f"  judged       {len(judged)} of {len(labelled)} answers, {len(run.failures)} failed"
+    )
+    typer.echo(
+        f"  requests     at most {run.attempts} now, {stage.attempts()} for this check in all"
+    )
+    typer.echo(
+        f"  statements   {agreement.statements} compared with their labels, "
+        f"{unclear} left out because their label is unclear"
+    )
+    _echo_estimate("Same decision", agreement.same_decision)
+    _echo_estimate("Faults caught (recall)", agreement.recall)
+    _echo_estimate("Alarms that were right", agreement.precision)
+    typer.echo(f"  {'Kappa':<28} {agreement.kappa:.3f}")
+    for kind, (caught, total) in agreement.caught.items():
+        typer.echo(f"  Caught, {kind}: {caught} of {total}")
+    _echo_estimate("Same verdict on the answer", agreement.same_answer)
     typer.echo(f"  written to   {run_dir}")
     if run.stopped is not None:
         typer.echo(f"  stopped: {run.stopped}")
-    for failure in report.failures[:5]:
+    if len(judged) < len(labelled):
+        typer.echo("  Run the same command again to continue this check.")
+    if _judge_stopped_badly(run, max_requests):
+        raise typer.Exit(code=1)
+
+
+@app.command(name="eval-support")
+def eval_support(
+    dataset: Annotated[
+        Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
+    ] = Path("evals/golden/questions.jsonl"),
+    variant: Annotated[
+        str, typer.Option(help="Name of the answer run whose replies are judged.")
+    ] = "current",
+    runs: Annotated[
+        Path, typer.Option(help="Directory that holds one sub-directory per answer run.")
+    ] = Path("evals/runs/answers"),
+    checked: Annotated[
+        Path | None,
+        typer.Option(
+            help=(
+                "A judge check made with eval-judge. Its agreement with the labels is "
+                "reported beside the score, and its verdicts are used again where it read "
+                "exactly the same answer."
+            )
+        ),
+    ] = None,
+    max_requests: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Stop after this many requests. Run the command again to continue.",
+        ),
+    ] = None,
+    restart: Annotated[
+        bool,
+        typer.Option("--restart", help="Discard the verdicts saved for this run, and start again."),
+    ] = False,
+) -> None:
+    """Judge a run's saved answers: is every statement backed by the passage it cites?
+
+    One real request for each answer that has no saved verdict. The replies themselves
+    are not asked again.
+    """
+    settings = get_settings()
+    config = wiring.describe_judge(settings)
+    run_dir = runs / variant
+    stage = support_stage(run_dir)
+    try:
+        records = answer_runs.load_records(run_dir / answer_runs.ANSWERS_FILE)
+        if not records:
+            raise SavedRunError(
+                f"{run_dir} holds no replies. Make the answer run first, with eval-answers."
+            )
+        if not restart:
+            stage.check(config)
+        reuse: dict[str, Judgement] = {}
+        check: dict[str, Any] | None = None
+        if checked is not None:
+            check_stage = judge_check_stage(checked)
+            if check_stage.config() != config:
+                raise SavedRunError(
+                    f"the check in {checked} was made with another judge. Check this judge "
+                    "with eval-judge, or leave --checked out."
+                )
+            reuse = load_judgements(check_stage.rows_path)
+            agreement = json.loads((checked / "summary.json").read_text(encoding="utf-8"))
+            check = {"run": str(checked), "config": config, "agreement": agreement["agreement"]}
+        questions = _load_questions(dataset)
+        corpus = build_corpus(settings)
+        cases = support_cases(
+            questions, records, {chunk.chunk_id: chunk for chunk in corpus.chunks}
+        )
+        judge = wiring.make_judge(settings, attempts=1)
+        stage.open(config, restart=restart)
+    except (
+        DatasetError,
+        CorpusError,
+        GenerationError,
+        SavedRunError,
+        OSError,
+        KeyError,
+        json.JSONDecodeError,
+    ) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    if check is not None:
+        (run_dir / CHECK_FILE).write_text(
+            json.dumps(check, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+
+    typer.echo(f"Support of answers: {variant}")
+    typer.echo(f"  judge        {settings.judge_model}")
+    run = _judge_carefully(
+        stage,
+        cases,
+        judge,
+        pace=settings.eval_requests_per_minute,
+        max_requests=max_requests,
+        reuse=reuse,
+    )
+    report, judged = _score_answers(
+        run_dir, questions, records, answer_runs.load_failures(run_dir), corpus.chunks
+    )
+    if not judged:
+        for failure in run.failures[:5]:
+            typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
+        typer.echo(f"error: no answer was judged. {run.stopped or ''}".rstrip(), err=True)
+        raise typer.Exit(code=1)
+    record = judge_record(run_dir, judged)
+    answers_stage = answer_runs.answers_stage(run_dir)
+    answer_runs.write_answer_run(
+        report,
+        runs,
+        variant,
+        answer_runs.saved_description(run_dir)
+        or f"Answers by {answers_stage.config().get('answer_model', 'a model')}.",
+        answers_stage.config(),
+        attempts=answers_stage.attempts(),
+        judge=record,
+    )
+    typer.echo(
+        f"  judged       {len(judged)} of {len(cases)} answers, {run.reused} of them taken "
+        f"from an earlier check, {len(run.failures)} failed"
+    )
+    typer.echo(
+        f"  requests     at most {run.attempts} now, {stage.attempts()} for this stage in all"
+    )
+    _echo_answer_scores(report, record)
+    typer.echo(f"  written to   {run_dir}")
+    if run.stopped is not None:
+        typer.echo(f"  stopped: {run.stopped}")
+    for failure in run.failures[:5]:
         typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
-    if report.not_asked or report.failures:
-        typer.echo("  Run the same command again to continue this run.")
-    # A limit the caller set is a planned stop. Any other early end is a failure.
-    planned = max_requests is not None and run.attempts >= max_requests
-    if report.failures or (run.stopped is not None and not planned):
+    if len(judged) < len(cases):
+        typer.echo("  Run the same command again to continue.")
+    if _judge_stopped_badly(run, max_requests):
         raise typer.Exit(code=1)
 
 

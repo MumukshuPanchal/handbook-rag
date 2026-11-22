@@ -11,10 +11,8 @@ whole answer is then computed in code: an answer is supported when none of its s
 is unsupported.
 """
 
-import json
 import re
 import time
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, get_args
 
@@ -322,25 +320,3 @@ def _reply_text(response: types.GenerateContentResponse) -> str:
     if content is None or not content.parts:
         return ""
     return "".join(part.text for part in content.parts if part.text and not part.thought)
-
-
-def cases_as_json(cases: Sequence[SupportCase]) -> str:
-    """The cases as JSON Lines, for keeping beside a set of labels."""
-    return "".join(
-        json.dumps(
-            {
-                "case": case.case_id,
-                "question": case.question,
-                "passages": [
-                    {"number": p.number, "title": p.title, "text": p.text} for p in case.passages
-                ],
-                "statements": [
-                    {"number": s.number, "text": s.text, "cites": list(s.cites)}
-                    for s in case.statements
-                ],
-            },
-            ensure_ascii=False,
-        )
-        + "\n"
-        for case in cases
-    )

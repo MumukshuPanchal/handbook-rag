@@ -14,6 +14,7 @@ from google.genai import types as genai_types
 from qdrant_client import QdrantClient
 
 from handbook_rag.config import Settings
+from handbook_rag.evals.judge import SUPPORT_INSTRUCTIONS, GeminiSupportJudge, SupportJudge
 from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
@@ -200,13 +201,21 @@ def describe_generation(settings: Settings) -> dict[str, object]:
 
 
 def _make_gemini_generator(settings: Settings, attempts: int) -> GeminiGenerator:
+    return GeminiGenerator(
+        _gemini_client(settings, attempts),
+        model=settings.answer_model,
+        max_tokens=settings.answer_max_tokens,
+    )
+
+
+def _gemini_client(settings: Settings, attempts: int) -> genai.Client:
     key = settings.gemini_api_key
     if key is None or not key.get_secret_value():
         raise GenerationError(
             "No Gemini API key was found. Create a free key in Google AI Studio and put it "
             "in a .env file in the project folder, as GEMINI_API_KEY."
         )
-    client = genai.Client(
+    return genai.Client(
         api_key=key.get_secret_value(),
         http_options=genai_types.HttpOptions(
             timeout=int(MODEL_TIMEOUT_SECONDS * 1000),  # the SDK counts in milliseconds
@@ -215,9 +224,35 @@ def _make_gemini_generator(settings: Settings, attempts: int) -> GeminiGenerator
             ),
         ),
     )
-    return GeminiGenerator(
-        client, model=settings.answer_model, max_tokens=settings.answer_max_tokens
+
+
+def make_judge(settings: Settings, *, attempts: int | None = None) -> SupportJudge:
+    """Build the judge that checks whether statements are backed by their passages.
+
+    ``attempts`` is how often one request may be sent, as for :func:`make_generator`. An
+    evaluation passes 1.
+    """
+    if attempts is not None and attempts < 1:
+        raise ValueError("A request has to be sent at least once.")
+    return GeminiSupportJudge(
+        _gemini_client(settings, attempts or GEMINI_ATTEMPTS),
+        model=settings.judge_model,
+        max_tokens=settings.judge_max_tokens,
     )
+
+
+def describe_judge(settings: Settings) -> dict[str, object]:
+    """The settings that decide a verdict, for recording with the verdicts.
+
+    The instructions are recorded as a short hash, as for an answer. Verdicts made under
+    reworded instructions come from a different judge, and its agreement with the labels
+    has to be measured again.
+    """
+    return {
+        "judge_model": settings.judge_model,
+        "judge_max_tokens": settings.judge_max_tokens,
+        "judge_instructions": hashlib.sha256(SUPPORT_INSTRUCTIONS.encode("utf-8")).hexdigest()[:16],
+    }
 
 
 def _make_claude_generator(settings: Settings, attempts: int | None) -> ClaudeGenerator:

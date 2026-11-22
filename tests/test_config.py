@@ -136,3 +136,22 @@ def test_an_evaluation_sends_ten_requests_a_minute_unless_told_otherwise(
 def test_the_evaluation_pace_must_be_a_usable_rate(rate: float) -> None:
     with pytest.raises(ValidationError):
         Settings(eval_requests_per_minute=rate)
+
+
+def test_the_judge_is_the_answer_model_unless_told_otherwise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert Settings().judge_model == "gemini-3.5-flash-lite"
+    assert Settings().judge_max_tokens == 2000
+
+    monkeypatch.setenv("HANDBOOK_RAG_JUDGE_MODEL", "gemini-9-judge")
+
+    assert Settings().judge_model == "gemini-9-judge"
+
+
+@pytest.mark.parametrize(
+    "model", ["claude-haiku-5-5", "gpt-9", "gemini-", "gemini", "gemini-flash-latest", ""]
+)
+def test_the_judge_must_be_an_exact_gemini_model(model: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(judge_model=model)

@@ -4,11 +4,12 @@ from pydantic import SecretStr
 
 from handbook_rag import wiring
 from handbook_rag.config import Settings
+from handbook_rag.evals.judge import SUPPORT_INSTRUCTIONS, GeminiSupportJudge
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
 from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT
-from handbook_rag.wiring import describe_generation, make_generator
+from handbook_rag.wiring import describe_generation, describe_judge, make_generator, make_judge
 
 CLAUDE = "claude-haiku-5-5"
 
@@ -173,3 +174,51 @@ def test_a_claude_run_records_its_own_instructions_and_effort() -> None:
     assert claude["answer_effort"] == "high"
     assert claude["instructions"] != gemini["instructions"]
     assert "answer_effort" not in gemini
+
+
+def test_the_judge_is_built_for_the_configured_model_with_the_key_passed_directly() -> None:
+    settings = Settings(
+        gemini_api_key=SecretStr("test-key-not-a-real-one"),
+        judge_model="gemini-9-judge",
+        judge_max_tokens=321,
+    )
+
+    judge = make_judge(settings, attempts=1)
+
+    assert isinstance(judge, GeminiSupportJudge)
+    assert judge.model == "gemini-9-judge"
+    assert judge._max_tokens == 321
+    assert judge._client._api_client.api_key == "test-key-not-a-real-one"
+    options = judge._client._api_client._http_options
+    assert options.timeout == 60_000
+    assert options.retry_options is not None
+    # One attempt: a run that counts its requests cannot have them sent again unseen.
+    assert options.retry_options.attempts == 1
+    assert make_judge(settings)._client._api_client._http_options.retry_options.attempts == 3  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("key", [None, SecretStr("")])
+def test_a_judge_without_a_key_is_a_clear_error(key: SecretStr | None) -> None:
+    with pytest.raises(GenerationError, match="GEMINI_API_KEY"):
+        make_judge(Settings(gemini_api_key=key))
+
+
+def test_a_judge_request_cannot_be_sent_fewer_than_one_time() -> None:
+    with pytest.raises(ValueError, match="at least once"):
+        make_judge(Settings(gemini_api_key=SecretStr("k")), attempts=0)
+
+
+def test_verdicts_record_the_judge_that_made_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    described = describe_judge(Settings())
+
+    assert described == {
+        "judge_model": "gemini-3.5-flash-lite",
+        "judge_max_tokens": 2000,
+        "judge_instructions": described["judge_instructions"],
+    }
+    assert len(str(described["judge_instructions"])) == 16
+
+    # Reworded instructions are another judge, whose agreement has to be measured again.
+    monkeypatch.setattr(wiring, "SUPPORT_INSTRUCTIONS", SUPPORT_INSTRUCTIONS + " Be strict.")
+    assert describe_judge(Settings())["judge_instructions"] != described["judge_instructions"]
+    assert describe_judge(Settings(judge_model="gemini-9-judge"))["judge_model"] == "gemini-9-judge"

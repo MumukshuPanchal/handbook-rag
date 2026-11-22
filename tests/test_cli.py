@@ -6,9 +6,11 @@ import pytest
 from qdrant_client import QdrantClient
 from typer.testing import CliRunner
 
-from handbook_rag import __version__
+from handbook_rag import __version__, wiring
 from handbook_rag.cli import app
-from handbook_rag.index.store import QdrantVectorStore
+from handbook_rag.config import Settings, get_settings
+from handbook_rag.index.store import QdrantVectorStore, ScoredChunk, VectorStoreError
+from handbook_rag.retrieve.dense import Retriever
 from tests.support import (
     FakeEmbedder,
     FakeReranker,
@@ -550,3 +552,133 @@ def test_eval_retrieval_takes_its_mode_and_reranking_from_the_settings(
     assert run_summary(runs, "v1")["description"] == "Keyword search only (BM25)."
     assert run_summary(runs, "v1")["config"]["retrieval_mode"] == "sparse"
     assert run_summary(runs, "v1")["config"]["rerank"] is False
+
+
+def write_gate(path: Path, minimums: dict[str, float]) -> Path:
+    path.write_text(json.dumps({"distractor_pages": 1, "seed": 1, "minimums": minimums}))
+    return path
+
+
+def gate_command(tmp_path: Path, minimums: dict[str, float]) -> list[str]:
+    dataset = tmp_path / "questions.jsonl"
+    dataset.write_text(golden_rows("sixteen weeks of paid leave"))
+    config = write_gate(tmp_path / "gate.json", minimums)
+    return ["eval-gate", "--dataset", str(dataset), "--config", str(config)]
+
+
+def test_eval_gate_scores_a_slice_in_memory_and_passes(
+    fake_pipeline: FakeEmbedder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def no_server(_settings: Settings) -> QdrantVectorStore:
+        raise VectorStoreError("the gate must not need a vector store server")
+
+    monkeypatch.setattr("handbook_rag.wiring.make_store", no_server)
+
+    result = runner.invoke(app, gate_command(tmp_path, {"hit@5": 1.0, "mrr@10": 1.0}))
+
+    assert result.exit_code == 0, result.output
+    assert "pages       2 of 2: 1 with evidence, 1 without (seed 1)" in result.output
+    assert "chunks      2, indexed in memory" in result.output
+    assert "mode        hybrid\n" in result.output
+    assert "1 scored, 0 failed, 1 unanswerable" in result.output
+    assert "Hit@5       1.000  minimum 1.000  ok" in result.output
+    assert "MRR@10      1.000  minimum 1.000  ok" in result.output
+    assert "Gate passed." in result.output
+    assert len(fake_pipeline.embedded) == 2, "both pages of the slice are embedded"
+    assert len(fake_pipeline.queries) == 1, "the default retriever, hybrid, embeds the question"
+
+
+class WorstFirst:
+    """A retriever with a ranking bug: it returns what it found in reverse order."""
+
+    def __init__(self, base: Retriever) -> None:
+        self._base = base
+
+    def retrieve(self, query: str, *, limit: int, section: str | None = None) -> list[ScoredChunk]:
+        return list(reversed(self._base.retrieve(query, limit=limit, section=section)))
+
+
+class NothingFound:
+    """A retriever that has stopped finding anything."""
+
+    def retrieve(self, query: str, *, limit: int, section: str | None = None) -> list[ScoredChunk]:
+        return []
+
+
+class Unreachable:
+    """A retriever whose vector store has gone away."""
+
+    def retrieve(self, query: str, *, limit: int, section: str | None = None) -> list[ScoredChunk]:
+        raise VectorStoreError("connection refused")
+
+
+@pytest.mark.usefixtures("fake_pipeline")
+def test_eval_gate_fails_when_ranking_gets_worse(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    real = wiring.make_retriever
+
+    def broken(*args: Any, **kwargs: Any) -> Retriever:
+        return WorstFirst(real(*args, **kwargs))
+
+    monkeypatch.setattr("handbook_rag.wiring.make_retriever", broken)
+
+    result = runner.invoke(app, gate_command(tmp_path, {"hit@5": 1.0, "mrr@10": 0.9}))
+
+    assert result.exit_code == 1
+    assert "Hit@5       1.000  minimum 1.000  ok" in result.output
+    assert "MRR@10      0.500  minimum 0.900  BELOW" in result.output
+    assert "Gate failed:" in result.output
+    assert "mrr@10 is 0.500, below the minimum of 0.900" in result.output
+    assert "Gate passed" not in result.output
+
+
+@pytest.mark.usefixtures("fake_pipeline")
+def test_eval_gate_fails_when_a_question_cannot_be_searched(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "handbook_rag.wiring.make_retriever", lambda *_args, **_kwargs: Unreachable()
+    )
+
+    result = runner.invoke(app, gate_command(tmp_path, {"hit@5": 0.5}))
+
+    assert result.exit_code == 1
+    assert "0 scored, 1 failed" in result.output
+    assert "1 of 1 questions could not be searched; the first was q001" in result.output
+    assert "VectorStoreError: connection refused" in result.output
+    assert "Gate passed" not in result.output
+
+
+@pytest.mark.usefixtures("fake_pipeline")
+def test_eval_gate_names_the_questions_it_did_not_find(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "handbook_rag.wiring.make_retriever", lambda *_args, **_kwargs: NothingFound()
+    )
+
+    result = runner.invoke(app, gate_command(tmp_path, {"hit@5": 1.0}))
+
+    assert result.exit_code == 1
+    assert "Hit@5       0.000  minimum 1.000  BELOW" in result.output
+    assert "not found in the top five: q001" in result.output
+    assert "hit@5 is 0.000, below the minimum of 1.000" in result.output
+
+
+@pytest.mark.usefixtures("fake_pipeline")
+def test_eval_gate_explains_missing_inputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    command = gate_command(tmp_path, {"hit@5": 1.0})
+
+    no_settings = runner.invoke(app, [*command[:3], "--config", str(tmp_path / "none.json")])
+    no_questions = runner.invoke(app, ["eval-gate", "--dataset", "none.jsonl", *command[3:]])
+    get_settings.cache_clear()
+    monkeypatch.setenv("HANDBOOK_RAG_DATA_DIR", str(tmp_path / "empty"))
+    no_snapshot = runner.invoke(app, command)
+
+    assert no_settings.exit_code == 1
+    assert "gate settings not found" in no_settings.output
+    assert no_questions.exit_code == 1
+    assert "golden set not found" in no_questions.output
+    assert no_snapshot.exit_code == 1
+    assert "handbook-rag snapshot" in no_snapshot.output

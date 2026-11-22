@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant index search eval-retrieval eval-compare eval-table golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant index search eval-retrieval eval-compare eval-table eval-gate golden-check golden-review
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -50,6 +50,9 @@ eval-compare: ## Compare two runs: make eval-compare base=baseline candidate=v1
 
 eval-table: ## Print a Markdown table of every evaluation run
 	uv run handbook-rag eval-table --metric hit@5 --metric hit@1 --metric mrr@10 --metric ndcg@10
+
+eval-gate: ## The CI check: score the default retrieval on a slice of the handbook, in memory
+	uv run handbook-rag eval-gate
 
 golden-check: ## Check every golden set label against the corpus
 	uv run handbook-rag golden-check

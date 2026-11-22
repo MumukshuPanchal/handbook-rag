@@ -10,9 +10,9 @@ from typing import Literal
 from qdrant_client import QdrantClient
 
 from handbook_rag.config import Settings
-from handbook_rag.index.embedder import SentenceTransformerEmbedder
-from handbook_rag.index.sparse import Bm25Encoder
-from handbook_rag.index.store import QdrantVectorStore, VectorStoreError
+from handbook_rag.index.embedder import Embedder, SentenceTransformerEmbedder
+from handbook_rag.index.sparse import Bm25Encoder, SparseEncoder
+from handbook_rag.index.store import QdrantVectorStore, VectorStore, VectorStoreError
 from handbook_rag.retrieve.dense import DenseRetriever, Retriever
 from handbook_rag.retrieve.hybrid import HybridRetriever
 from handbook_rag.retrieve.rerank import CrossEncoderReranker, RerankingRetriever
@@ -39,6 +39,14 @@ def make_store(settings: Settings) -> QdrantVectorStore:
             f"Cannot reach Qdrant at {settings.qdrant_url}. Start it with `make qdrant`."
         ) from error
     return QdrantVectorStore(client, settings.collection_name)
+
+
+def make_memory_store(collection: str) -> QdrantVectorStore:
+    """A vector store held in this process's memory, for a small index that is thrown away.
+
+    It needs no server, which is what lets the retrieval gate run in CI.
+    """
+    return QdrantVectorStore(QdrantClient(":memory:"), collection)
 
 
 def make_sparse_encoder(settings: Settings) -> Bm25Encoder:
@@ -80,24 +88,35 @@ def describe_retrieval(
 
 
 def make_retriever(
-    settings: Settings, mode: RetrievalMode | None = None, rerank: bool | None = None
+    settings: Settings,
+    mode: RetrievalMode | None = None,
+    rerank: bool | None = None,
+    *,
+    store: VectorStore | None = None,
+    embedder: Embedder | None = None,
+    sparse_encoder: SparseEncoder | None = None,
 ) -> Retriever:
     """Build the retriever for ``mode`` and ``rerank``, or for the values in the settings.
 
     Only the models a configuration needs are loaded: keyword search never loads the
     embedding model, and nothing loads the reranker unless reranking is on.
+
+    A caller that has just built an index passes the ``store``, ``embedder`` and
+    ``sparse_encoder`` it used, so the retriever searches that index and no model is
+    loaded a second time. Whatever is not passed is built from the settings.
     """
     mode = mode or settings.retrieval_mode
-    store = make_store(settings)
+    if store is None:
+        store = make_store(settings)
     retriever: Retriever
     if mode == "dense":
-        retriever = DenseRetriever(make_embedder(settings), store)
+        retriever = DenseRetriever(embedder or make_embedder(settings), store)
     elif mode == "sparse":
-        retriever = SparseRetriever(make_sparse_encoder(settings), store)
+        retriever = SparseRetriever(sparse_encoder or make_sparse_encoder(settings), store)
     else:
         retriever = HybridRetriever(
-            DenseRetriever(make_embedder(settings), store),
-            SparseRetriever(make_sparse_encoder(settings), store),
+            DenseRetriever(embedder or make_embedder(settings), store),
+            SparseRetriever(sparse_encoder or make_sparse_encoder(settings), store),
             candidates=settings.fusion_candidates,
             rrf_k=settings.rrf_k,
         )

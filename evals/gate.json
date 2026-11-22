@@ -1,0 +1,9 @@
+{
+  "distractor_pages": 0,
+  "seed": 7,
+  "minimums": {
+    "hit@5": 0.97,
+    "mrr@10": 0.84
+  },
+  "note": "Provisional: measured on a laptop on 2026-11-22, to be replaced by the values CI measures."
+}

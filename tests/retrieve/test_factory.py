@@ -3,12 +3,13 @@ from qdrant_client import QdrantClient
 
 from handbook_rag import wiring
 from handbook_rag.config import Settings
-from handbook_rag.index.store import QdrantVectorStore
+from handbook_rag.index.indexer import index_chunks
+from handbook_rag.index.store import QdrantVectorStore, VectorStoreError
 from handbook_rag.retrieve.dense import DenseRetriever
 from handbook_rag.retrieve.hybrid import HybridRetriever
 from handbook_rag.retrieve.rerank import RerankingRetriever
 from handbook_rag.retrieve.sparse import SparseRetriever
-from tests.support import FakeEmbedder, FakeReranker, FakeSparseEncoder
+from tests.support import FakeEmbedder, FakeReranker, FakeSparseEncoder, make_chunk
 
 
 @pytest.fixture
@@ -98,3 +99,44 @@ def test_a_run_description_defaults_to_the_settings() -> None:
 
     assert described["retrieval_mode"] == "sparse"
     assert described["rerank"] is True
+
+
+def test_a_retriever_built_from_existing_parts_searches_that_index_and_loads_nothing(
+    loaded: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_server(_settings: Settings) -> QdrantVectorStore:
+        raise VectorStoreError("no server should be contacted")
+
+    monkeypatch.setattr(wiring, "make_store", no_server)
+    chunk = make_chunk("New parents get sixteen weeks of paid leave.")
+    embedder, sparse_encoder = FakeEmbedder(), FakeSparseEncoder()
+    store = wiring.make_memory_store("scratch")
+    index_chunks([chunk], embedder=embedder, sparse_encoder=sparse_encoder, store=store)
+
+    retriever = wiring.make_retriever(
+        Settings(), "hybrid", store=store, embedder=embedder, sparse_encoder=sparse_encoder
+    )
+
+    assert isinstance(retriever, HybridRetriever)
+    assert loaded == []
+    (found,) = retriever.retrieve("how many weeks of paid leave", limit=5)
+    assert found.chunk.chunk_id == chunk.chunk_id
+
+
+def test_parts_that_are_not_passed_are_built_from_the_settings(loaded: list[str]) -> None:
+    store = wiring.make_memory_store("scratch")
+
+    assert isinstance(wiring.make_retriever(Settings(), "dense", store=store), DenseRetriever)
+    assert loaded == ["embedder"]
+
+
+def test_two_memory_stores_do_not_share_their_contents() -> None:
+    chunk = make_chunk("New parents get sixteen weeks of paid leave.")
+    embedder, sparse_encoder = FakeEmbedder(), FakeSparseEncoder()
+    first, second = wiring.make_memory_store("scratch"), wiring.make_memory_store("scratch")
+
+    index_chunks([chunk], embedder=embedder, sparse_encoder=sparse_encoder, store=first)
+    second.ensure_collection(embedder.dimension)
+
+    assert first.existing_ids([chunk.chunk_id]) == {chunk.chunk_id}
+    assert second.existing_ids([chunk.chunk_id]) == set()

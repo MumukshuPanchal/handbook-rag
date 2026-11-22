@@ -18,12 +18,19 @@ from handbook_rag.evals.compare import (
     results_table,
 )
 from handbook_rag.evals.dataset import DatasetError, load_golden_set
+from handbook_rag.evals.gate import (
+    GateError,
+    evidence_pages,
+    gate_problems,
+    load_gate_config,
+    select_pages,
+)
 from handbook_rag.evals.golden import check_against_corpus, sample_source_chunks
 from handbook_rag.evals.retrieval import METRICS, evaluate_retrieval, write_run
 from handbook_rag.evals.review import render_review_page
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import VectorStoreError
-from handbook_rag.ingest.build import CorpusError, build_corpus
+from handbook_rag.ingest.build import CorpusError, build_corpus, chunk_documents, load_snapshot
 from handbook_rag.ingest.snapshot import SnapshotError, download_snapshot
 from handbook_rag.ingest.tokens import token_counter
 from handbook_rag.wiring import RetrievalMode
@@ -373,6 +380,83 @@ def eval_table(
         typer.echo(f"error: no such metric in every run: {', '.join(unknown)}", err=True)
         raise typer.Exit(code=1)
     typer.echo(results_table(overviews, labels, chosen), nl=False)
+
+
+@app.command(name="eval-gate")
+def eval_gate(
+    dataset: Annotated[
+        Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
+    ] = Path("evals/golden/questions.jsonl"),
+    config: Annotated[
+        Path, typer.Option(help="The gate's settings: the size of the slice and the minimums.")
+    ] = Path("evals/gate.json"),
+) -> None:
+    """Score the default retriever on a slice of the handbook, and fail below fixed minimums.
+
+    Made for CI. It needs the snapshot and the models but no vector store server: the
+    pages that hold the golden set's evidence, and a fixed sample of others, are
+    indexed in memory.
+    """
+    settings = get_settings()
+    try:
+        gate = load_gate_config(config)
+        questions = load_golden_set(dataset)
+        snapshot = load_snapshot(settings)
+        pages = select_pages(
+            snapshot.documents, questions, distractors=gate.distractor_pages, seed=gate.seed
+        )
+        chunks = chunk_documents(pages, settings)
+        store = wiring.make_memory_store("retrieval-gate")
+        embedder = wiring.make_embedder(settings)
+        sparse_encoder = wiring.make_sparse_encoder(settings)
+        indexed = index_chunks(
+            chunks, embedder=embedder, sparse_encoder=sparse_encoder, store=store
+        )
+        retriever = wiring.make_retriever(
+            settings, store=store, embedder=embedder, sparse_encoder=sparse_encoder
+        )
+        report = evaluate_retrieval(questions, pages, retriever)
+    except FileNotFoundError as error:
+        typer.echo(f"error: golden set not found: {dataset}", err=True)
+        raise typer.Exit(code=1) from error
+    except (GateError, DatasetError, CorpusError, VectorStoreError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    with_evidence = len(evidence_pages(questions) & {page.doc_id for page in pages})
+    typer.echo("Retrieval gate")
+    typer.echo(
+        f"  pages       {len(pages):,} of {len(snapshot.documents):,}: {with_evidence:,} with "
+        f"evidence, {len(pages) - with_evidence:,} without (seed {gate.seed})"
+    )
+    typer.echo(f"  chunks      {len(chunks):,}, indexed in memory in {indexed.seconds:.0f} s")
+    typer.echo(
+        f"  mode        {settings.retrieval_mode}"
+        f"{', reranked with ' + settings.rerank_model if settings.rerank else ''}"
+    )
+    typer.echo(
+        f"  questions   {len(report.results)} scored, {len(report.failures)} failed, "
+        f"{report.not_scored} unanswerable (not scored)"
+    )
+    labels = {str(metric["id"]): str(metric["label"]) for metric in METRICS}
+    for metric, minimum in gate.minimums.items():
+        estimate = report.summary.get(metric)
+        if estimate is not None:
+            verdict = "ok" if estimate.mean >= minimum else "BELOW"
+            typer.echo(
+                f"  {labels[metric]:<10}  {estimate.mean:.3f}  minimum {minimum:.3f}  {verdict}"
+            )
+    missed = [result.question.id for result in report.results if not result.scores["hit@5"]]
+    if missed:
+        typer.echo(f"  not found in the top five: {', '.join(missed)}")
+
+    problems = gate_problems(report, gate.minimums)
+    if problems:
+        typer.echo("Gate failed:", err=True)
+        for problem in problems:
+            typer.echo(f"  {problem}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo("Gate passed.")
 
 
 @app.command(name="golden-candidates")

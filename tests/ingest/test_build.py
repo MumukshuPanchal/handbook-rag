@@ -4,7 +4,12 @@ import pytest
 
 from handbook_rag.config import Settings
 from handbook_rag.ingest import build
-from handbook_rag.ingest.build import CorpusError, build_corpus
+from handbook_rag.ingest.build import (
+    CorpusError,
+    build_corpus,
+    chunk_documents,
+    load_snapshot,
+)
 from tests.support import count_words, write_snapshot
 
 COMMIT = "a" * 40
@@ -54,3 +59,44 @@ def test_snapshot_of_a_different_commit_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(CorpusError, match="settings pin"):
         build_corpus(settings_for(tmp_path))
+
+
+def test_loading_and_chunking_separately_gives_what_building_the_corpus_gives(
+    tmp_path: Path,
+) -> None:
+    write_snapshot(
+        tmp_path,
+        COMMIT,
+        {
+            "finance/expenses.md": PAGE,
+            "finance/travel.md": PAGE + " Book early.",
+            "stub.md": "Moved.",
+        },
+    )
+    settings = settings_for(tmp_path)
+
+    snapshot = load_snapshot(settings)
+    corpus = build_corpus(settings)
+
+    assert snapshot.documents == corpus.documents
+    assert snapshot.skipped == corpus.skipped == {"too little text": 1}
+    assert snapshot.source_commit == COMMIT
+    assert chunk_documents(snapshot.documents, settings) == corpus.chunks
+
+
+def test_some_pages_can_be_chunked_without_the_rest(tmp_path: Path) -> None:
+    write_snapshot(
+        tmp_path, COMMIT, {"finance/expenses.md": PAGE, "finance/travel.md": PAGE + " Book early."}
+    )
+    settings = settings_for(tmp_path)
+    documents = load_snapshot(settings).documents
+
+    chunks = chunk_documents(documents[1:], settings)
+
+    assert {chunk.doc_id for chunk in chunks} == {"finance/travel.md"}
+    assert chunk_documents([], settings) == []
+
+
+def test_loading_a_missing_snapshot_is_reported_with_the_fix(tmp_path: Path) -> None:
+    with pytest.raises(CorpusError, match="handbook-rag snapshot"):
+        load_snapshot(settings_for(tmp_path))

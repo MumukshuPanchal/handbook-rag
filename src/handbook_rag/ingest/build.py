@@ -2,6 +2,7 @@
 
 import json
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,8 +32,17 @@ def snapshot_dir(settings: Settings) -> Path:
     return settings.data_dir / "handbook"
 
 
-def build_corpus(settings: Settings) -> Corpus:
-    """Load, clean and chunk every page of the snapshot on disk."""
+@dataclass(frozen=True, slots=True)
+class Snapshot:
+    """The pages of the snapshot on disk, cleaned and not yet chunked."""
+
+    documents: list[Document]
+    skipped: Counter[str]
+    source_commit: str
+
+
+def load_snapshot(settings: Settings) -> Snapshot:
+    """Load and clean every page of the snapshot on disk."""
     manifest_path = snapshot_dir(settings) / "manifest.json"
     if not manifest_path.is_file():
         raise CorpusError(
@@ -52,17 +62,26 @@ def build_corpus(settings: Settings) -> Corpus:
         base_url=settings.handbook_base_url,
         min_chars=settings.min_page_chars,
     )
-    config = settings.chunking
+    return Snapshot(loaded.documents, loaded.skipped, source_commit)
+
+
+def chunk_documents(documents: Sequence[Document], settings: Settings) -> list[Chunk]:
+    """Split pages into chunks, measured in the embedding model's tokens."""
     count_tokens = token_counter(settings.embedding_model)
-    chunks = [
+    return [
         chunk
-        for document in loaded.documents
-        for chunk in chunk_document(document, count_tokens=count_tokens, config=config)
+        for document in documents
+        for chunk in chunk_document(document, count_tokens=count_tokens, config=settings.chunking)
     ]
+
+
+def build_corpus(settings: Settings) -> Corpus:
+    """Load, clean and chunk every page of the snapshot on disk."""
+    snapshot = load_snapshot(settings)
     return Corpus(
-        documents=loaded.documents,
-        chunks=chunks,
-        skipped=loaded.skipped,
-        chunking_version=config.version,
-        source_commit=source_commit,
+        documents=snapshot.documents,
+        chunks=chunk_documents(snapshot.documents, settings),
+        skipped=snapshot.skipped,
+        chunking_version=settings.chunking.version,
+        source_commit=snapshot.source_commit,
     )

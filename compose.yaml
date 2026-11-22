@@ -1,7 +1,45 @@
-# Local services. `make qdrant` starts the vector store, `make traces` the trace backend.
+# The whole system: `docker compose up` starts the API, the vector store and the trace
+# backend. `make qdrant` and `make traces` start one service each, for development
+# with the API running outside Docker.
 name: handbook-rag
 
 services:
+  # The HTTP API. It serves once the index exists; until then /health answers 503.
+  # Build the index with:
+  #   docker compose run --rm api handbook-rag snapshot
+  #   docker compose run --rm api handbook-rag index
+  api:
+    build: .
+    image: handbook-rag:local
+    environment:
+      HANDBOOK_RAG_QDRANT_URL: http://qdrant:6333
+      HANDBOOK_RAG_TRACING: "true"
+      HANDBOOK_RAG_OTLP_ENDPOINT: http://jaeger:4318
+    # No authentication, so it is published on this machine only.
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - handbook-data:/app/data # the handbook snapshot
+      - model-cache:/home/app/.cache # model files, downloaded on first start
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    healthcheck:
+      # Python is in the image; curl is not.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      # The first start downloads the models, which takes a while.
+      start_period: 180s
+    restart: unless-stopped
+
   qdrant:
     image: qdrant/qdrant:v1.20.2
     # Qdrant has no authentication by default, so it listens on this machine only.
@@ -30,3 +68,5 @@ services:
 
 volumes:
   qdrant-data:
+  handbook-data:
+  model-cache:

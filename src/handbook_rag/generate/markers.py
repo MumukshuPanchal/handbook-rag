@@ -196,8 +196,9 @@ class MarkerParser:
             return token.end()
         cited = self._passages(token.group("numbers"))
         if cited:
-            # A citation is taken out of the text, so it leaves no trace on the line: what
-            # starts a line, or continues a run of backticks, is judged on what is shown.
+            # A citation is taken out of the text, so it leaves no trace: the line can
+            # still open a code block as if the marker had not been there, and backticks
+            # after it still continue a run already found too long to mark code.
             self._cite(cited)
         else:
             self._show(token.group(), shown)  # not a citation: it stays as text

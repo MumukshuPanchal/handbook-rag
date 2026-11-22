@@ -506,6 +506,19 @@ def test_a_failure_after_part_of_the_answer_arrived_is_still_an_error() -> None:
     assert "".join(received).startswith("Sixteen weeks.")
 
 
+def test_a_mistake_in_our_own_settings_is_not_reported_as_an_unreadable_reply() -> None:
+    client = FakeClient(answer_pieces("Sixteen weeks [1]."))
+    generator = GeminiGenerator(
+        cast(genai.Client, client), model=MODEL, max_tokens=cast(int, "many")
+    )
+
+    # The SDK's own types reject the setting. That is our mistake, so it must surface
+    # as what it is, and nothing is sent.
+    with pytest.raises(pydantic.ValidationError):
+        generator.generate("q", [LEAVE])
+    assert client.models.calls == []
+
+
 def test_an_unrelated_error_is_not_swallowed() -> None:
     client = FakeClient(error=TypeError("unsupported operand"))
 

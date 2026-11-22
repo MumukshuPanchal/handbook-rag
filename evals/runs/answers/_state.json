@@ -1,0 +1,40 @@
+{
+  "metrics": [
+    {
+      "id": "right_call",
+      "label": "Right call",
+      "kind": "binary"
+    },
+    {
+      "id": "answered",
+      "label": "Answers when it should",
+      "kind": "binary"
+    },
+    {
+      "id": "declined",
+      "label": "Declines when it should",
+      "kind": "binary"
+    },
+    {
+      "id": "evidence_in_context",
+      "label": "Evidence among the passages",
+      "kind": "binary"
+    },
+    {
+      "id": "fully_cited",
+      "label": "Every statement cited",
+      "kind": "binary"
+    },
+    {
+      "id": "cites_evidence",
+      "label": "Cites the evidence",
+      "kind": "binary"
+    }
+  ],
+  "perf_fields": [
+    {
+      "id": "latency_s",
+      "unit": "s"
+    }
+  ]
+}

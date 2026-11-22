@@ -149,3 +149,45 @@ def test_check_reports_a_quote_that_is_not_in_its_page() -> None:
 
     assert len(report.problems) == 1
     assert "quote not found" in report.problems[0]
+
+
+def test_a_repeated_quote_is_accepted_when_every_copy_is_listed_as_an_alternative() -> None:
+    page = Document("finance/expenses.md", "T", "https://example.com/", "finance", "a" * 40, PROSE)
+    copy = Document("finance/archive.md", "T", "https://example.com/", "finance", "a" * 40, PROSE)
+    third = Document("finance/old.md", "T", "https://example.com/", "finance", "a" * 40, PROSE)
+    both_listed = GoldenQuestion.model_validate(
+        {
+            "id": "q1",
+            "question": "When are expense reports due?",
+            "reference_answer": "Within thirty days.",
+            "evidence": [
+                {"doc_id": "finance/expenses.md", "quote": "within thirty days"},
+                {"doc_id": "finance/archive.md", "quote": "within thirty days"},
+            ],
+            "type": "answerable",
+            "origin": "model-blind",
+            "evidence_mode": "any",
+        }
+    )
+
+    assert check_against_corpus([both_listed], [page, copy]).problems == []
+    unlisted_copy = check_against_corpus([both_listed], [page, copy, third]).problems
+    assert len(unlisted_copy) == 2
+    assert "finance/old.md" in unlisted_copy[0]
+
+
+def test_wording_overlap_is_reported_separately_for_each_origin() -> None:
+    page = Document("finance/expenses.md", "T", "https://example.com/", "finance", "a" * 40, PROSE)
+    copied = question(
+        "q1",
+        "When do team members submit an expense report?",
+        "Team members submit an expense report",
+    )
+    own_words = question(
+        "q2", "What is the deadline for filing reimbursement claims?", "within thirty days"
+    ).model_copy(update={"origin": "model-blind"})
+
+    report = check_against_corpus([copied, own_words], [page])
+
+    assert report.overlap_by_origin["model-drafted"] == 1.0
+    assert report.overlap_by_origin["model-blind"] < 0.2

@@ -457,7 +457,10 @@ def golden_review(
     target = output or settings.data_dir / "golden-review.html"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(render_review_page(questions, corpus.documents), encoding="utf-8")
-    pending = sum(question.review == "pending" for question in questions)
-    typer.echo(f"Review page for {len(questions)} questions ({pending} waiting for review)")
+    # A model's check is not a person's review, so a checked question still waits for one.
+    waiting = sum(question.review != "verified" for question in questions)
+    typer.echo(
+        f"Review page for {len(questions)} questions ({waiting} not yet verified by a person)"
+    )
     typer.echo(f"  written to  {target}")
     typer.echo("  open it in a browser, then set review to verified for each question you accept")

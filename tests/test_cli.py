@@ -380,7 +380,7 @@ def test_golden_review_writes_a_page_with_the_evidence_marked(tmp_path: Path) ->
     )
 
     assert result.exit_code == 0, result.output
-    assert "Review page for 2 questions (2 waiting for review)" in result.output
+    assert "Review page for 2 questions (2 not yet verified by a person)" in result.output
     assert "<mark>sixteen weeks of paid leave</mark>" in output.read_text()
 
 

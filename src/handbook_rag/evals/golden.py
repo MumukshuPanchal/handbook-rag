@@ -155,13 +155,22 @@ def check_against_corpus(
             locate_evidence(question, pages)
         except DatasetError as error:
             problems.append(str(error))
+        # With alternative evidence, a copy of a quote is fine when that copy is itself
+        # listed as evidence: a retriever that returns it is then scored as a hit.
+        listed = (
+            {(piece.doc_id, piece.quote) for piece in question.evidence}
+            if question.evidence_mode == "any"
+            else set()
+        )
         for evidence in question.evidence:
             # The handbook repeats some text on several pages. A retriever that returns
             # the other copy has found the answer, yet would be scored as a miss.
             copies = [
                 document.doc_id
                 for document in documents
-                if document.doc_id != evidence.doc_id and evidence.quote in document.text
+                if document.doc_id != evidence.doc_id
+                and evidence.quote in document.text
+                and (document.doc_id, evidence.quote) not in listed
             ]
             if copies:
                 more = f" and {len(copies) - 1} more" if len(copies) > 1 else ""

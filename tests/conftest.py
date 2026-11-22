@@ -4,6 +4,9 @@ import os
 from pathlib import Path
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from handbook_rag.config import get_settings
 from tests.support import Upstream, git
@@ -33,6 +36,19 @@ def isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     for role in ("AUTHOR", "COMMITTER"):
         monkeypatch.setenv(f"GIT_{role}_NAME", "Test")
         monkeypatch.setenv(f"GIT_{role}_EMAIL", "test@example.com")
+
+
+@pytest.fixture
+def spans(monkeypatch: pytest.MonkeyPatch) -> InMemorySpanExporter:
+    """Record the spans the code under test opens, without a trace backend.
+
+    Without this fixture tracing is off, as it is by default: spans record nothing.
+    """
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr("handbook_rag.tracing._provider", provider)
+    return exporter
 
 
 @pytest.fixture

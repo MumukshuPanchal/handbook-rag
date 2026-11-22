@@ -34,6 +34,7 @@ from handbook_rag.index.store import VectorStoreError
 from handbook_rag.ingest.build import CorpusError, build_corpus, chunk_documents, load_snapshot
 from handbook_rag.ingest.snapshot import SnapshotError, download_snapshot
 from handbook_rag.ingest.tokens import token_counter
+from handbook_rag.tracing import record_query, record_results, stage, trace_id, tracing_session
 from handbook_rag.wiring import RetrievalMode
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -218,21 +219,38 @@ def search(
 ) -> None:
     """Find the chunks most relevant to a question."""
     settings = get_settings()
-    try:
-        retriever = wiring.make_retriever(settings, mode, rerank)
-        results = retriever.retrieve(query, limit=limit or settings.search_limit, section=section)
-    except VectorStoreError as error:
-        typer.echo(f"error: {error}", err=True)
-        raise typer.Exit(code=1) from error
+    traced: str | None = None
+    # Leaving the session sends the trace, also when the search fails.
+    with tracing_session(settings):
+        try:
+            # Built outside the trace: loading models is a cost of starting the
+            # process, not of answering this question.
+            retriever = wiring.make_retriever(settings, mode, rerank)
+            with stage("search", mode=mode or settings.retrieval_mode) as span:
+                traced = trace_id(span)
+                record_query(span, query)
+                results = retriever.retrieve(
+                    query, limit=limit or settings.search_limit, section=section
+                )
+                record_results(span, results)
+        except VectorStoreError as error:
+            typer.echo(f"error: {error}", err=True)
+            if traced is not None:
+                typer.echo(f"trace {traced}", err=True)
+            raise typer.Exit(code=1) from error
 
-    if not results:
-        typer.echo("No results.")
-        raise typer.Exit(code=1)
     for rank, result in enumerate(results, start=1):
         preview = " ".join(result.chunk.text.split())
         typer.echo(f"{rank}. {result.score:.3f}  {result.chunk.context_header}")
         typer.echo(f"   {result.chunk.url}")
         typer.echo(f"   {preview[:220]}{'...' if len(preview) > 220 else ''}")
+    if not results:
+        typer.echo("No results.")
+    if traced is not None:
+        # The id to look this request up by in the trace backend.
+        typer.echo(f"trace {traced}")
+    if not results:
+        raise typer.Exit(code=1)
 
 
 def _load_questions(dataset: Path) -> list[GoldenQuestion]:

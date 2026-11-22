@@ -2,6 +2,7 @@
 
 from handbook_rag.index.sparse import SparseEncoder
 from handbook_rag.index.store import ScoredChunk, VectorStore
+from handbook_rag.tracing import record_query, record_results, stage
 
 
 class SparseRetriever:
@@ -12,9 +13,14 @@ class SparseRetriever:
         self._store = store
 
     def retrieve(self, query: str, *, limit: int, section: str | None = None) -> list[ScoredChunk]:
-        if not query.strip():
-            return []
-        vector = self._encoder.encode_query(query)
-        if not vector.indices:
-            return []  # the question contained only stop words
-        return self._store.search_sparse(vector, limit=limit, section=section)
+        with stage("retrieve.sparse", limit=limit, section=section) as span:
+            record_query(span, query)
+            results: list[ScoredChunk] = []
+            if query.strip():
+                vector = self._encoder.encode_query(query)
+                # Zero means the question contained only stop words, so nothing can match.
+                span.set_attribute("handbook_rag.query.terms", len(vector.indices))
+                if vector.indices:
+                    results = self._store.search_sparse(vector, limit=limit, section=section)
+            record_results(span, results)
+            return results

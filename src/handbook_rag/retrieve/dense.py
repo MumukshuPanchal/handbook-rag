@@ -9,6 +9,7 @@ from typing import Protocol
 
 from handbook_rag.index.embedder import Embedder
 from handbook_rag.index.store import ScoredChunk, VectorStore
+from handbook_rag.tracing import record_query, record_results, stage
 
 
 class Retriever(Protocol):
@@ -27,7 +28,12 @@ class DenseRetriever:
         self._store = store
 
     def retrieve(self, query: str, *, limit: int, section: str | None = None) -> list[ScoredChunk]:
-        if not query.strip():
-            return []
-        vector = self._embedder.embed_query(query)
-        return self._store.search(vector, limit=limit, section=section)
+        with stage("retrieve.dense", limit=limit, section=section) as span:
+            record_query(span, query)
+            results: list[ScoredChunk] = []
+            if query.strip():
+                with stage("embed.query", model=self._embedder.name):
+                    vector = self._embedder.embed_query(query)
+                results = self._store.search(vector, limit=limit, section=section)
+            record_results(span, results)
+            return results

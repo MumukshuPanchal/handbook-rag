@@ -12,6 +12,7 @@ from qdrant_client import QdrantClient, models
 
 from handbook_rag.index.sparse import SparseVector
 from handbook_rag.ingest.models import Chunk
+from handbook_rag.tracing import stage
 
 _DENSE = "dense"
 _SPARSE = "sparse"
@@ -170,28 +171,39 @@ class QdrantVectorStore:
     def _query(
         self, query: list[float] | models.SparseVector, using: str, limit: int, section: str | None
     ) -> list[ScoredChunk]:
-        if not self._client.collection_exists(self._collection):
-            raise VectorStoreError(
-                f"Collection {self._collection} does not exist yet. "
-                "Run `handbook-rag index` to build it."
+        with stage("vector_store.query", vector=using, limit=limit, section=section) as span:
+            # Names from the OpenTelemetry conventions for database calls, so a trace
+            # backend can recognise this span as one.
+            span.set_attribute("db.system.name", "qdrant")
+            span.set_attribute("db.collection.name", self._collection)
+            span.set_attribute("db.operation.name", "query")
+            if not self._client.collection_exists(self._collection):
+                raise VectorStoreError(
+                    f"Collection {self._collection} does not exist yet. "
+                    "Run `handbook-rag index` to build it."
+                )
+            query_filter = None
+            if section is not None:
+                query_filter = models.Filter(
+                    must=[
+                        models.FieldCondition(key="section", match=models.MatchValue(value=section))
+                    ]
+                )
+            response = self._client.query_points(
+                self._collection,
+                query=query,
+                using=using,
+                limit=limit,
+                query_filter=query_filter,
+                with_payload=True,
             )
-        query_filter = None
-        if section is not None:
-            query_filter = models.Filter(
-                must=[models.FieldCondition(key="section", match=models.MatchValue(value=section))]
-            )
-        response = self._client.query_points(
-            self._collection,
-            query=query,
-            using=using,
-            limit=limit,
-            query_filter=query_filter,
-            with_payload=True,
-        )
-        return [
-            ScoredChunk(chunk=_from_payload(str(point.id), point.payload or {}), score=point.score)
-            for point in response.points
-        ]
+            span.set_attribute("handbook_rag.results.count", len(response.points))
+            return [
+                ScoredChunk(
+                    chunk=_from_payload(str(point.id), point.payload or {}), score=point.score
+                )
+                for point in response.points
+            ]
 
 
 def _to_payload(chunk: Chunk) -> dict[str, Any]:

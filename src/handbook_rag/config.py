@@ -138,6 +138,28 @@ class Settings(BaseSettings):
         ),
     )
 
+    tracing: bool = Field(
+        default=False,
+        description=(
+            "Whether each request is recorded as a trace and sent to the trace backend. "
+            "Start a local backend with `make traces`."
+        ),
+    )
+    otlp_endpoint: str = Field(
+        default="http://localhost:4318",
+        description="Base address of the OTLP/HTTP receiver that traces are sent to.",
+    )
+    service_name: str = Field(
+        default="handbook-rag", description="The name this application has in the trace backend."
+    )
+    trace_content: bool = Field(
+        default=False,
+        description=(
+            "Whether traces include the text of questions. Off by default: a trace then "
+            "holds ids, scores, sizes and timings only. Switch on for local debugging."
+        ),
+    )
+
     @property
     def chunking(self) -> ChunkingConfig:
         """The chunking settings as the chunker takes them."""

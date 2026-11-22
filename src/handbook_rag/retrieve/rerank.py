@@ -13,6 +13,7 @@ from typing import Protocol
 
 from handbook_rag.index.store import ScoredChunk
 from handbook_rag.retrieve.dense import Retriever
+from handbook_rag.tracing import record_query, record_results, stage
 
 
 class Reranker(Protocol):
@@ -59,10 +60,17 @@ class RerankingRetriever:
         self._candidates = candidates
 
     def retrieve(self, query: str, *, limit: int, section: str | None = None) -> list[ScoredChunk]:
-        found = self._base.retrieve(query, limit=max(limit, self._candidates), section=section)
-        if not found:
-            return []
-        scores = self._reranker.score(query, [result.chunk.text_for_embedding for result in found])
-        # sorted() is stable, so candidates with equal scores keep their first-stage order.
-        reranked = sorted(zip(found, scores, strict=True), key=lambda pair: -pair[1])
-        return [ScoredChunk(result.chunk, score) for result, score in reranked[:limit]]
+        with stage("retrieve.reranked", limit=limit, section=section) as span:
+            record_query(span, query)
+            found = self._base.retrieve(query, limit=max(limit, self._candidates), section=section)
+            results: list[ScoredChunk] = []
+            if found:
+                with stage("rerank", model=self._reranker.name, candidates=len(found)):
+                    scores = self._reranker.score(
+                        query, [result.chunk.text_for_embedding for result in found]
+                    )
+                # sorted() is stable, so candidates with equal scores keep their first-stage order.
+                reranked = sorted(zip(found, scores, strict=True), key=lambda pair: -pair[1])
+                results = [ScoredChunk(result.chunk, score) for result, score in reranked[:limit]]
+            record_results(span, results)
+            return results

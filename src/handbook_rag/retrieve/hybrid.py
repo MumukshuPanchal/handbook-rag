@@ -3,6 +3,7 @@
 from handbook_rag.index.store import ScoredChunk
 from handbook_rag.retrieve.dense import Retriever
 from handbook_rag.retrieve.fusion import reciprocal_rank_fusion
+from handbook_rag.tracing import record_query, record_results, stage
 
 
 class HybridRetriever:
@@ -22,8 +23,17 @@ class HybridRetriever:
 
     def retrieve(self, query: str, *, limit: int, section: str | None = None) -> list[ScoredChunk]:
         depth = max(limit, self._candidates)
-        rankings = [
-            self._dense.retrieve(query, limit=depth, section=section),
-            self._sparse.retrieve(query, limit=depth, section=section),
-        ]
-        return reciprocal_rank_fusion(rankings, limit=limit, k=self._rrf_k)
+        with stage("retrieve.hybrid", limit=limit, section=section, candidates=depth) as span:
+            record_query(span, query)
+            dense = self._dense.retrieve(query, limit=depth, section=section)
+            sparse = self._sparse.retrieve(query, limit=depth, section=section)
+            with stage("fuse", rrf_k=self._rrf_k) as fusing:
+                fused = reciprocal_rank_fusion([dense, sparse], limit=limit, k=self._rrf_k)
+                if fusing.is_recording():
+                    # How much the two searches agree: chunks that both of them returned.
+                    shared = {r.chunk.chunk_id for r in dense} & {r.chunk.chunk_id for r in sparse}
+                    fusing.set_attribute("handbook_rag.fuse.from_dense", len(dense))
+                    fusing.set_attribute("handbook_rag.fuse.from_sparse", len(sparse))
+                    fusing.set_attribute("handbook_rag.fuse.in_both", len(shared))
+            record_results(span, fused)
+            return fused

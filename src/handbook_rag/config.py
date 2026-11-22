@@ -228,6 +228,16 @@ class Settings(BaseSettings):
     answer_context_chunks: int = Field(
         default=5, gt=0, description="How many retrieved chunks the model is given to answer from."
     )
+    eval_requests_per_minute: float = Field(
+        default=10.0,
+        gt=0,
+        le=600,
+        description=(
+            "The most requests per minute an answer evaluation sends to a model. Keep it "
+            "under the limit of the key in use, with room for your own questions: a free "
+            "Gemini key allowed 15 a minute for the default model when this was written."
+        ),
+    )
 
     @field_validator("answer_model")
     @classmethod

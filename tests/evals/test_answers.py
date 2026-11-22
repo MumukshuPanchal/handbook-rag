@@ -1,0 +1,844 @@
+"""The answer run: what it asks, what it saves, how it scores, and when it stops."""
+
+import dataclasses
+import json
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+
+from handbook_rag.evals.answers import (
+    METRIC_IDS,
+    Pacer,
+    Passage,
+    SavedRunError,
+    Statement,
+    add_attempts,
+    append_record,
+    in_run_order,
+    load_records,
+    open_run,
+    record_answer,
+    run_answers,
+    score_answer,
+    summarise_answers,
+    write_answer_run,
+)
+from handbook_rag.evals.dataset import DatasetError, GoldenQuestion, locate_evidence
+from handbook_rag.generate.base import GenerationError
+from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
+from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
+from handbook_rag.index.store import ScoredChunk, VectorStoreError
+from handbook_rag.ingest.models import Chunk, Document
+
+LEAVE_TEXT = "## Parental leave\n\nNew parents get sixteen weeks of paid leave."
+EXPENSE_TEXT = "## Laptops\n\nExpense a laptop up to one thousand dollars with approval."
+
+
+def page(doc_id: str, text: str) -> Document:
+    return Document(doc_id, "Title", "https://example.com/", doc_id.split("/")[0], "a" * 40, text)
+
+
+def whole_page(document: Document) -> Chunk:
+    return Chunk(
+        chunk_id=f"chunk-{document.doc_id}",
+        doc_id=document.doc_id,
+        title=document.title,
+        url=document.url,
+        section=document.section,
+        source_commit=document.source_commit,
+        heading_path=(),
+        start_char=0,
+        end_char=len(document.text),
+        text=document.text,
+        token_count=10,
+    )
+
+
+LEAVE = page("people/leave.md", LEAVE_TEXT)
+EXPENSES = page("finance/expenses.md", EXPENSE_TEXT)
+DOCUMENTS = [LEAVE, EXPENSES]
+LEAVE_CHUNK, EXPENSE_CHUNK = whole_page(LEAVE), whole_page(EXPENSES)
+
+LEAVE_QUESTION = GoldenQuestion.model_validate(
+    {
+        "id": "q001",
+        "question": "How long is parental leave?",
+        "reference_answer": "Sixteen weeks.",
+        "evidence": [{"doc_id": "people/leave.md", "quote": "sixteen weeks of paid leave"}],
+        "type": "answerable",
+        "origin": "model-drafted",
+    }
+)
+LAPTOP_QUESTION = GoldenQuestion.model_validate(
+    {
+        "id": "q002",
+        "question": "What is the laptop expense limit?",
+        "reference_answer": "One thousand dollars.",
+        "evidence": [{"doc_id": "finance/expenses.md", "quote": "one thousand dollars"}],
+        "type": "answerable",
+        "origin": "model-blind",
+    }
+)
+PARKING_QUESTION = GoldenQuestion.model_validate(
+    {
+        "id": "u001",
+        "question": "How much is the parking allowance?",
+        "type": "unanswerable",
+        "origin": "model-drafted",
+        "unanswerable_kind": "near-miss",
+        "note": "No page mentions parking.",
+    }
+)
+QUESTIONS = [LEAVE_QUESTION, LAPTOP_QUESTION, PARKING_QUESTION]
+BY_TEXT = {question.question: question for question in QUESTIONS}
+
+
+def reply(
+    question: GoldenQuestion,
+    *segments: Segment,
+    answered: bool = True,
+    given: tuple[Chunk, ...] = (EXPENSE_CHUNK, LEAVE_CHUNK),
+    stop_reason: str = "end_turn",
+    seconds: float = 2.0,
+) -> Answer:
+    return Answer(
+        question=question.question,
+        segments=segments,
+        answered=answered,
+        model="fake-model",
+        stop_reason=stop_reason,
+        usage=TokenUsage(input_tokens=1800, output_tokens=90),
+        seconds=seconds,
+        seconds_to_first_text=1.0,
+        retrieved=tuple(ScoredChunk(chunk, 0.5) for chunk in given),
+    )
+
+
+def declines(
+    question: GoldenQuestion, *, given: tuple[Chunk, ...] = (EXPENSE_CHUNK, LEAVE_CHUNK)
+) -> Answer:
+    return reply(question, Segment(NOT_FOUND_MESSAGE), answered=False, given=given)
+
+
+def good_reply(question: GoldenQuestion) -> Answer:
+    """The reply a careful assistant gives: the right passage cited, or a decline."""
+    if question is LEAVE_QUESTION:
+        return reply(question, Segment("Sixteen weeks.", (Citation(LEAVE_CHUNK),)))
+    if question is LAPTOP_QUESTION:
+        return reply(question, Segment("One thousand dollars.", (Citation(EXPENSE_CHUNK),)))
+    return declines(question)
+
+
+def careful(question_text: str) -> Answer:
+    return good_reply(BY_TEXT[question_text])
+
+
+def scored(question: GoldenQuestion, answer: Answer) -> dict[str, float]:
+    spans = locate_evidence(question, {document.doc_id: document for document in DOCUMENTS})
+    return score_answer(question, record_answer(question, answer, spans))
+
+
+# What a reply is reduced to
+
+
+def test_a_record_names_citations_by_passage_number_and_marks_the_evidence() -> None:
+    answer = reply(
+        LEAVE_QUESTION,
+        Segment("Sixteen weeks.", (Citation(LEAVE_CHUNK), Citation(EXPENSE_CHUNK))),
+        Segment(" Ask the People team."),
+    )
+    spans = locate_evidence(LEAVE_QUESTION, {d.doc_id: d for d in DOCUMENTS})
+
+    record = record_answer(LEAVE_QUESTION, answer, spans)
+
+    assert [(p.number, p.doc_id, p.covers) for p in record.passages] == [
+        (1, "finance/expenses.md", ()),
+        (2, "people/leave.md", (0,)),
+    ]
+    assert record.statements == (
+        Statement("Sixteen weeks.", (1, 2)),
+        Statement(" Ask the People team.", ()),
+    )
+    assert record.text == "Sixteen weeks. Ask the People team."
+    assert record.text_with_markers == "Sixteen weeks.[1][2] Ask the People team."
+    assert record.cited == {1, 2}
+    assert record.uncited_statements == ("Ask the People team.",)
+    assert (record.question_id, record.fingerprint) == ("q001", LEAVE_QUESTION.fingerprint)
+    assert (record.input_tokens, record.output_tokens, record.seconds) == (1800, 90, 2.0)
+    assert (record.answered, record.stop_reason, record.model) == (True, "end_turn", "fake-model")
+
+
+# Scores
+
+
+def test_a_cited_answer_to_an_answerable_question_scores_on_every_count() -> None:
+    assert scored(LEAVE_QUESTION, good_reply(LEAVE_QUESTION)) == {
+        "right_call": 1.0,
+        "answered": 1.0,
+        "evidence_in_context": 1.0,
+        "cites_evidence": 1.0,
+        "fully_cited": 1.0,
+    }
+
+
+def test_declining_an_answerable_question_is_a_wrong_call_whoever_is_to_blame() -> None:
+    # The evidence was among the passages, and the assistant still declined.
+    assert scored(LEAVE_QUESTION, declines(LEAVE_QUESTION)) == {
+        "right_call": 0.0,
+        "answered": 0.0,
+        "evidence_in_context": 1.0,
+    }
+    # The search did not find the evidence. From outside it is still a question that
+    # went unanswered, and the score for the evidence shows where it went wrong.
+    assert scored(LEAVE_QUESTION, declines(LEAVE_QUESTION, given=(EXPENSE_CHUNK,))) == {
+        "right_call": 0.0,
+        "answered": 0.0,
+        "evidence_in_context": 0.0,
+    }
+
+
+def test_an_answer_that_cites_only_another_passage_does_not_cite_the_evidence() -> None:
+    answer = reply(LEAVE_QUESTION, Segment("One thousand dollars.", (Citation(EXPENSE_CHUNK),)))
+
+    scores = scored(LEAVE_QUESTION, answer)
+
+    assert scores["cites_evidence"] == 0.0
+    assert scores["fully_cited"] == 1.0
+
+
+def test_an_answer_given_without_the_evidence_has_no_score_for_citing_it() -> None:
+    answer = reply(
+        LEAVE_QUESTION,
+        Segment("Sixteen weeks.", (Citation(EXPENSE_CHUNK),)),
+        given=(EXPENSE_CHUNK,),
+    )
+
+    scores = scored(LEAVE_QUESTION, answer)
+
+    assert scores["evidence_in_context"] == 0.0
+    assert scores["answered"] == 1.0
+    assert "cites_evidence" not in scores
+
+
+def test_declining_an_unanswerable_question_is_the_right_call() -> None:
+    assert scored(PARKING_QUESTION, declines(PARKING_QUESTION)) == {
+        "right_call": 1.0,
+        "declined": 1.0,
+    }
+
+
+def test_answering_an_unanswerable_question_is_a_wrong_call() -> None:
+    answer = reply(PARKING_QUESTION, Segment("Fifty dollars.", (Citation(LEAVE_CHUNK),)))
+
+    assert scored(PARKING_QUESTION, answer) == {
+        "right_call": 0.0,
+        "declined": 0.0,
+        "fully_cited": 1.0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("segments", "fully_cited"),
+    [
+        ((Segment("Sixteen weeks.", (Citation(LEAVE_CHUNK),)), Segment(" \n\n")), 1.0),
+        ((Segment("Sixteen weeks.", (Citation(LEAVE_CHUNK),)), Segment(" - ")), 1.0),
+        ((Segment("Sixteen weeks.", (Citation(LEAVE_CHUNK),)), Segment(" Paid.")), 0.0),
+        ((Segment("Sixteen weeks."),), 0.0),
+    ],
+)
+def test_text_without_words_needs_no_citation(
+    segments: tuple[Segment, ...], fully_cited: float
+) -> None:
+    assert scored(LEAVE_QUESTION, reply(LEAVE_QUESTION, *segments))["fully_cited"] == fully_cited
+
+
+# The run
+
+
+def test_every_question_is_asked_once_and_each_reply_is_handed_over_at_once() -> None:
+    asked: list[str] = []
+    kept: list[str] = []
+
+    def ask(question_text: str) -> Answer:
+        # A reply is handed over before the next question is asked.
+        assert len(kept) == len(asked)
+        asked.append(question_text)
+        return careful(question_text)
+
+    run = run_answers(
+        QUESTIONS, DOCUMENTS, ask, on_record=lambda question, record: kept.append(question.id)
+    )
+
+    assert sorted(asked) == sorted(question.question for question in QUESTIONS)
+    assert kept == [question.id for question in in_run_order(QUESTIONS)]
+    assert set(run.records) == {"q001", "q002", "u001"}
+    assert (run.attempts, run.failures, run.stopped) == (3, [], None)
+
+
+def test_the_order_is_fixed_and_does_not_follow_the_file() -> None:
+    many = [
+        LEAVE_QUESTION.model_copy(update={"id": f"q{n:03d}", "question": f"Question {n}?"})
+        for n in range(40)
+    ]
+
+    order = [question.id for question in in_run_order(many)]
+
+    assert order == [question.id for question in in_run_order(list(reversed(many)))]
+    assert sorted(order) == [question.id for question in many]
+    assert order != sorted(order)
+
+
+def test_a_saved_reply_is_not_asked_again() -> None:
+    first = run_answers(QUESTIONS, DOCUMENTS, careful)
+    asked: list[str] = []
+
+    def ask(question_text: str) -> Answer:
+        asked.append(question_text)
+        return careful(question_text)
+
+    saved = {"q001": first.records["q001"], "u001": first.records["u001"]}
+    second = run_answers(QUESTIONS, DOCUMENTS, ask, saved=saved)
+
+    assert asked == [LAPTOP_QUESTION.question]
+    assert second.attempts == 1
+    assert set(second.records) == {"q001", "q002", "u001"}
+    assert second.records["q001"] is saved["q001"]
+
+
+def test_a_reply_to_an_older_wording_of_the_label_is_asked_again() -> None:
+    first = run_answers(QUESTIONS, DOCUMENTS, careful)
+    reworded = LEAVE_QUESTION.model_copy(update={"reference_answer": "16 weeks, fully paid."})
+    asked: list[str] = []
+
+    def ask(question_text: str) -> Answer:
+        asked.append(question_text)
+        return careful(question_text)
+
+    run_answers([reworded, LAPTOP_QUESTION, PARKING_QUESTION], DOCUMENTS, ask, saved=first.records)
+
+    assert asked == [LEAVE_QUESTION.question]
+
+
+def test_a_saved_reply_to_a_question_no_longer_in_the_set_is_left_out() -> None:
+    first = run_answers(QUESTIONS, DOCUMENTS, careful)
+
+    second = run_answers([LEAVE_QUESTION], DOCUMENTS, careful, saved=first.records)
+
+    assert set(second.records) == {"q001"}
+    assert second.attempts == 0
+
+
+def failing_first(times: int, error: Exception) -> Callable[[str], Answer]:
+    """An assistant whose first ``times`` calls fail."""
+    calls = 0
+
+    def ask(question_text: str) -> Answer:
+        nonlocal calls
+        calls += 1
+        if calls <= times:
+            raise error
+        return careful(question_text)
+
+    return ask
+
+
+@pytest.mark.parametrize(
+    "error", [GenerationError("The Gemini API returned an error (503)."), VectorStoreError("down")]
+)
+def test_a_question_that_fails_is_asked_once_more_after_the_others(error: Exception) -> None:
+    run = run_answers(QUESTIONS, DOCUMENTS, failing_first(1, error))
+
+    assert set(run.records) == {"q001", "q002", "u001"}
+    assert run.failures == []
+    # Three questions, and one more try for the one that failed.
+    assert run.attempts == 4
+    assert run.stopped is None
+
+
+def test_a_question_that_fails_twice_is_reported_and_never_scored() -> None:
+    first_in_order = in_run_order(QUESTIONS)[0]
+
+    def ask(question_text: str) -> Answer:
+        if question_text == first_in_order.question:
+            raise GenerationError("The Gemini API sent a reply that could not be read.")
+        return careful(question_text)
+
+    run = run_answers(QUESTIONS, DOCUMENTS, ask)
+    report = summarise_answers(QUESTIONS, run.records, run.failures)
+
+    assert [failure.question_id for failure in run.failures] == [first_in_order.id]
+    assert run.failures[0].error_class == "GenerationError"
+    assert "could not be read" in run.failures[0].message
+    assert first_in_order.id not in run.records
+    assert run.attempts == 4
+    assert len(report.scored) == 2
+    assert len(report.failures) == 1
+    assert report.not_asked == 0
+    assert report.summary["right_call"].count == 2
+
+
+def test_the_run_stops_itself_when_questions_fail_one_after_another() -> None:
+    many = [
+        LEAVE_QUESTION.model_copy(update={"id": f"q{n:03d}", "question": f"Question {n}?"})
+        for n in range(10)
+    ]
+    calls = 0
+
+    def ask(question_text: str) -> Answer:
+        nonlocal calls
+        calls += 1
+        raise GenerationError("Today's limit is used up.")
+
+    run = run_answers(many, DOCUMENTS, ask)
+
+    # Three requests were spent to learn it, not ten, and no second round was started.
+    assert calls == 3
+    assert run.attempts == 3
+    assert run.stopped is not None
+    assert "3 questions in a row failed" in run.stopped
+    assert "Today's limit is used up." in run.stopped
+    assert len(run.failures) == 3
+    assert summarise_answers(many, run.records, run.failures).not_asked == 7
+
+
+def test_failures_with_a_success_between_them_do_not_stop_the_run() -> None:
+    many = [
+        LEAVE_QUESTION.model_copy(update={"id": f"q{n:03d}", "question": f"Question {n}?"})
+        for n in range(9)
+    ]
+    answers = {question.question: question for question in many}
+    calls = 0
+
+    def ask(question_text: str) -> Answer:
+        nonlocal calls
+        calls += 1
+        # In the first round every third call succeeds. The second round succeeds.
+        if calls <= 9 and calls % 3 != 0:
+            raise GenerationError("busy")
+        question = answers[question_text]
+        return reply(question, Segment("Sixteen weeks.", (Citation(LEAVE_CHUNK),)))
+
+    run = run_answers(many, DOCUMENTS, ask)
+
+    assert run.stopped is None
+    assert len(run.records) == 9
+    assert run.failures == []
+    assert run.attempts == 9 + 6
+
+
+def test_an_error_that_is_a_bug_is_not_swallowed() -> None:
+    def ask(question_text: str) -> Answer:
+        raise TypeError("a mistake in our own code")
+
+    with pytest.raises(TypeError, match="our own code"):
+        run_answers(QUESTIONS, DOCUMENTS, ask)
+
+
+def test_a_limit_on_requests_ends_the_run_early_and_says_so() -> None:
+    kept: list[str] = []
+
+    run = run_answers(
+        QUESTIONS,
+        DOCUMENTS,
+        careful,
+        max_attempts=2,
+        on_record=lambda question, record: kept.append(question.id),
+    )
+
+    assert run.attempts == 2
+    assert kept == [question.id for question in in_run_order(QUESTIONS)[:2]]
+    assert run.stopped == "the limit of 2 requests for this run was reached"
+    assert summarise_answers(QUESTIONS, run.records, run.failures).not_asked == 1
+
+
+def test_a_limit_that_is_never_reached_is_not_reported_as_a_stop() -> None:
+    run = run_answers(QUESTIONS, DOCUMENTS, careful, max_attempts=3)
+
+    assert run.attempts == 3
+    assert run.stopped is None
+
+
+def test_a_broken_label_stops_the_run_before_any_request() -> None:
+    broken = GoldenQuestion.model_validate(
+        {
+            **LEAVE_QUESTION.model_dump(),
+            "evidence": [{"doc_id": "people/leave.md", "quote": "twenty weeks"}],
+        }
+    )
+    asked: list[str] = []
+
+    def ask(question_text: str) -> Answer:
+        asked.append(question_text)
+        return careful(question_text)
+
+    with pytest.raises(DatasetError, match="quote not found"):
+        run_answers([broken, PARKING_QUESTION], DOCUMENTS, ask)
+
+    assert asked == []
+
+
+def test_the_run_waits_before_every_request() -> None:
+    events: list[str] = []
+
+    def ask(question_text: str) -> Answer:
+        events.append("ask")
+        return careful(question_text)
+
+    run_answers(QUESTIONS, DOCUMENTS, ask, wait=lambda: events.append("wait"))
+
+    assert events == ["wait", "ask"] * 3
+
+
+# Pacing
+
+
+class Clock:
+    """A clock that moves only when someone sleeps or the test moves it."""
+
+    def __init__(self) -> None:
+        self.now = 100.0
+        self.slept: list[float] = []
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+def test_requests_are_spaced_to_the_rate_and_the_first_one_starts_at_once() -> None:
+    clock = Clock()
+    pacer = Pacer(10, clock=clock.time, sleep=clock.sleep)
+
+    pacer.wait()
+    clock.now += 2.0  # the request took two seconds
+    pacer.wait()
+    clock.now += 2.5
+    pacer.wait()
+
+    # Ten a minute is one start every six seconds, whatever each request takes.
+    assert clock.slept == [pytest.approx(4.0), pytest.approx(3.5)]
+
+
+def test_a_request_slower_than_the_gap_is_followed_without_a_pause() -> None:
+    clock = Clock()
+    pacer = Pacer(10, clock=clock.time, sleep=clock.sleep)
+
+    pacer.wait()
+    clock.now += 9.0
+    pacer.wait()
+    clock.now += 1.0
+    pacer.wait()
+
+    # No pause after the slow request, and the gap then counts from when the next began.
+    assert clock.slept == [pytest.approx(5.0)]
+
+
+@pytest.mark.parametrize("rate", [0, -5])
+def test_a_pace_must_be_positive(rate: float) -> None:
+    with pytest.raises(ValueError, match="positive"):
+        Pacer(rate)
+
+
+# Saving a run and picking it up again
+
+CONFIG: dict[str, object] = {
+    "answer_model": "fake-model",
+    "instructions": "abc123",
+    "rerank": False,
+}
+
+
+def test_saved_replies_come_back_exactly_as_they_were(tmp_path: Path) -> None:
+    run = run_answers(QUESTIONS, DOCUMENTS, careful)
+    open_run(tmp_path, CONFIG)
+
+    for record in run.records.values():
+        append_record(tmp_path, record)
+
+    assert open_run(tmp_path, CONFIG) == run.records
+
+
+def test_a_new_run_starts_empty_and_records_its_settings(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "baseline"
+
+    assert open_run(run_dir, CONFIG) == {}
+
+    assert json.loads((run_dir / "run.json").read_text()) == {"config": CONFIG, "attempts": 0}
+
+
+def test_a_run_made_with_other_settings_is_not_continued(tmp_path: Path) -> None:
+    open_run(tmp_path, CONFIG)
+    append_record(tmp_path, run_answers(QUESTIONS, DOCUMENTS, careful).records["q001"])
+
+    with pytest.raises(SavedRunError, match=r"other settings \(answer_model, rerank\)") as error:
+        open_run(tmp_path, {**CONFIG, "answer_model": "another-model", "rerank": True})
+
+    assert "--restart" in str(error.value)
+    # Nothing was discarded by the refusal.
+    assert set(open_run(tmp_path, CONFIG)) == {"q001"}
+
+
+def test_restarting_discards_the_saved_replies_and_takes_the_new_settings(tmp_path: Path) -> None:
+    open_run(tmp_path, CONFIG)
+    append_record(tmp_path, run_answers(QUESTIONS, DOCUMENTS, careful).records["q001"])
+    add_attempts(tmp_path, 5)
+    changed = {**CONFIG, "answer_model": "another-model"}
+
+    assert open_run(tmp_path, changed, restart=True) == {}
+
+    assert json.loads((tmp_path / "run.json").read_text()) == {"config": changed, "attempts": 0}
+    assert open_run(tmp_path, changed) == {}
+
+
+def test_replies_without_a_record_of_their_settings_are_not_adopted(tmp_path: Path) -> None:
+    (tmp_path / "answers.jsonl").write_text("{}\n")
+
+    with pytest.raises(SavedRunError, match="nothing records the settings"):
+        open_run(tmp_path, CONFIG)
+
+
+def test_attempts_add_up_over_invocations(tmp_path: Path) -> None:
+    open_run(tmp_path, CONFIG)
+
+    assert add_attempts(tmp_path, 40) == 40
+    assert add_attempts(tmp_path, 3) == 43
+    assert json.loads((tmp_path / "run.json").read_text())["config"] == CONFIG
+
+
+def test_a_line_cut_short_at_the_end_is_dropped_and_one_in_the_middle_is_reported(
+    tmp_path: Path,
+) -> None:
+    records = run_answers(QUESTIONS, DOCUMENTS, careful).records
+    open_run(tmp_path, CONFIG)
+    append_record(tmp_path, records["q001"])
+    append_record(tmp_path, records["q002"])
+    answers = tmp_path / "answers.jsonl"
+    whole = answers.read_text()
+
+    # The process was killed while it wrote the last line.
+    answers.write_text(whole[:-40])
+    assert set(load_records(answers)) == {"q001"}
+
+    # A damaged line with a good one after it is not a crash while writing.
+    first, second = whole.splitlines()
+    answers.write_text(f"{first[:-40]}\n{second}\n")
+    with pytest.raises(SavedRunError, match=r"answers\.jsonl:1 cannot be read"):
+        load_records(answers)
+
+
+def test_a_line_that_is_not_a_reply_is_reported(tmp_path: Path) -> None:
+    answers = tmp_path / "answers.jsonl"
+    answers.write_text('{"question_id": "q001"}\n')
+
+    with pytest.raises(SavedRunError, match=r"answers\.jsonl:1 is not a saved reply"):
+        load_records(answers)
+
+
+def test_the_latest_reply_to_a_question_wins(tmp_path: Path) -> None:
+    record = run_answers(QUESTIONS, DOCUMENTS, careful).records["q001"]
+    later = dataclasses.replace(record, seconds=9.0)
+    open_run(tmp_path, CONFIG)
+    append_record(tmp_path, record)
+    append_record(tmp_path, later)
+
+    assert load_records(tmp_path / "answers.jsonl")["q001"].seconds == 9.0
+
+
+# The summary
+
+
+def test_an_assistant_that_does_everything_right_scores_one_on_every_metric() -> None:
+    run = run_answers(QUESTIONS, DOCUMENTS, careful)
+
+    report = summarise_answers(QUESTIONS, run.records)
+
+    assert set(report.summary) == set(METRIC_IDS)
+    assert {name: estimate.mean for name, estimate in report.summary.items()} == dict.fromkeys(
+        METRIC_IDS, 1.0
+    )
+    # Each mean says how many questions it rests on.
+    assert {name: estimate.count for name, estimate in report.summary.items()} == {
+        "right_call": 3,
+        "answered": 2,
+        "declined": 1,
+        "evidence_in_context": 2,
+        "fully_cited": 2,
+        "cites_evidence": 2,
+    }
+    assert (report.not_asked, report.failures) == (0, [])
+
+
+def test_an_assistant_that_does_everything_wrong_scores_zero() -> None:
+    def careless(question_text: str) -> Answer:
+        question = BY_TEXT[question_text]
+        if question.type == "unanswerable":
+            return reply(question, Segment("Fifty dollars."))
+        return declines(question)
+
+    report = summarise_answers(QUESTIONS, run_answers(QUESTIONS, DOCUMENTS, careless).records)
+
+    means = {name: estimate.mean for name, estimate in report.summary.items()}
+    assert means == {
+        "right_call": 0.0,
+        "answered": 0.0,
+        "declined": 0.0,
+        "evidence_in_context": 1.0,
+        "fully_cited": 0.0,
+    }
+
+
+def test_groups_show_where_a_score_comes_from() -> None:
+    def ask(question_text: str) -> Answer:
+        question = BY_TEXT[question_text]
+        if question is LAPTOP_QUESTION:
+            # The search missed the evidence, and the assistant declined.
+            return declines(question, given=(LEAVE_CHUNK,))
+        return good_reply(question)
+
+    report = summarise_answers(QUESTIONS, run_answers(QUESTIONS, DOCUMENTS, ask).records)
+
+    evidence = report.by_group["evidence"]
+    assert (evidence["given"]["answered"].mean, evidence["given"]["answered"].count) == (1.0, 1)
+    assert evidence["not given"]["answered"].mean == 0.0
+    assert set(report.by_group["unanswerable_kind"]) == {"near-miss"}
+    assert report.by_group["unanswerable_kind"]["near-miss"]["declined"].mean == 1.0
+    assert set(report.by_group["origin"]) == {"model-blind", "model-drafted"}
+    assert report.by_group["origin"]["model-blind"]["answered"].mean == 0.0
+
+
+def test_timing_and_tokens_leave_out_replies_that_never_reached_the_model() -> None:
+    def ask(question_text: str) -> Answer:
+        question = BY_TEXT[question_text]
+        if question is PARKING_QUESTION:
+            # Nothing was retrieved, so no request was sent.
+            return Answer(
+                question=question.question,
+                segments=(Segment(NOT_FOUND_MESSAGE),),
+                answered=False,
+                model="fake-model",
+                stop_reason="no_context",
+            )
+        seconds = 2.0 if question is LEAVE_QUESTION else 4.0
+        return reply(question, Segment("x", (Citation(LEAVE_CHUNK),)), seconds=seconds)
+
+    report = summarise_answers(QUESTIONS, run_answers(QUESTIONS, DOCUMENTS, ask).records)
+
+    assert report.timing == {
+        "median_seconds": 3.0,
+        "p95_seconds": 4.0,
+        "median_seconds_to_first_text": 1.0,
+    }
+    assert report.tokens == {
+        "input_total": 3600.0,
+        "output_total": 180.0,
+        "input_mean": 1800.0,
+        "output_mean": 90.0,
+    }
+
+
+def test_the_slowest_reply_in_twenty_is_the_95_percent_mark() -> None:
+    many = [
+        LEAVE_QUESTION.model_copy(update={"id": f"q{n:03d}", "question": f"Question {n}?"})
+        for n in range(1, 21)
+    ]
+    by_text = {question.question: n for n, question in enumerate(many, start=1)}
+
+    def ask(question_text: str) -> Answer:
+        return reply(
+            LEAVE_QUESTION,
+            Segment("x", (Citation(LEAVE_CHUNK),)),
+            seconds=float(by_text[question_text]),
+        )
+
+    report = summarise_answers(many, run_answers(many, DOCUMENTS, ask).records)
+
+    # Nineteen of the twenty replies took 19 seconds or less.
+    assert report.timing["p95_seconds"] == 19.0
+    assert report.timing["median_seconds"] == 10.5
+
+
+def test_a_summary_of_nothing_is_empty() -> None:
+    report = summarise_answers(QUESTIONS, {})
+
+    assert (report.summary, report.timing, report.tokens) == ({}, {}, {})
+    assert report.not_asked == 3
+
+
+# What a run writes
+
+
+def test_a_run_is_written_in_the_layout_the_other_tools_read(tmp_path: Path) -> None:
+    def ask(question_text: str) -> Answer:
+        question = BY_TEXT[question_text]
+        if question is LAPTOP_QUESTION:
+            raise GenerationError("busy")
+        return good_reply(question)
+
+    run = run_answers(QUESTIONS, DOCUMENTS, ask)
+    report = summarise_answers(QUESTIONS, run.records, run.failures)
+
+    run_dir = write_answer_run(
+        report, tmp_path, "baseline", "Answers by a fake model.", CONFIG, attempts=4
+    )
+
+    assert run_dir == tmp_path / "baseline"
+    rows = [json.loads(line) for line in (run_dir / "results.jsonl").read_text().splitlines()]
+    assert [row["prompt_id"] for row in rows] == ["q001", "u001"]
+    assert rows[0] == {
+        "prompt_id": "q001",
+        "prompt": "How long is parental leave?",
+        "fingerprint": LEAVE_QUESTION.fingerprint,
+        "tags": ["answerable", "model-drafted", "review:pending"],
+        "status": "ok",
+        "grade": {
+            "answered": 1.0,
+            "right_call": 1.0,
+            "evidence_in_context": 1.0,
+            "cites_evidence": 1.0,
+            "fully_cited": 1.0,
+        },
+        "latency_s": 2.0,
+        "answered": True,
+        "stop_reason": "end_turn",
+        "input_tokens": 1800,
+        "output_tokens": 90,
+    }
+    errors = [json.loads(line) for line in (run_dir / "errors.jsonl").read_text().splitlines()]
+    assert errors == [{"question_id": "q002", "error_class": "GenerationError", "message": "busy"}]
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["description"] == "Answers by a fake model."
+    assert summary["config"] == CONFIG
+    assert (summary["questions_scored"], summary["questions_failed"]) == (2, 1)
+    assert (summary["questions_not_asked"], summary["attempts"]) == (0, 4)
+    assert summary["metrics"]["right_call"] == {"mean": 1.0, "low": 1.0, "high": 1.0, "count": 2}
+    assert summary["by_group"]["unanswerable_kind"]["near-miss"]["declined"]["count"] == 1
+    assert summary["timing"]["median_seconds"] == 2.0
+    assert len(summary["labels_fingerprint"]) == 16
+    assert (run_dir / "change.md").read_text() == "Answers by a fake model.\n"
+    declared = json.loads((tmp_path / "_state.json").read_text())["metrics"]
+    assert [metric["id"] for metric in declared] == list(METRIC_IDS)
+
+    trace = json.loads((run_dir / "traces" / "q001_rep0.json").read_text())
+    assert [turn["role"] for turn in trace] == ["user", "tool_result", "assistant", "user"]
+    assert "[2] EVIDENCE  Title  (people/leave.md)" in trace[1]["content"]
+    assert trace[2]["content"] == "Sixteen weeks.[2]"
+    assert "Reference answer: Sixteen weeks." in trace[3]["content"]
+    refused = json.loads((run_dir / "traces" / "u001_rep0.json").read_text())
+    assert "does not answer this (near-miss). No page mentions parking." in refused[3]["content"]
+
+
+def test_passages_are_kept_by_id_and_not_by_their_text(tmp_path: Path) -> None:
+    # The corpus is not redistributed with the repository, and a saved run is committed.
+    open_run(tmp_path, CONFIG)
+    append_record(tmp_path, run_answers(QUESTIONS, DOCUMENTS, careful).records["q001"])
+
+    saved = (tmp_path / "answers.jsonl").read_text()
+
+    assert "chunk-people/leave.md" in saved
+    assert "New parents get" not in saved
+    assert Passage(1, "chunk-finance/expenses.md", "finance/expenses.md", "Title", ()) in (
+        load_records(tmp_path / "answers.jsonl")["q001"].passages
+    )

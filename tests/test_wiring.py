@@ -1,11 +1,14 @@
+import anthropic
 import pytest
 from pydantic import SecretStr
 
+from handbook_rag import wiring
 from handbook_rag.config import Settings
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
-from handbook_rag.wiring import make_generator
+from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT
+from handbook_rag.wiring import describe_generation, make_generator
 
 CLAUDE = "claude-haiku-5-5"
 
@@ -108,3 +111,65 @@ def test_keys_are_read_from_their_standard_variables_and_never_shown(
     assert key.get_secret_value() == "test-key-not-a-real-one"
     assert "test-key-not-a-real-one" not in repr(settings)
     assert "test-key-not-a-real-one" not in str(settings.model_dump())
+
+
+def test_an_evaluation_can_ask_for_one_attempt_per_request() -> None:
+    generator = make_generator(
+        Settings(gemini_api_key=SecretStr("test-key-not-a-real-one")), attempts=1
+    )
+
+    assert isinstance(generator, GeminiGenerator)
+    options = generator._client._api_client._http_options
+    assert options.retry_options is not None
+    # One attempt means the request is never sent a second time behind the caller's back.
+    assert options.retry_options.attempts == 1
+
+
+def test_one_attempt_for_a_claude_model_means_no_retries() -> None:
+    settings = Settings(
+        answer_model=CLAUDE, anthropic_api_key=SecretStr("sk-ant-test-not-a-real-key")
+    )
+
+    assert make_generator(settings, attempts=1)._client.max_retries == 0  # type: ignore[attr-defined]
+    assert make_generator(settings, attempts=3)._client.max_retries == 2  # type: ignore[attr-defined]
+    # Left out, the SDK's own default stands.
+    assert make_generator(settings)._client.max_retries == anthropic.DEFAULT_MAX_RETRIES  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("attempts", [0, -1])
+def test_a_request_cannot_be_sent_fewer_than_one_time(attempts: int) -> None:
+    with pytest.raises(ValueError, match="at least once"):
+        make_generator(Settings(gemini_api_key=SecretStr("k")), attempts=attempts)
+
+
+def test_a_run_records_what_decides_how_an_answer_looks() -> None:
+    described = describe_generation(Settings())
+
+    assert described == {
+        "answer_model": "gemini-3.5-flash-lite",
+        "answer_max_tokens": 4000,
+        "answer_context_chunks": 5,
+        "citations": "numbered markers",
+        "instructions": described["instructions"],
+    }
+    assert len(str(described["instructions"])) == 16
+
+
+def test_reworded_instructions_are_recorded_as_a_different_system(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = describe_generation(Settings())["instructions"]
+
+    monkeypatch.setattr(wiring, "MARKER_SYSTEM_PROMPT", MARKER_SYSTEM_PROMPT + " Be kind.")
+
+    assert describe_generation(Settings())["instructions"] != before
+
+
+def test_a_claude_run_records_its_own_instructions_and_effort() -> None:
+    gemini = describe_generation(Settings())
+    claude = describe_generation(Settings(answer_model=CLAUDE, answer_effort="high"))
+
+    assert claude["citations"] == "from the provider's API"
+    assert claude["answer_effort"] == "high"
+    assert claude["instructions"] != gemini["instructions"]
+    assert "answer_effort" not in gemini

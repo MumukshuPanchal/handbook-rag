@@ -10,6 +10,7 @@ import typer
 
 from handbook_rag import __version__, wiring
 from handbook_rag.config import get_settings
+from handbook_rag.evals import answers as answer_runs
 from handbook_rag.evals.compare import (
     ComparisonError,
     compare_runs,
@@ -30,6 +31,7 @@ from handbook_rag.evals.golden import check_against_corpus, sample_source_chunks
 from handbook_rag.evals.retrieval import METRICS, evaluate_retrieval, write_run
 from handbook_rag.evals.review import render_review_page
 from handbook_rag.generate.base import GenerationError
+from handbook_rag.generate.models import Answer
 from handbook_rag.generate.pricing import cost_usd
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import VectorStoreError
@@ -431,6 +433,174 @@ def eval_table(
         typer.echo(f"error: no such metric in every run: {', '.join(unknown)}", err=True)
         raise typer.Exit(code=1)
     typer.echo(results_table(overviews, labels, chosen), nl=False)
+
+
+@app.command(name="eval-answers")
+def eval_answers(
+    dataset: Annotated[
+        Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
+    ] = Path("evals/golden/questions.jsonl"),
+    variant: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Name of this run. The default, 'current', is a scratch run that git "
+                "ignores. Name a run to keep it: 'baseline', then 'v1', 'v2' and so on."
+            )
+        ),
+    ] = "current",
+    description: Annotated[
+        str | None,
+        typer.Option(help="One line saying what this variant is. Default: its answer model."),
+    ] = None,
+    output: Annotated[
+        Path, typer.Option(help="Directory that holds one sub-directory per variant.")
+    ] = Path("evals/runs/answers"),
+    max_requests: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Stop after this many requests. Run the command again to continue the run.",
+        ),
+    ] = None,
+    restart: Annotated[
+        bool,
+        typer.Option("--restart", help="Discard the replies this run has saved, and start again."),
+    ] = False,
+) -> None:
+    """Answer every golden question and score what code can check. One real request each.
+
+    Replies are saved as they arrive, so a run that stops, or is stopped, continues where
+    it left off when the command is run again.
+    """
+    settings = get_settings()
+    config = {**wiring.describe_retrieval(settings), **wiring.describe_generation(settings)}
+    run_dir = output / variant
+    try:
+        questions = _load_questions(dataset)
+        corpus = build_corpus(settings)
+        saved = answer_runs.open_run(run_dir, config, restart=restart)
+        retriever = wiring.make_retriever(settings)
+        # One attempt per request: the run then knows how many requests it has sent, and
+        # tries a failed question again itself.
+        generator = wiring.make_generator(settings, attempts=1)
+    except (
+        DatasetError,
+        CorpusError,
+        VectorStoreError,
+        GenerationError,
+        answer_runs.SavedRunError,
+    ) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    reusable = sum(
+        1 for q in questions if q.id in saved and saved[q.id].fingerprint == q.fingerprint
+    )
+    to_ask = len(questions) - reusable
+    if max_requests is not None:
+        to_ask = min(to_ask, max_requests)
+    pace = settings.eval_requests_per_minute
+    typer.echo(f"Answer evaluation: {variant}")
+    typer.echo(f"  model        {settings.answer_model}")
+    typer.echo(
+        f"  questions    {len(questions)} in the golden set, {reusable} already answered, "
+        f"{to_ask} to ask now"
+    )
+    if to_ask:
+        typer.echo(
+            f"  pace         at most {pace:g} requests a minute, so about "
+            f"{max(1, round(to_ask / pace))} min"
+        )
+
+    asked = 0
+
+    def keep(question: GoldenQuestion, record: answer_runs.AnswerRecord) -> None:
+        nonlocal asked
+        asked += 1
+        answer_runs.append_record(run_dir, record)
+        typer.echo(
+            f"  {asked:>4}/{to_ask}  {question.id}  "
+            f"{'answered' if record.answered else 'declined'}  {record.seconds:.1f} s"
+        )
+
+    def ask_one(question: str) -> Answer:
+        return answer_question(
+            question,
+            retriever=retriever,
+            generator=generator,
+            limit=settings.answer_context_chunks,
+        )
+
+    try:
+        run = answer_runs.run_answers(
+            questions,
+            corpus.documents,
+            ask_one,
+            saved=saved,
+            wait=answer_runs.Pacer(pace).wait,
+            on_record=keep,
+            max_attempts=max_requests,
+        )
+    except DatasetError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    attempts = answer_runs.add_attempts(run_dir, run.attempts)
+
+    report = answer_runs.summarise_answers(questions, run.records, run.failures)
+    if not report.scored:
+        typer.echo(f"error: no question was answered. {run.stopped or ''}".rstrip(), err=True)
+        raise typer.Exit(code=1)
+    answer_runs.write_answer_run(
+        report,
+        output,
+        variant,
+        description or f"Answers by {settings.answer_model} from five passages.",
+        config,
+        attempts=attempts,
+    )
+
+    typer.echo(
+        f"  replies      {len(report.scored)} scored, {len(report.failures)} failed, "
+        f"{report.not_asked} not asked yet"
+    )
+    typer.echo(f"  requests     at most {run.attempts} now, {attempts} for this run in all")
+    for metric in answer_runs.METRICS:
+        estimate = report.summary.get(metric["id"])
+        if estimate is None:
+            continue
+        typer.echo(
+            f"  {metric['label']:<28} {estimate.mean:.3f}  "
+            f"(95% interval {estimate.low:.3f} to {estimate.high:.3f}, n={estimate.count})"
+        )
+    for kind, estimates in report.by_group["unanswerable_kind"].items():
+        declined = estimates["declined"]
+        typer.echo(f"  Declined, {kind} questions: {declined.mean:.3f} (n={declined.count})")
+    for name, estimates in report.by_group["evidence"].items():
+        answered = estimates["answered"]
+        typer.echo(f"  Answered, evidence {name}: {answered.mean:.3f} (n={answered.count})")
+    if report.timing:
+        first = report.timing.get("median_seconds_to_first_text")
+        typer.echo(
+            f"  time         median {report.timing['median_seconds']:.1f} s, "
+            f"95% within {report.timing['p95_seconds']:.1f} s"
+            + (f", first words after {first:.1f} s" if first is not None else "")
+        )
+        typer.echo(
+            f"  tokens       {report.tokens['input_mean']:,.0f} in and "
+            f"{report.tokens['output_mean']:,.0f} out per question"
+        )
+    typer.echo(f"  written to   {run_dir}")
+    if run.stopped is not None:
+        typer.echo(f"  stopped: {run.stopped}")
+    for failure in report.failures[:5]:
+        typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
+    if report.not_asked or report.failures:
+        typer.echo("  Run the same command again to continue this run.")
+    # A limit the caller set is a planned stop. Any other early end is a failure.
+    planned = max_requests is not None and run.attempts >= max_requests
+    if report.failures or (run.stopped is not None and not planned):
+        raise typer.Exit(code=1)
 
 
 @app.command(name="eval-gate")

@@ -120,3 +120,19 @@ def test_answer_model_must_be_an_exact_name_not_an_alias(model: str) -> None:
 
 def test_the_model_is_given_five_chunks_by_default() -> None:
     assert Settings().answer_context_chunks == 5
+
+
+def test_an_evaluation_sends_ten_requests_a_minute_unless_told_otherwise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert Settings().eval_requests_per_minute == 10
+
+    monkeypatch.setenv("HANDBOOK_RAG_EVAL_REQUESTS_PER_MINUTE", "4.5")
+
+    assert Settings().eval_requests_per_minute == 4.5
+
+
+@pytest.mark.parametrize("rate", [0, -1, 601])
+def test_the_evaluation_pace_must_be_a_usable_rate(rate: float) -> None:
+    with pytest.raises(ValidationError):
+        Settings(eval_requests_per_minute=rate)

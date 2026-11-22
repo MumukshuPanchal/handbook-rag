@@ -5,7 +5,8 @@ which implementation stands behind each interface, so swapping one is a change h
 nowhere else.
 """
 
-from typing import Literal
+import hashlib
+from typing import Any, Literal
 
 import anthropic
 from google import genai
@@ -16,6 +17,8 @@ from handbook_rag.config import Settings
 from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
+from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT
+from handbook_rag.generate.prompt import SYSTEM_PROMPT
 from handbook_rag.index.embedder import Embedder, SentenceTransformerEmbedder
 from handbook_rag.index.sparse import Bm25Encoder, SparseEncoder
 from handbook_rag.index.store import QdrantVectorStore, VectorStore, VectorStoreError
@@ -156,7 +159,7 @@ def make_retriever(
     return retriever
 
 
-def make_generator(settings: Settings) -> Generator:
+def make_generator(settings: Settings, *, attempts: int | None = None) -> Generator:
     """Build the answer generator for the configured model.
 
     The model's name decides the provider: ``gemini-...`` is served by the Gemini API and
@@ -164,13 +167,39 @@ def make_generator(settings: Settings) -> Generator:
 
     A key is passed to its client explicitly. It is never exported into the process
     environment, where other tools could pick it up.
+
+    ``attempts`` is how often one request may be sent, the first time included. Left
+    out, a failed request is tried again a few times. An evaluation passes 1: it then
+    knows how many requests it has sent, and it tries a failed question again itself.
     """
+    if attempts is not None and attempts < 1:
+        raise ValueError("A request has to be sent at least once.")
     if settings.answer_model.startswith("gemini-"):
-        return _make_gemini_generator(settings)
-    return _make_claude_generator(settings)
+        return _make_gemini_generator(settings, attempts or GEMINI_ATTEMPTS)
+    return _make_claude_generator(settings, attempts)
 
 
-def _make_gemini_generator(settings: Settings) -> GeminiGenerator:
+def describe_generation(settings: Settings) -> dict[str, object]:
+    """The settings that decide what an answer looks like, for recording with a run.
+
+    The instructions are recorded as a short hash. A reworded instruction is a different
+    system, and two runs are comparable only if they name the same one.
+    """
+    gemini = settings.answer_model.startswith("gemini-")
+    instructions = MARKER_SYSTEM_PROMPT if gemini else SYSTEM_PROMPT
+    described: dict[str, object] = {
+        "answer_model": settings.answer_model,
+        "answer_max_tokens": settings.answer_max_tokens,
+        "answer_context_chunks": settings.answer_context_chunks,
+        "citations": "numbered markers" if gemini else "from the provider's API",
+        "instructions": hashlib.sha256(instructions.encode("utf-8")).hexdigest()[:16],
+    }
+    if not gemini:
+        described["answer_effort"] = settings.answer_effort
+    return described
+
+
+def _make_gemini_generator(settings: Settings, attempts: int) -> GeminiGenerator:
     key = settings.gemini_api_key
     if key is None or not key.get_secret_value():
         raise GenerationError(
@@ -182,7 +211,7 @@ def _make_gemini_generator(settings: Settings) -> GeminiGenerator:
         http_options=genai_types.HttpOptions(
             timeout=int(MODEL_TIMEOUT_SECONDS * 1000),  # the SDK counts in milliseconds
             retry_options=genai_types.HttpRetryOptions(
-                attempts=GEMINI_ATTEMPTS, http_status_codes=GEMINI_RETRY_STATUS_CODES
+                attempts=attempts, http_status_codes=GEMINI_RETRY_STATUS_CODES
             ),
         ),
     )
@@ -191,14 +220,16 @@ def _make_gemini_generator(settings: Settings) -> GeminiGenerator:
     )
 
 
-def _make_claude_generator(settings: Settings) -> ClaudeGenerator:
+def _make_claude_generator(settings: Settings, attempts: int | None) -> ClaudeGenerator:
     key = settings.anthropic_api_key
+    options: dict[str, Any] = {"timeout": MODEL_TIMEOUT_SECONDS}
+    if attempts is not None:
+        # The SDK counts the tries after the first one.
+        options["max_retries"] = attempts - 1
     # Without a key in the settings, the SDK looks in its own standard places.
-    client = (
-        anthropic.Anthropic(api_key=key.get_secret_value(), timeout=MODEL_TIMEOUT_SECONDS)
-        if key is not None and key.get_secret_value()
-        else anthropic.Anthropic(timeout=MODEL_TIMEOUT_SECONDS)
-    )
+    if key is not None and key.get_secret_value():
+        options["api_key"] = key.get_secret_value()
+    client = anthropic.Anthropic(**options)
     return ClaudeGenerator(
         client,
         model=settings.answer_model,

@@ -914,3 +914,246 @@ def test_ask_adds_no_note_when_the_reply_ended_normally(
     assert "stopped early" not in output
     assert "withheld" not in output
     assert "cut off" not in output
+
+
+# eval-answers: a real run sends one request per question, so these use a stand-in model.
+
+ANSWER_QUESTIONS: list[dict[str, Any]] = [
+    {
+        "id": "q001",
+        "question": "how many weeks of parental leave",
+        "reference_answer": "Sixteen weeks.",
+        "evidence": [{"doc_id": "people/leave.md", "quote": "sixteen weeks of paid leave"}],
+        "type": "answerable",
+        "origin": "model-drafted",
+    },
+    {
+        "id": "u001",
+        "question": "how much is the parking allowance",
+        "type": "unanswerable",
+        "origin": "model-drafted",
+        "unanswerable_kind": "near-miss",
+    },
+]
+
+
+class EvalModel:
+    """Answers from the first chunk, declines anything about parking, and counts its calls."""
+
+    def __init__(self, *, error: GenerationError | None = None) -> None:
+        self.questions: list[str] = []
+        self.built_with: list[dict[str, Any]] = []
+        self._error = error
+
+    def build(self, _settings: Settings, **options: Any) -> "EvalModel":
+        self.built_with.append(options)
+        return self
+
+    def generate(
+        self,
+        question: str,
+        chunks: Sequence[Chunk],
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Answer:
+        self.questions.append(question)
+        if self._error is not None:
+            raise self._error
+        declined = "parking" in question
+        text = NOT_FOUND_MESSAGE if declined else "Sixteen weeks of paid leave."
+        return Answer(
+            question=question,
+            segments=(Segment(text, () if declined else (Citation(chunks[0]),)),),
+            answered=not declined,
+            model="fake",
+            stop_reason="end_turn",
+            usage=TokenUsage(input_tokens=1800, output_tokens=90),
+            seconds=2.0,
+            seconds_to_first_text=1.0,
+        )
+
+
+@pytest.fixture
+def answer_run(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder, tmp_path: Path
+) -> list[str]:
+    """An indexed fake handbook, a two-question golden set, and no waiting between requests."""
+    golden = tmp_path / "questions.jsonl"
+    golden.write_text("".join(json.dumps(question) + "\n" for question in ANSWER_QUESTIONS))
+    monkeypatch.setattr("handbook_rag.evals.answers.time.sleep", lambda _seconds: None)
+    assert runner.invoke(app, ["index"]).exit_code == 0
+    return ["eval-answers", "--dataset", str(golden), "--output", str(tmp_path / "runs")]
+
+
+def test_eval_answers_asks_every_question_once_and_writes_the_run(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    model = EvalModel()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+
+    result = runner.invoke(app, [*answer_run, "--variant", "baseline"])
+
+    assert result.exit_code == 0, result.output
+    assert sorted(model.questions) == sorted(q["question"] for q in ANSWER_QUESTIONS)
+    # One attempt per request, so the run knows how many it sent.
+    assert model.built_with == [{"attempts": 1}]
+    assert "2 in the golden set, 0 already answered, 2 to ask now" in result.output
+    assert "at most 10 requests a minute" in result.output
+    assert "2 scored, 0 failed, 0 not asked yet" in result.output
+    assert "at most 2 now, 2 for this run in all" in result.output
+    assert "Right call                   1.000  (95% interval 1.000 to 1.000, n=2)" in result.output
+    assert "Declined, near-miss questions: 1.000 (n=1)" in result.output
+    assert "Answered, evidence given: 1.000 (n=1)" in result.output
+    assert "median 2.0 s" in result.output
+    assert "first words after 1.0 s" in result.output
+    assert "1,800 in and 90 out per question" in result.output
+    assert "Run the same command again" not in result.output
+
+    run_dir = tmp_path / "runs" / "baseline"
+    assert len((run_dir / "answers.jsonl").read_text().splitlines()) == 2
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["description"] == "Answers by gemini-3.5-flash-lite from five passages."
+    assert summary["config"]["answer_model"] == "gemini-3.5-flash-lite"
+    assert summary["config"]["retrieval_mode"] == "hybrid"
+    assert summary["attempts"] == 2
+    assert json.loads((run_dir / "run.json").read_text())["attempts"] == 2
+
+
+def test_eval_answers_continues_a_run_and_does_not_ask_twice(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    model = EvalModel()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+
+    first = runner.invoke(app, [*answer_run, "--max-requests", "1"])
+
+    # A limit the caller set is a planned stop, not a failure.
+    assert first.exit_code == 0, first.output
+    assert len(model.questions) == 1
+    assert "1 to ask now" in first.output
+    assert "1 scored, 0 failed, 1 not asked yet" in first.output
+    assert "stopped: the limit of 1 requests for this run was reached" in first.output
+    assert "Run the same command again to continue this run." in first.output
+
+    second = runner.invoke(app, answer_run)
+
+    assert second.exit_code == 0, second.output
+    assert len(model.questions) == 2
+    assert len(set(model.questions)) == 2
+    assert "1 already answered, 1 to ask now" in second.output
+    assert "at most 1 now, 2 for this run in all" in second.output
+
+    third = runner.invoke(app, answer_run)
+
+    assert third.exit_code == 0, third.output
+    assert len(model.questions) == 2
+    assert "2 already answered, 0 to ask now" in third.output
+    assert "requests a minute" not in third.output
+    assert "2 scored, 0 failed, 0 not asked yet" in third.output
+
+
+def test_eval_answers_does_not_continue_a_run_made_with_another_model(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str]
+) -> None:
+    model = EvalModel()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+    assert runner.invoke(app, answer_run).exit_code == 0
+
+    monkeypatch.setenv("HANDBOOK_RAG_ANSWER_MODEL", "gemini-9-other")
+    get_settings.cache_clear()
+    refused = runner.invoke(app, answer_run)
+
+    assert refused.exit_code == 1
+    assert "was made with other settings (answer_model)" in refused.output
+    assert len(model.questions) == 2
+
+    restarted = runner.invoke(app, [*answer_run, "--restart"])
+
+    assert restarted.exit_code == 0, restarted.output
+    assert len(model.questions) == 4
+    assert "0 already answered, 2 to ask now" in restarted.output
+
+
+def test_eval_answers_fails_clearly_when_the_model_cannot_be_reached(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    model = EvalModel(error=GenerationError("Today's limit is used up."))
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+
+    result = runner.invoke(app, answer_run)
+
+    assert result.exit_code == 1
+    assert "no question was answered" in result.output
+    assert "Today's limit is used up." in result.output
+    # Each question was tried, and tried once more. Nothing was scored or written as a result.
+    assert len(model.questions) == 3
+    assert not (tmp_path / "runs" / "current" / "summary.json").exists()
+    assert json.loads((tmp_path / "runs" / "current" / "run.json").read_text())["attempts"] == 3
+
+
+def test_eval_answers_reports_a_question_that_kept_failing(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    class FailsOnParking(EvalModel):
+        def generate(
+            self,
+            question: str,
+            chunks: Sequence[Chunk],
+            *,
+            on_text: Callable[[str], None] | None = None,
+        ) -> Answer:
+            if "parking" in question:
+                self.questions.append(question)
+                raise GenerationError("The Gemini API sent a reply that could not be read.")
+            return super().generate(question, chunks, on_text=on_text)
+
+    model = FailsOnParking()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+
+    result = runner.invoke(app, answer_run)
+
+    assert result.exit_code == 1
+    assert "1 scored, 1 failed, 0 not asked yet" in result.output
+    assert "failed: u001: The Gemini API sent a reply that could not be read." in result.output
+    assert "Run the same command again to continue this run." in result.output
+    errors = (tmp_path / "runs" / "current" / "errors.jsonl").read_text()
+    assert json.loads(errors)["question_id"] == "u001"
+
+
+def test_eval_answers_without_a_key_says_where_to_put_one(answer_run: list[str]) -> None:
+    result = runner.invoke(app, answer_run)
+
+    assert result.exit_code == 1
+    assert "GEMINI_API_KEY" in result.output
+
+
+def test_eval_answers_explains_a_missing_golden_set(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    model = EvalModel()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+
+    result = runner.invoke(app, ["eval-answers", "--dataset", str(tmp_path / "missing.jsonl")])
+
+    assert result.exit_code == 1
+    assert "golden set not found" in result.output
+    assert model.questions == []
+
+
+def test_eval_answers_stops_on_a_broken_label_before_any_request(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    model = EvalModel()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+    broken = {
+        **ANSWER_QUESTIONS[0],
+        "evidence": [{"doc_id": "people/leave.md", "quote": "twenty weeks of paid leave"}],
+    }
+    golden = tmp_path / "broken.jsonl"
+    golden.write_text(json.dumps(broken) + "\n")
+
+    result = runner.invoke(app, ["eval-answers", "--dataset", str(golden)])
+
+    assert result.exit_code == 1
+    assert "quote not found in people/leave.md" in result.output
+    assert model.questions == []

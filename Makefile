@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve eval-retrieval eval-compare eval-table eval-gate golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve eval-retrieval eval-answers eval-compare eval-table eval-gate golden-check golden-review
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -59,6 +59,9 @@ ask: ## Answer a question with citations, for example: make ask q="how do I expe
 
 eval-retrieval: ## Score the default retrieval on the golden set, as the run named "current"
 	uv run handbook-rag eval-retrieval --variant current
+
+eval-answers: ## Answer every golden question and score what code can check (one real request each)
+	uv run handbook-rag eval-answers
 
 eval-compare: ## Compare two runs: make eval-compare base=baseline candidate=v1
 	uv run handbook-rag eval-compare $(base) $(candidate)

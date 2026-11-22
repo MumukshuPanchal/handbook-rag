@@ -74,3 +74,23 @@ Four facts follow from this, and from what was seen while building the answering
 - "Right call" is 1 or 0 by a fixed rule. A reply that gives a related fact and then says the handbook lacks the detail asked for counts as an answer, and so as a wrong call on an unanswerable question. The first run had two such replies.
 - Scores from one run do not show how much replies vary from run to run. The interval reported with each mean covers which questions were asked, not how the model would answer them a second time. This is a stated limit.
 - Until a stronger judge is available, every judged score depends on a small model judging itself. The agreement figure reported beside it is the measure of how far to trust it.
+
+## Update, 2026-11-22: the judge was checked, and the first judged score recorded
+
+What decision 5 asked for was done the same day. The numbers are in the [evaluation guide](../evaluation.md#the-judged-score-supported-by-its-sources), and the labelled answers have a [card](../../evals/judge/README.md) of their own.
+
+- **The labels.** 169 answers with 264 statements: the 129 real answers of the first run, and 40 copies with one planted fault. Three model sessions of another family than the judge labelled them, the second without seeing the first one's labels. They agreed on 262 statements, and the second found all 40 planted faults without being told that any were planted.
+- **The check.** The judge caught 41 of 41 statements labelled unsupported and raised one false alarm in 42.
+- **The score.** 0.984 of the 129 answers are supported by their sources.
+
+Doing it changed four things in the design:
+
+1. **Checking the judge and scoring a run share their verdicts.** A verdict is saved under a hash of what the judge read, so the 129 real answers were judged once, in the check, and scoring the run cost no request. The day's count was 169 attempts to ask and 201 to judge. The second judged criterion waits for the next day's allowance after all, because its own labelled examples need judging too.
+2. **A failed request is followed by a rest.** Thirty-two attempts at judging failed, 31 of them because the model was overloaded. The first run of the check stopped itself after three in a row, as designed, although a short wait would have outlasted the overload. The loop now rests for 30 seconds after each failure, which costs no request.
+3. **A plain share gets a Wilson interval.** The bootstrap gave "41 of 41" an interval from 1.000 to 1.000. The Wilson interval runs from 0.914, which is what 41 cases can show.
+4. **Three verdicts, and room for "unclear".** A statement that only says what the handbook does not cover asserts nothing to check, so it has a verdict of its own. And where a third reader stood against two, the statement is labelled unclear and left out of the agreement figures, instead of a verdict being forced.
+
+Two weaknesses were found, and neither is fixed:
+
+- **Limits and exceptions that an answer leaves out.** The three unclear statements are all of this kind, the rubric had to be reworded for it twice, and the judge passed all three. It is also the fault seen by eye on the first day: a rule for one country given as if it held everywhere. Nothing in this evaluation measures it reliably yet.
+- **The judge can lose count in a long answer.** In one answer of nine statements its reasons slipped by one from the fourth statement on, and the last statement was never judged. Asking the judge to repeat the first words of each statement, and refusing a reply where they do not match, would catch this.

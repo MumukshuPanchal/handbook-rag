@@ -144,6 +144,7 @@ It puts every golden question through the same entry point that `ask` uses, save
 | Score | Taken over | What it says |
 |---|---|---|
 | Right call | every question | The assistant answered a question the handbook answers, or declined one it does not |
+| Supported by its sources | answers | No statement in the answer is unsupported by the passage it cites. This one comes from the judge, described [below](#the-judged-score-supported-by-its-sources) |
 | Answers when it should | answerable questions | The same score, for the questions that have an answer |
 | Declines when it should | unanswerable questions | The same score, for the questions that have none |
 | Evidence among the passages | answerable questions | A passage the model was given covers the known evidence. This is the search's Hit@5 for the run |
@@ -154,7 +155,7 @@ Three things to know when reading them:
 
 - **A wrong call is counted from outside.** When the search misses the evidence and the assistant declines, the assistant did the right thing with what it had, and the person asking still got no answer. That counts as a wrong call. "Evidence among the passages" and the split of "Answers when it should" by whether the evidence was given show where the fault lies.
 - **A score is taken only over the questions it applies to**, and every mean is printed with that count. "Cites the evidence" means nothing for a question whose evidence never reached the model, so that question is left out of it.
-- **These scores do not say that an answer is true.** An answer can name the right passage and still misstate it. Whether each statement is backed by the passage it cites is the next stage, and it needs a judge.
+- **The scores from code do not say that an answer is true.** An answer can name the right passage and still misstate it. Whether each statement is backed by the passage it cites is what the judge decides.
 
 ### One real request for each question
 
@@ -204,9 +205,92 @@ Against the targets in the [charter](charter.md):
 | At least 0.90 of unanswerable questions declined | 0.939 (31 of 33) | Met, on 33 questions: the interval reaches down to 0.848 |
 | At most 0.05 of answerable questions declined | 0.038 (5 of 132) | Met. All five are search misses |
 | 95% of answers complete within 10 seconds | 10.1 s for the model call | Just missed, on the free tier |
-| Answers supported by their sources, and answers correct | not measured yet | They need the judge |
+| At least 0.90 of answers supported by their sources | 0.984 (127 of 129) | Met, by a judge that was checked first. See [the judged score](#the-judged-score-supported-by-its-sources) |
+| At least 0.80 of answers correct | not measured yet | It needs a second judged criterion |
 
-**How far to trust these numbers.** Each question was asked once, and the same question gets a different answer each time, so a second run would not give exactly these numbers. The intervals cover which questions were asked, not how the model would answer them again. The questions were made and checked by model sessions and have not been verified by a person. And none of these scores says that an answer is true to its passage.
+**How far to trust these numbers.** Each question was asked once, and the same question gets a different answer each time, so a second run would not give exactly these numbers. The intervals cover which questions were asked, not how the model would answer them again. The questions were made and checked by model sessions and have not been verified by a person. The scores in this table come from code, and none of them says that an answer is true to its passage: that is the judged score, below.
+
+## The judged score: supported by its sources
+
+Code can tell that a statement names a passage. It cannot tell whether the passage says what the statement says. That needs a reader, and here the reader is a model: the judge.
+
+```bash
+uv run handbook-rag eval-judge --variant baseline
+uv run handbook-rag eval-support --variant baseline --checked evals/runs/judge/baseline
+```
+
+The first command checks the judge. The second scores a run's saved answers with it. Neither asks a question again.
+
+### What the judge decides
+
+The judge is given the question, the passages an answer cites, and the answer cut into numbered statements. It gives each statement one verdict, with its reason first:
+
+| Verdict | Meaning |
+|---|---|
+| `supported` | Every fact the statement asserts is in the passages it cites |
+| `unsupported` | At least one fact is not: it is missing, different, wider than the passage, or the statement asserts a fact and cites nothing |
+| `no_claim` | The statement asserts nothing about the handbook, such as a lead-in or a sentence saying what is not covered |
+
+An answer is **supported** when none of its statements is unsupported. Code decides that from the verdicts. The full rules are in [the rubric](../evals/judge/rubric.md). The judge's instructions give the same rules.
+
+A reply from the judge is used only if it gives exactly one verdict for each statement. A reply that leaves one out, or that was cut off, is an error and is tried again. It is never read as "supported".
+
+### Checking the judge first
+
+A judge's score means nothing until the judge has been checked. `eval-judge` gives it [169 labelled answers](../evals/judge/README.md): the 129 real answers of the first run, and 40 copies with one planted fault each, five of each of eight kinds. Two numbers matter most:
+
+- **Recall**: of the statements labelled unsupported, how many did the judge call unsupported? A judge with low recall lets faults through.
+- **Precision**: of the statements the judge called unsupported, how many are labelled so? A judge with low precision raises false alarms, and the score it reports is too low.
+
+The first check, `baseline`, on 22 November 2026, with `gemini-3.5-flash-lite` as the judge:
+
+| | Result (95% interval) | Out of |
+|---|---|---|
+| Unsupported statements caught (recall) | 1.000 (0.914 to 1.000) | 41 statements |
+| Alarms that were right (precision) | 0.976 (0.877 to 0.996) | 42 alarms |
+| Same decision as the label, unsupported or not | 0.996 (0.978 to 0.999) | 259 statements |
+| Agreement beyond chance (Cohen's kappa) | 0.986 | |
+| Same verdict on the whole answer | 0.994 (0.967 to 0.999) | 169 answers |
+
+- **Every planted fault was caught**: five of five of each kind (a changed number, a changed name, an added detail, a widened scope, a reversed condition, a removed citation, a citation of the wrong passage, a statement about another question), and the one real fault.
+- **One false alarm.** The judge called "The handbook does not cover any additional data sources beyond these." unsupported, because it asserts something about the whole handbook and cites nothing. The label is `no_claim`. A reader could side with the judge.
+- **Three more statements got another verdict without changing the decision**: `supported` and `no_claim` mixed up, which does not change whether an answer counts as supported.
+- **It took 201 attempts for 169 answers.** 32 attempts failed: 31 were answered "the model is overloaded" and one "internal error". The run stopped itself once after three such replies in a row, and took two more invocations to finish. Since then a failed request is followed by a rest of 30 seconds.
+
+How far this goes:
+
+- **41 of 41 is not certainty.** The interval reaches down to 0.914: a judge that misses one fault in twelve could still have caught all of these.
+- **The planted faults were written by a model**, and real answers held only one fault. The check shows that the judge catches faults like the planted ones.
+- **On dropped limits the judge is as lenient as most readers.** Three statements are labelled `unclear`: each leaves out a limit or an exception that its passage states, two readers called them supported and the third unsupported. The judge said supported each time. It did catch all five planted faults of that kind, which were more blunt.
+- **In one long answer the judge's numbering slipped.** The answer has nine statements, the third of which holds a lead-in and the first item of a list. From the fourth statement on, each of the judge's reasons is about the statement before, so the last statement was never judged. Every verdict was `supported`, so the score did not change. A rough check found no other answer like it among the 23 with three or more statements.
+- **The judge is the answer model.** The labels were made by models of another family, which is some protection, and no person has checked them.
+- **Sampling is left at the model's defaults**, so a second check could differ. That was not measured.
+
+### The score
+
+| Score | Result (95% interval) | Answers |
+|---|---|---|
+| Supported by its sources | 0.984 (0.961 to 1.000) | 129 |
+
+127 of the 129 answers have no unsupported statement. The judge read 204 statements: 199 supported, 2 unsupported, 3 without a claim. The two answers it faulted:
+
+- One states the right answer and names no passage. That is a real fault, and "Every statement cited" had found it too.
+- The other is the false alarm described above.
+
+The [charter](charter.md) asks for at least 0.90, so the target is met. If the third reader is right about the three unclear statements, three more answers are unsupported and the score is 0.961, still above the target. **Dropped limits and exceptions are the one kind of fault this evaluation found in real answers and cannot yet measure reliably**, and they are the same kind as the answer on 22 November that gave a rule for one country as if it held everywhere.
+
+Scoring cost no request: the check had already read these 129 answers, and a verdict is used again where the judge read exactly the same question, passages and statements.
+
+### How the judging is kept honest
+
+| Rule | Why |
+|---|---|
+| A verdict is saved under a hash of everything the judge read | An answer that is asked again reads differently, and is judged again |
+| Verdicts record the judge's model and a hash of its instructions, and verdicts of another judge are refused | Reworded instructions are another judge, whose agreement has to be measured again |
+| The agreement is quoted beside the score only if it was measured with the same judge | A check of one judge says nothing about another |
+| A score from a judge with no check on record prints with a warning | An unchecked judge can be wrong in either direction |
+| An answer the judge could not rule on has no verdict | It is counted neither as supported nor as unsupported |
+| A statement labelled `unclear` is left out of every agreement figure | No verdict is forced where careful readers split |
 
 ## What a run writes
 
@@ -228,8 +312,12 @@ An answer run under `evals/runs/answers/` has the same files, with two differenc
 |---|---|
 | `answers.jsonl` | Every reply: its statements, the passage numbers each one cites, the passages the model was given (by chunk id, with the evidence each covers), tokens and timing. Later stages score from this file, so it is committed. The passages are named, not copied; the statements are the model's own words |
 | `run.json` | The settings the run was started with, and how many requests it has sent |
+| `support.jsonl`, `support.json` | The judge's verdict on every statement of every answer, with its reasons, and the judge that made them |
+| `support_check.json` | The agreement with labelled answers that was measured for that judge |
 
 There is no `retrieved.jsonl`: `answers.jsonl` already lists the passages.
+
+A judge check under `evals/runs/judge/` holds `judgements.jsonl` (every verdict and reason), `disagreements.jsonl` (each statement the judge decided otherwise than its label), `summary.json` (the agreement figures) and `run.json`.
 
 ## Checks the harness itself must pass
 

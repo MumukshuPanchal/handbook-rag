@@ -18,19 +18,27 @@ from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT, MarkerParser, bu
 from handbook_rag.generate.models import Answer, TokenUsage
 from handbook_rag.ingest.models import Chunk
 
-# The SDK passes network failures on unchanged, from whichever HTTP library it runs on.
+# The SDK passes failures of the connection on unchanged, from whichever HTTP library it
+# runs on. The first group means the API was not reached or went silent. The second
+# means something arrived that could not be read.
 _NETWORK_ERRORS = (httpx.TransportError, httpx2.TransportError)
+_UNREADABLE_REPLY_ERRORS = (httpx.RequestError, httpx2.RequestError, errors.UnknownApiResponseError)
 
-# Reasons for stopping that mean the API withheld the answer, as opposed to the model
-# finishing or running out of room.
+# The two ways of stopping that leave an answer: the model finished, or it ran out of
+# room. After any other stop the reply is not counted as an answer, whatever it holds.
+_ANSWER_ENDINGS = frozenset({types.FinishReason.STOP, types.FinishReason.MAX_TOKENS})
+# Reasons for stopping that mean the API withheld the answer.
 _WITHHELD = frozenset(
     {
         types.FinishReason.SAFETY,
         types.FinishReason.RECITATION,
+        types.FinishReason.LANGUAGE,
         types.FinishReason.BLOCKLIST,
         types.FinishReason.PROHIBITED_CONTENT,
         types.FinishReason.SPII,
         types.FinishReason.MODEL_ARMOR,
+        types.FinishReason.ESCALATION,
+        types.FinishReason.PUP_LIMITED_DISABLED,
     }
 )
 
@@ -57,7 +65,8 @@ class GeminiGenerator:
         parser = MarkerParser(chunks)
         started = time.perf_counter()
         first_text_at: float | None = None
-        # The stop reason and the token counts come with the last pieces of the stream.
+        # The stop reason comes with the last piece of the stream. The token counts come
+        # with every piece as a running total, so the last ones are the request's.
         finish: types.FinishReason | None = None
         usage: types.GenerateContentResponseUsageMetadata | None = None
         served_by: str | None = None
@@ -69,6 +78,10 @@ class GeminiGenerator:
                 config=types.GenerateContentConfig(
                     system_instruction=MARKER_SYSTEM_PROMPT,
                     max_output_tokens=self._max_tokens,
+                    # One question is one request. Left on, the SDK sends the request
+                    # again by itself when a reply stops at the API's size limit, which
+                    # would spend requests from a small daily allowance unseen.
+                    automatic_continuation=False,
                 ),
             )
             for piece in stream:
@@ -88,6 +101,10 @@ class GeminiGenerator:
             raise GenerationError(self._explain(error)) from error
         except _NETWORK_ERRORS as error:
             raise GenerationError("Could not reach the Gemini API. Check the network.") from error
+        except _UNREADABLE_REPLY_ERRORS as error:
+            raise GenerationError(
+                "The Gemini API sent a reply that could not be read. Try again."
+            ) from error
         _pass_on(parser.finish(), on_text)
         finished = time.perf_counter()
 
@@ -96,7 +113,7 @@ class GeminiGenerator:
         return Answer(
             question=question,
             segments=segments,
-            answered=is_answered(segments, refused=withheld),
+            answered=is_answered(segments, refused=withheld or finish not in _ANSWER_ENDINGS),
             model=served_by or self._model,
             stop_reason=_stop_reason(finish, withheld=withheld),
             usage=_usage(usage),
@@ -126,16 +143,23 @@ class GeminiGenerator:
         seconds, or waiting until the next day. When the response does not say, the
         message stays general.
         """
-        violations = [
-            violation for detail in details for violation in _dictionaries(detail.get("violations"))
+        limits = [
+            str(violation.get("quotaId", ""))
+            for detail in details
+            for violation in _dictionaries(detail.get("violations"))
         ]
-        if any("PerDay" in str(violation.get("quotaId", "")) for violation in violations):
+        if any("PerDay" in limit for limit in limits):
             return (
                 f"Today's request limit for {self._model} on this Gemini key is used up. "
                 "Try again tomorrow, or choose another model with HANDBOOK_RAG_ANSWER_MODEL."
             )
         wait = next((detail["retryDelay"] for detail in details if "retryDelay" in detail), None)
         when = f"in {wait}" if isinstance(wait, str) and wait else "shortly"
+        if any("PerMinute" in limit for limit in limits):
+            return (
+                f"The per-minute limit for {self._model} on this Gemini key was reached. "
+                f"Try again {when}."
+            )
         return f"The Gemini API rate limit was reached. Try again {when}."
 
 
@@ -187,8 +211,11 @@ def _details(error: errors.APIError) -> list[Mapping[str, Any]]:
 
 
 def _dictionaries(value: object) -> list[Mapping[str, Any]]:
-    """The dictionaries in a value that should be a list of them. The API's error details
-    are not covered by the SDK's types, so their shape is checked instead of trusted."""
+    """The dictionaries in a value that should be a list of them.
+
+    The API's error details are not covered by the SDK's types, so their shape is checked
+    instead of trusted.
+    """
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, Mapping)]

@@ -639,7 +639,8 @@ def ask(
         raise typer.Exit(code=1) from error
     typer.echo("")
 
-    if answer.sources:
+    # A reply that is not an answer lists no sources, even if the model attached one to it.
+    if answer.answered and answer.sources:
         typer.echo("\nSources")
         for number, chunk in enumerate(answer.sources, start=1):
             typer.echo(f"  [{number}] {chunk.context_header}")
@@ -658,4 +659,8 @@ def ask(
         details.insert(3, f"${cost:.5f}")
     if answer.stop_reason == "max_tokens":
         details.append("cut off at the token limit")
+    elif answer.stop_reason == "refusal":
+        details.append("withheld by the model's provider")
+    elif answer.stop_reason not in ("end_turn", "no_context"):
+        details.append(f"stopped early ({answer.stop_reason})")
     typer.echo("\n" + " | ".join(details))

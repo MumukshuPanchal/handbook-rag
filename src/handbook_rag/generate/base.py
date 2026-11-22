@@ -50,15 +50,22 @@ def decline_without_context(
 def is_answered(segments: Sequence[Segment], *, refused: bool) -> bool:
     """Whether the assistant gave an answer, as opposed to declining or being stopped.
 
-    ``refused`` is the provider's own signal that it withheld the answer. Without it, an
-    answer counts as declined when it contains the fixed sentence and cites nothing: an
-    answer that covers part of the question may use the sentence for the part it could
-    not find, and still cites what it did find.
+    ``refused`` is the generator's own signal that the reply was withheld or did not
+    come to a proper end. Otherwise the reply is a decline in two cases:
+
+    - It is the fixed sentence and nothing else, even if the model attached a citation
+      to it.
+    - It contains the fixed sentence and cites nothing. An answer that covers part of
+      the question may use the sentence for the part it could not find, and still cites
+      what it did find.
     """
     if refused:
         return False
-    text = "".join(segment.text for segment in segments).strip()
-    if not text:
+    said = "".join(segment.text for segment in segments).strip().lower()
+    if not said:
+        return False
+    declined = NOT_FOUND_MESSAGE.rstrip(".").lower()
+    if said.rstrip(".") == declined:
         return False
     has_citations = any(segment.citations for segment in segments)
-    return has_citations or NOT_FOUND_MESSAGE.rstrip(".").lower() not in text.lower()
+    return has_citations or declined not in said

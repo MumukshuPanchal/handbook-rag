@@ -822,3 +822,82 @@ def test_ask_without_a_key_says_where_to_put_one(fake_pipeline: FakeEmbedder) ->
     assert "error: No Gemini API key was found" in result.output
     assert "GEMINI_API_KEY" in result.output
     assert "Traceback" not in result.output
+
+
+class FixedReply:
+    """A generator that gives one prepared reply, citing the first chunk it is handed."""
+
+    def __init__(self, text: str, *, answered: bool, stop_reason: str) -> None:
+        self._text = text
+        self._answered = answered
+        self._stop_reason = stop_reason
+
+    def generate(
+        self,
+        question: str,
+        chunks: Sequence[Chunk],
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Answer:
+        if on_text is not None:
+            on_text(self._text)
+        return Answer(
+            question=question,
+            segments=(Segment(self._text, (Citation(chunks[0]),)),),
+            answered=self._answered,
+            model="gemini-3.5-flash-lite",
+            stop_reason=self._stop_reason,
+        )
+
+
+def ask_with(monkeypatch: pytest.MonkeyPatch, reply: FixedReply) -> str:
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: reply)
+    runner.invoke(app, ["index"])
+    result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
+    assert result.exit_code == 0, result.output
+    return result.output
+
+
+def test_ask_lists_no_sources_for_a_reply_that_is_not_an_answer(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    # The model declined, and still attached a citation to the sentence.
+    output = ask_with(
+        monkeypatch, FixedReply(NOT_FOUND_MESSAGE, answered=False, stop_reason="end_turn")
+    )
+
+    assert NOT_FOUND_MESSAGE in output
+    assert "Sources" not in output
+    assert "Treat it with caution" not in output
+    assert "stopped early" not in output
+
+
+def test_ask_prints_no_dollar_figure_for_a_model_without_a_known_price(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    output = ask_with(
+        monkeypatch, FixedReply("Sixteen weeks.", answered=True, stop_reason="end_turn")
+    )
+
+    assert "Sources" in output
+    assert "gemini-3.5-flash-lite | 0 tokens in" in output
+    assert "$" not in output
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "note"),
+    [
+        ("max_tokens", "cut off at the token limit"),
+        ("refusal", "withheld by the model's provider"),
+        ("other", "stopped early (other)"),
+        ("unknown", "stopped early (unknown)"),
+    ],
+)
+def test_ask_says_when_the_reply_did_not_come_to_a_proper_end(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder, stop_reason: str, note: str
+) -> None:
+    reply = FixedReply(
+        "Sixteen weeks. And", answered=stop_reason == "max_tokens", stop_reason=stop_reason
+    )
+
+    assert note in ask_with(monkeypatch, reply)

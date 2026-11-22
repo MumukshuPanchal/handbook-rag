@@ -1,8 +1,8 @@
 """The Gemini generator is tested against a stand-in client that returns real SDK objects.
 
 No request is sent. Responses are built with the SDK's own response type, so these tests
-fail if our code and the SDK disagree about the shape of a response. The one test that
-does send a request is in ``tests/live``.
+fail if our code and the SDK disagree about the shape of a response. The tests that do
+send requests are in ``tests/live``.
 """
 
 from collections.abc import Iterator
@@ -114,8 +114,11 @@ def quota(quota_id: str, value: str) -> dict[str, Any]:
     }
 
 
+PER_MINUTE = "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"
+PER_DAY = "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
 RETRY_IN_36S = {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "36s"}
-# The body the API sent for a wrong key on 2026-11-22.
+# The two bodies below are what the API really sent on 2026-11-22, for a wrong key and
+# for a model name that does not exist.
 KEY_INVALID = [
     {
         "@type": "type.googleapis.com/google.rpc.ErrorInfo",
@@ -124,6 +127,11 @@ KEY_INVALID = [
         "metadata": {"service": SERVICE},
     }
 ]
+MODEL_NOT_FOUND = (
+    "models/gemini-0-does-not-exist is not found for API version v1, or is not supported "
+    "for generateContent. Call ModelService.ListModels to see the list of available "
+    "models and their supported methods."
+)
 
 
 def test_answer_text_and_citations_map_back_to_the_right_chunks() -> None:
@@ -161,6 +169,8 @@ def test_request_carries_the_instructions_model_limit_and_numbered_passages() ->
     assert call["model"] == MODEL
     assert call["config"].system_instruction == MARKER_SYSTEM_PROMPT
     assert call["config"].max_output_tokens == 4000
+    # One question, one request: the SDK must not send follow-up requests by itself.
+    assert call["config"].automatic_continuation is False
     prompt = call["contents"]
     assert '<search_result number="1">' in prompt
     assert '<search_result number="2">' in prompt
@@ -177,6 +187,16 @@ def test_text_is_passed_on_as_it_arrives_without_the_markers() -> None:
     assert len(received) > 1  # in pieces, not all at the end
     assert "".join(received) == answer.text == "Sixteen weeks. One thousand dollars."
     assert all(text for text in received)
+
+
+def test_text_still_held_back_when_the_stream_ends_is_passed_on_too() -> None:
+    # The reply ends in what could have become a marker, so the parser was holding it.
+    client = FakeClient(answer_pieces("Sixteen weeks [1]. See section [1"))
+    received: list[str] = []
+
+    answer = generator_for(client).generate("q", [LEAVE], on_text=received.append)
+
+    assert "".join(received) == answer.text == "Sixteen weeks. See section [1"
 
 
 def test_usage_model_and_stop_reason_come_from_the_response() -> None:
@@ -207,11 +227,29 @@ def test_usage_model_and_stop_reason_come_from_the_response() -> None:
     assert 0 <= answer.seconds_to_first_text <= answer.seconds
 
 
+def test_token_counts_are_a_running_total_so_the_last_ones_are_kept() -> None:
+    # Every piece of a real stream carries the counts so far.
+    client = FakeClient(
+        [
+            piece("Sixteen ", usage={"prompt_token_count": 1200, "candidates_token_count": 2}),
+            piece("weeks [1].", usage={"prompt_token_count": 1200, "candidates_token_count": 6}),
+            piece(
+                "", finish="STOP", usage={"prompt_token_count": 1200, "candidates_token_count": 7}
+            ),
+        ]
+    )
+
+    answer = generator_for(client).generate("q", [LEAVE])
+
+    assert (answer.usage.input_tokens, answer.usage.output_tokens) == (1200, 7)
+
+
 def test_a_response_without_token_counts_or_model_name_still_gives_an_answer() -> None:
     client = FakeClient([piece("Sixteen weeks [1].", finish="STOP", model_version=None)])
 
     answer = generator_for(client).generate("q", [LEAVE])
 
+    assert answer.answered
     assert answer.model == MODEL
     assert (answer.usage.input_tokens, answer.usage.output_tokens) == (0, 0)
 
@@ -223,12 +261,6 @@ def test_an_answer_cut_off_at_the_token_limit_says_so() -> None:
 
     assert answer.stop_reason == "max_tokens"  # the command line looks for this word
     assert answer.answered
-
-
-def test_a_stream_that_ends_without_a_stop_reason_is_reported_as_unknown() -> None:
-    client = FakeClient([piece("Sixteen weeks [1].")])
-
-    assert generator_for(client).generate("q", [LEAVE]).stop_reason == "unknown"
 
 
 def test_the_models_own_reasoning_is_not_part_of_the_answer() -> None:
@@ -255,6 +287,15 @@ def test_declining_is_recognised_as_not_answered() -> None:
     assert answer.stop_reason == "end_turn"
 
 
+def test_declining_with_a_marker_attached_is_still_not_answered() -> None:
+    client = FakeClient(answer_pieces(f"{NOT_FOUND_MESSAGE} [1]"))
+
+    answer = generator_for(client).generate("what is the wifi password?", [LEAVE])
+
+    assert answer.text == NOT_FOUND_MESSAGE
+    assert not answer.answered
+
+
 def test_partial_answer_that_mentions_a_gap_still_counts_as_answered() -> None:
     client = FakeClient(
         answer_pieces(f"Parents get sixteen weeks [1]. For adoption: {NOT_FOUND_MESSAGE}")
@@ -263,7 +304,20 @@ def test_partial_answer_that_mentions_a_gap_still_counts_as_answered() -> None:
     assert generator_for(client).generate("leave and adoption?", [LEAVE]).answered
 
 
-@pytest.mark.parametrize("finish", ["SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST"])
+@pytest.mark.parametrize(
+    "finish",
+    [
+        "SAFETY",
+        "RECITATION",
+        "LANGUAGE",
+        "BLOCKLIST",
+        "PROHIBITED_CONTENT",
+        "SPII",
+        "MODEL_ARMOR",
+        "ESCALATION",
+        "PUP_LIMITED_DISABLED",
+    ],
+)
 def test_an_answer_the_api_withheld_is_not_an_answer(finish: str) -> None:
     client = FakeClient(answer_pieces("Sixteen weeks [1]. And", finish=finish))
 
@@ -271,6 +325,22 @@ def test_an_answer_the_api_withheld_is_not_an_answer(finish: str) -> None:
 
     assert not answer.answered
     assert answer.stop_reason == "refusal"
+
+
+@pytest.mark.parametrize(
+    ("finish", "stop_reason"),
+    [("OTHER", "other"), ("MALFORMED_RESPONSE", "malformed_response"), (None, "unknown")],
+)
+def test_a_reply_that_did_not_come_to_a_proper_end_is_not_an_answer(
+    finish: str | None, stop_reason: str
+) -> None:
+    client = FakeClient([piece("Sixteen weeks [1]. And", finish=finish)])
+
+    answer = generator_for(client).generate("q", [LEAVE])
+
+    assert not answer.answered
+    assert answer.stop_reason == stop_reason
+    assert answer.text == "Sixteen weeks. And"  # what did arrive is kept
 
 
 def test_a_question_the_api_blocked_is_not_an_answer() -> None:
@@ -337,31 +407,34 @@ def test_no_chunks_means_no_model_call_and_no_answer() -> None:
             api_error(403, "PERMISSION_DENIED", message="Not enabled for this project."),
             f"not allowed to use {MODEL}: Not enabled for this project.",
         ),
-        (api_error(404, "NOT_FOUND"), f"The model {MODEL} was not found"),
+        (api_error(404, "NOT_FOUND", message=MODEL_NOT_FOUND), f"The model {MODEL} was not found"),
         (
-            api_error(
-                429,
-                "RESOURCE_EXHAUSTED",
-                [quota("GenerateRequestsPerMinutePerProjectPerModel-FreeTier", "15"), RETRY_IN_36S],
-            ),
-            "rate limit was reached. Try again in 36s.",
+            api_error(429, "RESOURCE_EXHAUSTED", [quota(PER_MINUTE, "15"), RETRY_IN_36S]),
+            f"The per-minute limit for {MODEL} on this Gemini key was reached. Try again in 36s.",
         ),
         (
-            api_error(
-                429,
-                "RESOURCE_EXHAUSTED",
-                [quota("GenerateRequestsPerDayPerProjectPerModel-FreeTier", "20"), RETRY_IN_36S],
-            ),
-            f"Today's request limit for {MODEL}",
+            api_error(429, "RESOURCE_EXHAUSTED", [quota(PER_MINUTE, "15")]),
+            f"The per-minute limit for {MODEL} on this Gemini key was reached. Try again shortly.",
         ),
-        (api_error(429, "RESOURCE_EXHAUSTED"), "rate limit was reached. Try again shortly."),
+        (
+            api_error(429, "RESOURCE_EXHAUSTED", [quota(PER_DAY, "20"), RETRY_IN_36S]),
+            f"Today's request limit for {MODEL} on this Gemini key is used up. Try again tomorrow",
+        ),
+        (
+            api_error(429, "RESOURCE_EXHAUSTED", [RETRY_IN_36S]),
+            "The Gemini API rate limit was reached. Try again in 36s.",
+        ),
+        (
+            api_error(429, "RESOURCE_EXHAUSTED"),
+            "The Gemini API rate limit was reached. Try again shortly.",
+        ),
         (
             api_error(429, "RESOURCE_EXHAUSTED", "not a list"),
-            "rate limit was reached. Try again shortly.",
+            "The Gemini API rate limit was reached. Try again shortly.",
         ),
         (
             api_error(429, "RESOURCE_EXHAUSTED", [{"violations": "not a list"}, "not a dict"]),
-            "rate limit was reached. Try again shortly.",
+            "The Gemini API rate limit was reached. Try again shortly.",
         ),
         (
             api_error(400, "INVALID_ARGUMENT", message="Request contains an invalid argument."),
@@ -374,6 +447,12 @@ def test_no_chunks_means_no_model_call_and_no_answer() -> None:
         (httpx2.ConnectError("Connection refused"), "Could not reach the Gemini API"),
         (httpx2.ReadTimeout("timed out"), "Could not reach the Gemini API"),
         (httpx.ConnectError("Connection refused"), "Could not reach the Gemini API"),
+        (httpx2.DecodingError("bad gzip data"), "sent a reply that could not be read"),
+        (httpx.DecodingError("bad gzip data"), "sent a reply that could not be read"),
+        (
+            errors.UnknownApiResponseError("Failed to parse response as JSON. Raw response: {no"),
+            "sent a reply that could not be read",
+        ),
     ],
 )
 def test_api_failures_become_clear_errors(error: BaseException, expected: str) -> None:

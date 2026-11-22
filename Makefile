@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant index search eval-retrieval eval-compare eval-table eval-gate golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant traces index search eval-retrieval eval-compare eval-table eval-gate golden-check golden-review
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -35,6 +35,9 @@ chunks: ## Clean and chunk the downloaded handbook, and print a summary
 
 qdrant: ## Start the Qdrant vector store in Docker
 	docker compose up --detach --wait qdrant
+
+traces: ## Start the trace backend in Docker; its web page is at http://localhost:16686
+	docker compose up --detach --wait jaeger
 
 index: ## Embed the chunks and store them in Qdrant
 	uv run handbook-rag index

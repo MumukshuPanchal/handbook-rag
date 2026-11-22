@@ -23,23 +23,23 @@ ADR 0006 named the method for a provider like this: number the passages and have
 - **Citations by numbered marker.** The passages are numbered in the prompt. The model puts the number of each supporting passage after a statement, such as `[2]`. Our code takes the markers out of the text as it streams and turns them into citations.
 - **Three rules decide what a marker is.**
   - Every number in it names a passage that was sent. Brackets around any other number stay in the text exactly as written, so a citation the model made up is visible and not silently removed.
-  - It is not inside code. Between backticks, `argv[1]` and `[1, 2, 3]` are part of the answer.
-  - It is short: up to ten numbers of up to three digits. The limit keeps the work per piece of streamed text small, however long the text is.
+  - It is not inside code. Between backticks, `argv[1]` and `[1, 2, 3]` are part of the answer. Code is what Markdown says it is: text between two equal runs of backticks on one line, or the lines between two lines that start with three or more. A backtick with no partner is an ordinary character, so it cannot switch citations off for the rest of an answer.
+  - It is short: up to ten numbers of up to three digits. Everything else the parser recognises has a largest size too. That keeps the work per piece of streamed text small, however long the text is, and at most about two hundred characters are ever held back.
 - **Passages are data.** Each passage sits in its own tagged block, apart from the instructions and the question. Text inside a passage that looks like one of those tags is made harmless, so a handbook page cannot close its own block and pose as something else.
 - **Declining follows [ADR 0010](0010-search-result-blocks-and-declining.md), with one addition.** A reply that is the fixed sentence and nothing else is a decline even when the model attached a marker to it. A model told to cite every statement may do that.
-- **A reply counts as an answer only when the model finished it or ran out of room.** After any other stop, such as a safety filter or a stream that ends without a reason, what arrived is kept and shown, and it is not counted as an answer.
-- **One question is one request.** The SDK can send a request again by itself when a reply stops at the API's size limit. That is switched off, because a free key has a small daily allowance.
-- **A rate limit is reported, not retried.** A request that fails because Google's servers are busy is sent up to three times. A rate limit on a free key lasts a minute or a day, so the request is not repeated, and the message says which limit it was when the API reports that.
+- **A reply counts as an answer only when the model finished it or ran out of room.** After any other stop, such as a safety filter or a stream that ends without a reason, what arrived is kept and shown, and it is not counted as an answer. The rule is the same for both providers.
+- **No follow-up requests.** The SDK can send a request again by itself when a reply stops at the API's size limit or the stream drops. That is switched off, because the free tier has a small daily allowance.
+- **A rate limit is reported, not retried.** A request that fails because Google's servers are busy is sent up to three times, which is the one case where a question costs more than one request. A rate limit on the free tier lasts a minute or a day, so the request is not repeated. The message says which limit it was when the API reports that, and that the limit belongs to the Google project, not to the key.
 - **The Claude generator stays**, behind the same interface. It has still not been run against the Claude API, and the README says so.
 - **Two tests send real requests** (`make test-live`). They need a key, so they never run in CI.
 
 ## What was measured
 
-On 2026-11-22, with a free key, on questions answered from five retrieved passages (1,513 to 1,728 tokens in):
+On 2026-11-22, with a free key, on questions answered from five retrieved passages (1,513 to 1,910 tokens in):
 
 | Model | First words after | Whole answer after | Notes |
 |---|---|---|---|
-| `gemini-3.5-flash-lite` | 1.2 to 1.4 s, in the three requests where it was timed | 1.2 to 2.0 s in four requests, 5.9 s in a fifth | Every request made while this was written succeeded |
+| `gemini-3.5-flash-lite` | 1.2 to 1.4 s, in the three requests where it was timed | 1.2 to 2.2 s in five requests, 5.9 s in a sixth | All thirteen requests made while this was written succeeded |
 | `gemini-3.6-flash` | 7.5 s | 8.2 s | One request. Spent 1,213 tokens reasoning first |
 | `gemini-3.8-flash` | no answer | no answer | One request, under a retry rule of three attempts: 503 "high demand" |
 | `gemini-4-hydrogen` | no answer | no answer | One request, under a retry rule of three attempts: 503 "high demand" |
@@ -66,7 +66,7 @@ These are a handful of requests from one laptop on one afternoon, enough to choo
 - The assistant answers real questions. `handbook-rag ask` and both live tests ran against the Gemini API on 2026-11-22.
 - **A citation from Gemini is weaker than one from Claude.** It names a whole passage, not the words the model relied on, so `cited_text` is empty for it. The evaluation cannot check a quote mechanically. It has to judge whether the passage supports the statement.
 - **The model can still cite the wrong passage.** Code guarantees only that a cited passage was really sent.
-- **A marker in ordinary text can still be misread.** A bracketed number that happens to match a passage, written outside code, is taken as a citation. The rules above cover the cases we could think of, not every one.
+- **A marker in ordinary text can still be misread.** A bracketed number that happens to match a passage is taken as a citation unless it stands between backticks. Code written any other way, such as an indented block or a block fenced with `~~~`, is not recognised as code.
 - **Only public text may be sent with a free key.** The handbook is public. A deployment over private documents would need the paid tier or another provider.
 - **The limits can change, and a full evaluation run is 165 requests.** Whether one run fits in a day is not known. It has to be measured when the answer evaluation is built, and the run may need pacing.
 - **The free models are not equally available.** Two of the four were overloaded when tried. This is a reason for the light model as the default, and a reason not to promise that another one works.

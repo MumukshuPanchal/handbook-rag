@@ -3,8 +3,9 @@ from typing import ClassVar
 
 import pytest
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.trace import StatusCode
+from opentelemetry.trace import SpanKind, StatusCode
 from qdrant_client import QdrantClient
 from typer.testing import CliRunner
 
@@ -12,8 +13,9 @@ from handbook_rag import tracing, wiring
 from handbook_rag.cli import app
 from handbook_rag.config import Settings, get_settings
 from handbook_rag.index.indexer import index_chunks
-from handbook_rag.index.store import QdrantVectorStore, VectorStoreError
+from handbook_rag.index.store import QdrantVectorStore, ScoredChunk, VectorStoreError
 from handbook_rag.retrieve.dense import Retriever
+from handbook_rag.retrieve.hybrid import HybridRetriever
 from handbook_rag.wiring import RetrievalMode
 from tests.support import (
     FakeEmbedder,
@@ -109,6 +111,29 @@ def test_spans_say_what_each_stage_returned(spans: InMemorySpanExporter) -> None
         assert span.attributes["db.collection.name"] == "traced"
 
 
+class Fixed:
+    """A retriever that always returns the same chunks."""
+
+    def __init__(self, *texts: str) -> None:
+        self._results = [ScoredChunk(make_chunk(text), 1.0) for text in texts]
+
+    def retrieve(self, query: str, *, limit: int, section: str | None = None) -> list[ScoredChunk]:
+        return self._results[:limit]
+
+
+def test_the_merge_span_counts_what_each_search_found_and_what_both_found(
+    spans: InMemorySpanExporter,
+) -> None:
+    hybrid = HybridRetriever(Fixed("a", "b", "c"), Fixed("c", "d"), candidates=30, rrf_k=60)
+
+    hybrid.retrieve("anything", limit=5)
+
+    fuse = named(spans, "fuse")
+    assert attribute(fuse, "fuse.from_dense") == 3
+    assert attribute(fuse, "fuse.from_sparse") == 2
+    assert attribute(fuse, "fuse.in_both") == 1
+
+
 def test_the_question_itself_is_left_out_of_a_trace_unless_content_is_switched_on(
     spans: InMemorySpanExporter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -166,12 +191,35 @@ def test_a_failing_stage_is_marked_as_failed_and_so_is_every_stage_around_it(
 
     failed = named(spans, "vector_store.query")
     assert failed.status.status_code is StatusCode.ERROR
+    assert failed.status.description == "handbook_rag.index.store.VectorStoreError"
+    assert failed.kind is SpanKind.CLIENT, "a call to another system"
     (event,) = failed.events
     assert event.name == "exception"
-    assert event.attributes is not None
-    assert "VectorStoreError" in str(event.attributes["exception.type"])
+    assert dict(event.attributes or {}) == {
+        "exception.type": "handbook_rag.index.store.VectorStoreError"
+    }, "the kind of error only: no message and no stack trace"
     assert named(spans, "retrieve.dense").status.status_code is StatusCode.ERROR
     assert named(spans, "embed.query").status.status_code is not StatusCode.ERROR
+
+
+def test_an_error_message_reaches_a_trace_only_when_content_is_switched_on(
+    spans: InMemorySpanExporter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(question: str) -> None:
+        with pytest.raises(ValueError, match="cannot embed"), tracing.stage("embed.query"):
+            raise ValueError(f"cannot embed {question!r}")
+
+    fail("my salary is 90,000")
+    (quiet,) = named(spans, "embed.query").events
+    spans.clear()
+    monkeypatch.setattr(tracing, "_record_content", True)
+    fail("my salary is 90,000")
+    (full,) = named(spans, "embed.query").events
+
+    assert "salary" not in str(dict(quiet.attributes or {}))
+    assert (quiet.attributes or {})["exception.type"] == "builtins.ValueError"
+    assert "salary" in str((full.attributes or {})["exception.message"])
+    assert "exception.stacktrace" in (full.attributes or {})
 
 
 def test_a_question_that_cannot_be_searched_still_leaves_a_span(
@@ -192,10 +240,27 @@ def test_nothing_is_recorded_until_tracing_is_configured() -> None:
 
     with tracing.stage("search") as span:
         results = build().retrieve("how many weeks of paid leave", limit=1)
+        # Checked while the span is open: a span that has ended reports the same.
+        assert span.is_recording() is False
+        assert tracing.trace_id(span) is None
 
     assert len(results) == 1
-    assert span.is_recording() is False
-    assert tracing.trace_id(span) is None
+
+
+def test_our_spans_never_use_the_process_wide_tracer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """After a session, OpenTelemetry's own default still points at that session's provider.
+
+    If ``stage`` fell back to it, tracing would stay half on: spans recorded, trace ids
+    printed, nothing sent.
+    """
+    left_behind = TracerProvider()
+    left_behind.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+    monkeypatch.setattr("opentelemetry.trace.get_tracer_provider", lambda: left_behind)
+    monkeypatch.setattr(tracing, "_provider", None)
+
+    with tracing.stage("search") as span:
+        assert span.is_recording() is False
+        assert tracing.trace_id(span) is None
 
 
 class RecordingExporter(InMemorySpanExporter):
@@ -263,6 +328,22 @@ def test_a_tracing_session_sends_what_was_recorded_and_then_switches_tracing_off
     assert tracing._record_content is False
 
 
+def test_a_session_that_ends_in_an_error_still_sends_its_spans_and_switches_off(
+    exporters: list[RecordingExporter],
+) -> None:
+    session = tracing.tracing_session(Settings(tracing=True))
+
+    with pytest.raises(RuntimeError, match="boom"), session, tracing.stage("search"):
+        raise RuntimeError("boom")
+
+    (exporter,) = exporters
+    (sent,) = exporter.get_finished_spans()
+    assert sent.status.status_code is StatusCode.ERROR
+    assert tracing._provider is None
+    with tracing.stage("afterwards") as later:
+        assert later.is_recording() is False
+
+
 def test_a_session_with_tracing_off_does_nothing(exporters: list[RecordingExporter]) -> None:
     with tracing.tracing_session(Settings()), tracing.stage("search") as span:
         assert span.is_recording() is False
@@ -308,6 +389,10 @@ def test_a_traced_search_prints_the_id_of_its_trace(
     assert f"trace {format(root.context.trace_id, '032x')}" in result.output
     assert {span.context.trace_id for span in sent} == {root.context.trace_id}
     assert "retrieve.hybrid" in {span.name for span in sent}
+    # Content is off unless the settings switch it on, so the question is not in the trace.
+    recorded = {key: value for span in sent for key, value in (span.attributes or {}).items()}
+    assert "handbook_rag.query.text" not in recorded
+    assert "how many weeks of paid leave" not in recorded.values()
 
 
 @pytest.mark.usefixtures("indexed_handbook")

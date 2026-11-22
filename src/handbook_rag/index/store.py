@@ -8,6 +8,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
+from opentelemetry.trace import SpanKind
 from qdrant_client import QdrantClient, models
 
 from handbook_rag.index.sparse import SparseVector
@@ -171,9 +172,11 @@ class QdrantVectorStore:
     def _query(
         self, query: list[float] | models.SparseVector, using: str, limit: int, section: str | None
     ) -> list[ScoredChunk]:
-        with stage("vector_store.query", vector=using, limit=limit, section=section) as span:
-            # Names from the OpenTelemetry conventions for database calls, so a trace
-            # backend can recognise this span as one.
+        with stage(
+            "vector_store.query", kind=SpanKind.CLIENT, vector=using, limit=limit, section=section
+        ) as span:
+            # The span kind and these names follow the OpenTelemetry conventions for
+            # database calls, so a trace backend can recognise this span as one.
             span.set_attribute("db.system.name", "qdrant")
             span.set_attribute("db.collection.name", self._collection)
             span.set_attribute("db.operation.name", "query")

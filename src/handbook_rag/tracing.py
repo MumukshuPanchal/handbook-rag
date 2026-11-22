@@ -19,7 +19,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
-from opentelemetry.trace import Span
+from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 
 from handbook_rag import __version__
 from handbook_rag.config import Settings
@@ -37,6 +37,8 @@ EXPORT_TIMEOUT_SECONDS = 3.0
 # Process-wide state, set once by ``configure_tracing``. Tests replace both.
 _provider: TracerProvider | None = None
 _record_content = False
+# What ``stage`` uses while tracing is off. It hands out spans that record nothing.
+_OFF = trace.NoOpTracerProvider()
 
 
 def configure_tracing(
@@ -65,8 +67,9 @@ def configure_tracing(
         )
     )
     provider.add_span_processor(BatchSpanProcessor(exporter))
-    # Also the process-wide default, so that libraries which trace themselves, such as
-    # the model SDK, add their spans to the same trace.
+    # Also OpenTelemetry's process-wide default, so that a library which traces itself
+    # adds its spans to the same trace. Our own spans never rely on that default: see
+    # ``stage``.
     trace.set_tracer_provider(provider)
     _provider = provider
     _record_content = settings.trace_content
@@ -88,19 +91,40 @@ def tracing_session(settings: Settings) -> Iterator[None]:
 
 
 @contextmanager
-def stage(name: str, **attributes: str | int | float | bool | None) -> Iterator[Span]:
+def stage(
+    name: str, *, kind: SpanKind = SpanKind.INTERNAL, **attributes: str | int | float | bool | None
+) -> Iterator[Span]:
     """Open a span for one stage of the pipeline.
 
-    Spans opened inside it become its children. An exception that leaves the block is
-    recorded on the span and marks it as failed, then carries on to the caller.
-    Attribute names are given without the ``handbook_rag.`` prefix.
+    Spans opened inside it become its children. An exception that leaves the block marks
+    the span as failed, then carries on to the caller. Attribute names are given without
+    the ``handbook_rag.`` prefix.
+
+    What is kept of an exception depends on the content setting. An error message can
+    quote the input that caused it, and a stack trace holds file paths from this machine.
+    So by default only the kind of exception is recorded; with content switched on, its
+    message and stack trace are recorded too.
     """
-    tracer = trace.get_tracer(TRACER_NAME, __version__, tracer_provider=_provider)
-    with tracer.start_as_current_span(name) as span:
+    # Never OpenTelemetry's process-wide default: once a session has ended, that default
+    # still points at the session's provider, and tracing would stay half switched on.
+    provider = _provider if _provider is not None else _OFF
+    tracer = trace.get_tracer(TRACER_NAME, __version__, tracer_provider=provider)
+    with tracer.start_as_current_span(
+        name, kind=kind, record_exception=False, set_status_on_exception=False
+    ) as span:
         for key, value in attributes.items():
             if value is not None:
                 span.set_attribute(f"{ATTRIBUTE_PREFIX}.{key}", value)
-        yield span
+        try:
+            yield span
+        except Exception as error:
+            kind_of_error = f"{type(error).__module__}.{type(error).__qualname__}"
+            span.set_status(Status(StatusCode.ERROR, kind_of_error))
+            if _record_content:
+                span.record_exception(error)
+            else:
+                span.add_event("exception", {"exception.type": kind_of_error})
+            raise
 
 
 def record_query(span: Span, query: str) -> None:

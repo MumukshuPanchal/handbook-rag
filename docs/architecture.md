@@ -31,7 +31,7 @@ flowchart LR
 
 - **Load and clean.** Reads each Markdown file, separates front matter from the body, removes template shortcodes and raw HTML, and records the title, public URL and handbook section.
 - **Chunk.** Packs a page's sections into chunks within a token budget, starting a new chunk at each major heading, and cuts sections that are too long with a small overlap. Each chunk keeps its heading path (for example `Leave > Parental leave`) and its character offsets in the page. Details: [ADR 0009](adr/0009-structure-aware-chunking.md).
-- **Embed.** Computes a dense vector (captures meaning) for each chunk. A sparse vector (captures exact terms) is added when hybrid search arrives in milestone M3.
+- **Embed.** Computes a dense vector (captures meaning) and a sparse vector (captures exact terms) for each chunk.
 - **Store.** Writes vectors and metadata to Qdrant. Writes are idempotent: indexing the same snapshot twice changes nothing.
 
 ## Query path
@@ -58,7 +58,7 @@ flowchart LR
 5. **Generate** an answer. The kept chunks are sent to Claude as documents with citations enabled. The instructions tell the model to answer only from those documents and to say so plainly when they do not contain the answer.
 6. **Return** the answer, its citations (page, section, quoted text, URL), whether the assistant answered or abstained, and a trace ID.
 
-The first working version (the baseline) uses dense search only and skips steps 3 and 4. Hybrid search and reranking are added later, each one measured against the baseline.
+The first working version (the baseline) used dense search only and skipped steps 3 and 4. Hybrid search is now the default, and reranking is available but switched off. Both were decided from measurements ([ADR 0011](adr/0011-hybrid-retrieval-by-default.md)).
 
 ## Components
 

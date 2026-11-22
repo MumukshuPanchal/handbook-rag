@@ -2,14 +2,15 @@
 
 A knowledge assistant that answers questions from a company handbook, built the way a production team would build it: answers grounded in retrieved passages and cited, quality measured by an evaluation suite, and every request traced for latency and cost.
 
-**Status: the assistant answers real questions with citations. Search is built, measured, served and traced; measuring the answers is next.**
+**Status: the assistant answers real questions with citations, and the first answer measurements are in. Search is built, measured, served and traced; judging whether each answer is true to its sources is next.**
 
 - The handbook is indexed, and hybrid search is the default, chosen on a checked set of test questions.
 - It runs as a service: an HTTP API, and `docker compose up` for the whole system.
 - Every request is traced, stage by stage.
 - CI fails when retrieval breaks.
 - `ask` retrieves passages and has a language model write an answer that cites them, or says the handbook does not cover the question. It runs on Gemini with a free API key, and ran for real on 22 November 2026.
-- Not done yet: the answers are not measured, `ask` is a command and not an HTTP endpoint, and the model call is not traced.
+- All 165 test questions were put to it on 22 November 2026. It made the right call, to answer or to decline, on 0.958 of them.
+- Not done yet: no judge has checked whether each statement is backed by the passage it cites, `ask` is a command and not an HTTP endpoint, and the model call is not traced.
 
 This README is updated as each milestone lands.
 
@@ -47,7 +48,25 @@ Retrieval on 132 test questions over 38,881 chunks of the handbook. These are th
 - **Reranking is off by default.** It brings no clear gain at five results, and it makes search about seven times slower.
 - **Two experiments did not help**, and are written up anyway: half-size chunks, and other settings of the rank fusion ([experiment log](docs/experiments/2026-11-22-chunk-size-and-fusion.md)).
 - **CI catches broken retrieval.** Every pull request is scored with the real models on a slice of the handbook, and fails if a score falls below a recorded minimum. That detects breakage, such as losing either half of hybrid search. It does not detect a change that costs one or two questions ([ADR 0012](docs/adr/0012-retrieval-gate-on-a-slice.md)).
-- **Targets.** The [charter](docs/charter.md) asks for Recall@5 of at least 0.85 and MRR@10 of at least 0.70. Hybrid search reaches 0.962 and 0.807. Answer quality is not measured yet.
+- **Targets.** The [charter](docs/charter.md) asks for Recall@5 of at least 0.85 and MRR@10 of at least 0.70. Hybrid search reaches 0.962 and 0.807.
+
+### Answer scores
+
+All 165 test questions, answered by `gemini-3.5-flash-lite` from the five passages hybrid search found, on 22 November 2026. These scores are computed by code from the saved replies, with no judge. The run is [`evals/runs/answers/baseline`](evals/runs/answers/baseline), and [the evaluation guide](docs/evaluation.md#answer-metrics) says what each score means.
+
+| Score | Result (95% interval) | Questions |
+|---|---|---|
+| Right call: answered what the handbook answers, declined what it does not | 0.958 (0.927 to 0.988) | 165 |
+| Answers when it should | 0.962 (0.924 to 0.992) | 132 |
+| Declines when it should | 0.939 (0.848 to 1.000) | 33 |
+| Every statement cited | 0.977 (0.953 to 1.000) | 129 |
+| Cites the passage that holds the evidence | 0.992 (0.976 to 1.000) | 127 |
+
+- **Every answerable question that went unanswered was a search miss.** The assistant answered all 127 questions whose evidence it was given, and declined the 5 whose evidence the search had missed. Raising this score means better retrieval, not a better prompt.
+- **The two wrong calls on unanswerable questions are replies a person would accept.** Each gives a related fact and then says the handbook does not give the detail asked for. The score is 1 or 0 by a fixed rule, so it understates here.
+- **Speed is uneven on the free tier.** The median reply took 2.4 s, and 95% arrived within 10.1 s, just over the charter's 10 seconds. A third took more than 5 s.
+- **Not measured yet: whether an answer is true.** An answer can name the right passage and misstate it. That needs a judge, and is the next stage ([ADR 0014](docs/adr/0014-answer-evaluation-in-stages.md)).
+- **One run, one reply for each question.** The same question gets a different answer each time, so a second run would not give exactly these numbers.
 
 **How far to trust these numbers.** The test questions were made by one model session and checked by another, over several rounds. No person has verified them one by one, and most were written by a model that could see the passage. The [dataset card](evals/golden/README.md) says how the set was made, what the checks found, and what its limits are.
 
@@ -143,6 +162,7 @@ make ask q="how do I expense a laptop"   # answer with citations; needs a free G
 make test-live       # send two real requests to the answer model
 make golden-check    # verify every test question against the handbook
 make eval-retrieval  # score the default search, as a scratch run named "current"
+make eval-answers    # answer every test question and score what code can check: 165 real requests
 make eval-table      # print a results table with one row per run on disk
 make eval-gate       # the retrieval check CI runs, on a slice of the handbook
 ```

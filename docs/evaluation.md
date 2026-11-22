@@ -131,6 +131,83 @@ Its scores are not quality numbers. A slice of 8% of the handbook is easier to s
 
 When a pull request changes retrieval on purpose, it changes the minimums in the same pull request, with the full evaluation as its evidence. The minimums are a floor to be raised, not a target. The reasoning, and the designs that were measured and rejected, are in [ADR 0012](adr/0012-retrieval-gate-on-a-slice.md).
 
+## Answer metrics
+
+Retrieval metrics say whether the right passage was found. They say nothing about what the assistant wrote with it. Answers are measured in stages, and the reasoning is in [ADR 0014](adr/0014-answer-evaluation-in-stages.md). The first stage needs no judge:
+
+```bash
+uv run handbook-rag eval-answers --variant baseline
+```
+
+It puts every golden question through the same entry point that `ask` uses, saves each reply, and scores what a program can decide. `make eval-answers` does the same for the scratch run `current`.
+
+| Score | Taken over | What it says |
+|---|---|---|
+| Right call | every question | The assistant answered a question the handbook answers, or declined one it does not |
+| Answers when it should | answerable questions | The same score, for the questions that have an answer |
+| Declines when it should | unanswerable questions | The same score, for the questions that have none |
+| Evidence among the passages | answerable questions | A passage the model was given covers the known evidence. This is the search's Hit@5 for the run |
+| Every statement cited | answers | No statement in the answer lacks a passage number |
+| Cites the evidence | answers that were given the evidence | A passage the answer names covers the known evidence |
+
+Three things to know when reading them:
+
+- **A wrong call is counted from outside.** When the search misses the evidence and the assistant declines, the assistant did the right thing with what it had, and the person asking still got no answer. That counts as a wrong call. "Evidence among the passages" and the split of "Answers when it should" by whether the evidence was given show where the fault lies.
+- **A score is taken only over the questions it applies to**, and every mean is printed with that count. "Cites the evidence" means nothing for a question whose evidence never reached the model, so that question is left out of it.
+- **These scores do not say that an answer is true.** An answer can name the right passage and still misstate it. Whether each statement is backed by the passage it cites is the next stage, and it needs a judge.
+
+### One real request for each question
+
+On a free Gemini key the default model allows 15 requests a minute and 500 a day, so a run of 165 questions is a third of a day's allowance. The run is careful with it:
+
+| What the run does | Why |
+|---|---|
+| Sends at most 10 requests a minute (`HANDBOOK_RAG_EVAL_REQUESTS_PER_MINUTE`) | The key stays usable for `ask` while a run is going |
+| Builds its client with one attempt for each request, and tries a failed question once more itself, after the others | The run knows how many requests it sent. A client that retries by itself sends requests nobody counts |
+| Saves each reply as it arrives, and continues where it stopped when the command is run again | A run that is interrupted loses nothing it paid for |
+| Records its settings, with a hash of the instructions, and refuses to continue with other ones | Replies from two models or two prompts never end up in one run |
+| Stops itself after three failures in a row | By then the cause is the day's allowance, the network or the key |
+| Asks the questions in a fixed order that mixes the kinds | A run that stops early is still a fair sample |
+
+`--max-requests 20` stops after twenty requests. `--restart` discards everything the run has written. A request that fails is shown as it happens. A question that fails twice is written to `errors.jsonl` and is never scored as a wrong answer.
+
+The count of requests is an upper limit: the run counts every question it puts to the pipeline, before the request is sent, and a question whose search fails or finds nothing never reaches the model. The count starts again when a run is restarted.
+
+Answer runs are compared and tabled like retrieval runs: `uv run handbook-rag eval-compare baseline v1 --runs evals/runs/answers` and `uv run handbook-rag eval-table --runs evals/runs/answers`. A score is compared on the questions that have it in both runs, and the output says how many those are.
+
+### The first run
+
+`baseline`, on 22 November 2026: all 165 golden questions, answered by `gemini-3.5-flash-lite` from five passages found by the default hybrid search. No question was left unanswered by a failure. The run made 169 attempts for its 165 replies: four questions failed once and were answered on the second try.
+
+| Score | Result (95% interval) | Questions |
+|---|---|---|
+| Right call | 0.958 (0.927 to 0.988) | 165 |
+| Answers when it should | 0.962 (0.924 to 0.992) | 132 |
+| Declines when it should | 0.939 (0.848 to 1.000) | 33 |
+| Evidence among the passages | 0.962 (0.924 to 0.992) | 132 |
+| Every statement cited | 0.977 (0.953 to 1.000) | 129 |
+| Cites the evidence | 0.992 (0.976 to 1.000) | 127 |
+
+What the replies behind these numbers show:
+
+- **Every answerable question that went unanswered was a search miss.** The assistant answered all 127 questions whose evidence it was given, and declined all 5 whose evidence the search had missed. So "Answers when it should" equals the search's Hit@5 exactly, and the way to raise it is better retrieval, not a better prompt. Declining without the evidence is what the assistant is meant to do.
+- **Both wrong calls on unanswerable questions are replies a person would accept.** Each gives a related fact from a passage and then says that the handbook does not give the detail that was asked: "However, the specific monetary amount allocated is not provided in the handbook." Both are near-miss questions, where the handbook covers the topic and not the detail. The score is 1 or 0 by a fixed rule, and a reply that carries a citation counts as an answer. So 0.939 understates how the assistant behaved, and judging such replies fairly needs a reader.
+- **Three answers have a statement without a citation.** In two, that statement is the sentence saying what the handbook does not cover, which has no passage to cite. The third answer is correct and names no passage at all. The citation parser cites a reconstruction of that answer correctly wherever the marker is placed, so the model most likely wrote no marker. This cannot be proved, because the reply is not kept as the model wrote it.
+- **Citations point at the evidence**: 126 of the 127 answers that were given the evidence name a passage that covers it. The one that does not is the answer without any citation.
+- **Speed is uneven.** The median reply took 2.4 s, and 95% arrived within 10.1 s. A third of the replies (56 of 165) took more than 5 s, and the slowest 17.1 s. The time is the model call alone, on the free tier.
+- **Size.** A question sends 1,654 tokens on average and gets 36 back. Answers are short: the median answer is 36 tokens long, and 120 of the 129 answers cite exactly one passage.
+
+Against the targets in the [charter](charter.md):
+
+| Target | Measured | |
+|---|---|---|
+| At least 0.90 of unanswerable questions declined | 0.939 (31 of 33) | Met, on 33 questions: the interval reaches down to 0.848 |
+| At most 0.05 of answerable questions declined | 0.038 (5 of 132) | Met. All five are search misses |
+| 95% of answers complete within 10 seconds | 10.1 s for the model call | Just missed, on the free tier |
+| Answers supported by their sources, and answers correct | not measured yet | They need the judge |
+
+**How far to trust these numbers.** Each question was asked once, and the same question gets a different answer each time, so a second run would not give exactly these numbers. The intervals cover which questions were asked, not how the model would answer them again. The questions were made and checked by model sessions and have not been verified by a person. And none of these scores says that an answer is true to its passage.
+
 ## What a run writes
 
 Each kept run is a variant: `baseline` first, then `v1`, `v2` and so on. (`current` is the scratch run.) A variant directory under `evals/runs/retrieval/` contains:
@@ -145,6 +222,17 @@ Each kept run is a variant: `baseline` first, then `v1`, `v2` and so on. (`curre
 
 A harness failure, such as the vector store being unreachable, is recorded in `errors.jsonl` and never counted as a miss. A score has to describe the retriever, not the plumbing around it.
 
+An answer run under `evals/runs/answers/` has the same files, with two differences:
+
+| File | Content |
+|---|---|
+| `answers.jsonl` | Every reply: its statements, the passage numbers each one cites, the passages the model was given (by chunk id, with the evidence each covers), tokens and timing. Later stages score from this file, so it is committed. The passages are named, not copied; the statements are the model's own words |
+| `run.json` | The settings the run was started with, and how many requests it has sent |
+
+There is no `retrieved.jsonl`: `answers.jsonl` already lists the passages.
+
 ## Checks the harness itself must pass
 
 The test suite runs two sanity checks through the whole evaluation: a retriever that always returns the right passage first must score 1.0 on every metric, and one that never returns it must score 0. An evaluation that fails either check is measuring its own bugs.
+
+The answer evaluation has the same two checks: an assistant that cites the right passage and declines what it should must score 1.0 on every score, and one that declines every answerable question and answers the others without a citation must score 0 on every score that is about the assistant.

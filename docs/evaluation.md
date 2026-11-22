@@ -127,7 +127,7 @@ It keeps the 134 pages that hold evidence for a golden set question, indexes the
 - any question could not be searched. Elsewhere such failures are kept apart from the scores; a gate that passed while part of the set went unmeasured would be worse than no gate;
 - nothing was scored at all.
 
-Its scores are not quality numbers. A slice of 8% of the handbook is easier to search than the whole, so hybrid search scores 0.992 on Hit@5 there and 0.962 on the full index. The gate's scores are only compared with themselves. What it shows is that a change broke retrieval: on the same slice, dense search alone scores 0.939 and keyword search alone 0.962, and both fail.
+Its scores are not quality numbers. A slice of 8% of the handbook is easier to search than the whole, so hybrid search scores 0.992 on Hit@5 there and 0.962 on the full index. The gate's scores are only compared with themselves. What it shows is that a change broke retrieval: on the same slice, dense search alone scores 0.939 and keyword search alone 0.962, and both fail. The dense-only failure was also produced in CI, in a pull request made for that purpose; the keyword-only number was measured on a laptop. A change that costs one or two questions still passes.
 
 When a pull request changes retrieval on purpose, it changes the minimums in the same pull request, with the full evaluation as its evidence. The minimums are a floor to be raised, not a target. The reasoning, and the designs that were measured and rejected, are in [ADR 0012](adr/0012-retrieval-gate-on-a-slice.md).
 

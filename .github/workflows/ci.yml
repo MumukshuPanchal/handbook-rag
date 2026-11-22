@@ -60,7 +60,8 @@ jobs:
         run: uv sync --locked
 
       # The handbook is not stored in this repository. It is downloaded at the pinned
-      # commit and kept between runs, under a key that changes when the pin changes.
+      # commit and cached, under a key that changes when the pin or the download code
+      # changes. A cache is shared with other branches once a run on main has saved it.
       - name: Read the pinned handbook commit
         id: pin
         run: |
@@ -72,7 +73,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: data/handbook
-          key: handbook-${{ steps.pin.outputs.commit }}
+          key: handbook-${{ steps.pin.outputs.commit }}-${{ hashFiles('src/handbook_rag/ingest/snapshot.py') }}
 
       - name: Download the handbook snapshot
         if: steps.handbook.outputs.cache-hit != 'true'
@@ -88,10 +89,11 @@ jobs:
           path: |
             ~/.cache/huggingface
             ~/.cache/fastembed
-          key: models-${{ hashFiles('src/handbook_rag/config.py', 'uv.lock') }}
+          key: models-${{ hashFiles('src/handbook_rag/config.py', 'uv.lock', '.github/workflows/ci.yml') }}
 
-      # With the model files restored nothing has to be fetched, so the gate cannot fail
-      # because the model hub is slow or down.
+      # With the model files restored the gate step fetches nothing, so it cannot fail
+      # because the model hub is slow or down. The key includes this file, so a model
+      # chosen here by an environment variable starts from a cold cache, online.
       - name: Work offline when the models are restored
         if: steps.models.outputs.cache-hit == 'true'
         run: echo "HF_HUB_OFFLINE=1" >> "$GITHUB_ENV"

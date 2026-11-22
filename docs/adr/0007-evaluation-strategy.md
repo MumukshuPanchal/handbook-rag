@@ -17,7 +17,7 @@ An evaluation can also mislead. Typical causes are test questions that are too e
 4. **Answer metrics from a model judge.** A judge model scores each answer on separate yes/no criteria: supported by the cited passages, consistent with the reference answer, and correct to abstain or not. The judge returns schema-constrained output. Before its scores are trusted it is checked against human labels on a sample, and the agreement is reported.
 5. **One code path.** The evaluation calls the same entry point as the API.
 6. **Honest bookkeeping.** Each run stores per-question results and full traces with the model name, token usage and latency taken from the API response. Timeouts and API errors are recorded separately and never scored as wrong answers.
-7. **Regression gate.** CI runs the retrieval evaluation on a small fixed corpus and fails the build if a metric drops below its threshold.
+7. **Regression gate.** CI runs the retrieval evaluation on a small fixed corpus and fails the build if a metric drops below its threshold. How it was built, on a fixed slice of the real corpus, is settled in [ADR 0012](0012-retrieval-gate-on-a-slice.md).
 
 ## Alternatives considered
 

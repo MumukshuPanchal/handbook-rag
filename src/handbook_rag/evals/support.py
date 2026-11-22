@@ -7,7 +7,7 @@ material with the same code:
 - the answers of a run, to score them;
 - labelled answers, to check the judge itself (see :mod:`handbook_rag.evals.agreement`).
 
-A verdict is saved with a key made from everything the judge read. A saved verdict is
+A verdict is saved with a fingerprint of everything the judge read. A saved verdict is
 used again only for exactly the same question, passages and statements, so judging the
 labelled answers and scoring a run never pays twice for the same answer.
 """
@@ -193,7 +193,7 @@ def _text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
-def case_key(case: SupportCase) -> str:
+def case_fingerprint(case: SupportCase) -> str:
     """A short hash of everything the judge reads for one answer."""
     content = [
         case.question,
@@ -205,10 +205,10 @@ def case_key(case: SupportCase) -> str:
 
 
 def judgement_row(case: SupportCase, judgement: Judgement) -> dict[str, Any]:
-    """A judgement as it is saved, with the key of what was judged."""
+    """A judgement as it is saved, with the fingerprint of what was judged."""
     return {
         "case": case.case_id,
-        "key": case_key(case),
+        "fingerprint": case_fingerprint(case),
         "verdicts": [
             {"number": v.number, "verdict": v.verdict, "reason": v.reason}
             for v in judgement.verdicts
@@ -221,11 +221,11 @@ def judgement_row(case: SupportCase, judgement: Judgement) -> dict[str, Any]:
 
 
 def load_judgements(path: Path) -> dict[str, Judgement]:
-    """Read saved judgements, by the key of what was judged. The latest one for a key wins."""
+    """Read saved judgements, by the fingerprint of what was judged. The latest one wins."""
     judgements: dict[str, Judgement] = {}
     for number, row in load_rows(path):
         try:
-            judgements[str(row["key"])] = Judgement(
+            judgements[str(row["fingerprint"])] = Judgement(
                 case_id=str(row["case"]),
                 verdicts=tuple(
                     StatementVerdict(int(v["number"]), _verdict(v["verdict"]), str(v["reason"]))
@@ -274,7 +274,7 @@ def run_judge(
 ) -> JudgeRun:
     """Judge every answer that has no saved judgement of exactly what it holds.
 
-    ``saved`` maps the key of a case to a judgement made earlier. ``on_judgement``
+    ``saved`` maps the fingerprint of a case to a judgement made earlier. ``on_judgement``
     receives each judgement the run will hold, with a flag saying whether it is new, so
     the caller can save it.
 
@@ -287,7 +287,7 @@ def run_judge(
     run = JudgeRun(judgements={})
     pending: list[SupportCase] = []
     for case in cases:
-        earlier = saved.get(case_key(case))
+        earlier = saved.get(case_fingerprint(case))
         if earlier is None:
             pending.append(case)
             continue
@@ -358,7 +358,11 @@ def saved_support(run_dir: Path, cases: Sequence[SupportCase]) -> dict[str, Judg
     left out: it is a verdict on other words.
     """
     saved = load_judgements(support_stage(run_dir).rows_path)
-    return {case.case_id: saved[key] for case in cases if (key := case_key(case)) in saved}
+    return {
+        case.case_id: saved[fingerprint]
+        for case in cases
+        if (fingerprint := case_fingerprint(case)) in saved
+    }
 
 
 def judge_record(run_dir: Path, judged: Mapping[str, Judgement]) -> dict[str, object] | None:

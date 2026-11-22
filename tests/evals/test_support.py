@@ -24,7 +24,7 @@ from handbook_rag.evals.stage import SavedRunError
 from handbook_rag.evals.support import (
     CHECK_FILE,
     agreement_headline,
-    case_key,
+    case_fingerprint,
     judge_check_stage,
     judge_record,
     judgement_row,
@@ -182,7 +182,7 @@ def test_a_cited_passage_that_is_not_in_the_corpus_stops_the_stage() -> None:
         support_cases(QUESTIONS, RECORDS, without_leave)
 
 
-def test_the_key_of_a_case_changes_with_anything_the_judge_reads() -> None:
+def test_the_fingerprint_of_a_case_changes_with_anything_the_judge_reads() -> None:
     (case, _) = support_cases(QUESTIONS, RECORDS, CHUNKS)
     replace = dataclasses.replace
     variants = [
@@ -197,13 +197,13 @@ def test_the_key_of_a_case_changes_with_anything_the_judge_reads() -> None:
         replace(case, statements=(replace(case.statements[0], cites=(3,)), *case.statements[1:])),
     ]
 
-    keys = {case_key(variant) for variant in variants}
+    prints = {case_fingerprint(variant) for variant in variants}
 
-    assert len(keys) == len(variants)
-    assert case_key(case) not in keys
+    assert len(prints) == len(variants)
+    assert case_fingerprint(case) not in prints
     # The id is a name, not something the judge reads.
-    assert case_key(replace(case, case_id="another-name")) == case_key(case)
-    assert len(case_key(case)) == 16
+    assert case_fingerprint(replace(case, case_id="another-name")) == case_fingerprint(case)
+    assert len(case_fingerprint(case)) == 16
 
 
 # Labelled answers
@@ -326,7 +326,7 @@ def test_other_faults_in_the_file_of_labelled_answers_are_reported(tmp_path: Pat
 # Saving judgements
 
 
-def test_a_saved_judgement_comes_back_as_it_was_under_the_key_of_what_was_judged(
+def test_a_saved_judgement_comes_back_as_it_was_under_the_fingerprint_of_what_was_judged(
     tmp_path: Path,
 ) -> None:
     (case, other) = support_cases(QUESTIONS, RECORDS, CHUNKS)
@@ -338,14 +338,14 @@ def test_a_saved_judgement_comes_back_as_it_was_under_the_key_of_what_was_judged
     stage.append(judgement_row(other, ScriptedJudge().judge(other)))
 
     saved = load_judgements(stage.rows_path)
-    assert set(saved) == {case_key(case), case_key(other)}
-    assert saved[case_key(case)] == judgement
-    assert [v.verdict for v in saved[case_key(case)].verdicts] == [
+    assert set(saved) == {case_fingerprint(case), case_fingerprint(other)}
+    assert saved[case_fingerprint(case)] == judgement
+    assert [v.verdict for v in saved[case_fingerprint(case)].verdicts] == [
         "supported",
         "unsupported",
         "no_claim",
     ]
-    assert not saved[case_key(case)].supported
+    assert not saved[case_fingerprint(case)].supported
 
 
 @pytest.mark.parametrize(
@@ -354,7 +354,7 @@ def test_a_saved_judgement_comes_back_as_it_was_under_the_key_of_what_was_judged
         {"case": "q001"},
         {
             "case": "q001",
-            "key": "k",
+            "fingerprint": "f",
             "verdicts": [{"number": 1, "verdict": "perhaps", "reason": ""}],
             "model": "m",
             "input_tokens": 1,
@@ -415,7 +415,7 @@ def test_every_answer_is_judged_once_and_handed_over_as_new() -> None:
 def test_a_saved_verdict_on_exactly_the_same_answer_is_used_again() -> None:
     cases = support_cases(QUESTIONS, RECORDS, CHUNKS)
     first = run_judge(cases, ScriptedJudge({("q001", 2): "unsupported"}))
-    saved = {case_key(case): first.judgements[case.case_id] for case in cases}
+    saved = {case_fingerprint(case): first.judgements[case.case_id] for case in cases}
     judge = ScriptedJudge()
     kept: list[tuple[str, bool]] = []
 
@@ -435,7 +435,7 @@ def test_a_saved_verdict_on_exactly_the_same_answer_is_used_again() -> None:
 def test_an_answer_that_reads_differently_is_judged_again() -> None:
     cases = support_cases(QUESTIONS, RECORDS, CHUNKS)
     first = run_judge(cases, ScriptedJudge())
-    saved = {case_key(case): first.judgements[case.case_id] for case in cases}
+    saved = {case_fingerprint(case): first.judgements[case.case_id] for case in cases}
     # The question was asked again and the reply now says something else.
     changed = {**RECORDS, "q002": record("q002", Statement("Two thousand dollars.", (1,)))}
     judge = ScriptedJudge({("q002", 1): "unsupported"})

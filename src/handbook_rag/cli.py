@@ -46,7 +46,7 @@ from handbook_rag.evals.support import (
     UNCLEAR,
     JudgeRun,
     agreement_headline,
-    case_key,
+    case_fingerprint,
     judge_check_stage,
     judge_record,
     judgement_row,
@@ -752,7 +752,7 @@ def _judge_carefully(
     """
     own = load_judgements(stage.rows_path)
     known = {**reuse, **own}
-    to_judge = sum(1 for case in cases if case_key(case) not in known)
+    to_judge = sum(1 for case in cases if case_fingerprint(case) not in known)
     typer.echo(
         f"  answers      {len(cases)} to read, {len(cases) - to_judge} already judged, "
         f"{to_judge if max_requests is None else min(to_judge, max_requests)} to judge now"
@@ -772,7 +772,7 @@ def _judge_carefully(
 
     def keep(case: SupportCase, judgement: Judgement, new: bool) -> None:
         nonlocal judged_now
-        if case_key(case) not in own:
+        if case_fingerprint(case) not in own:
             stage.append(judgement_row(case, judgement))
         if new:
             judged_now += 1

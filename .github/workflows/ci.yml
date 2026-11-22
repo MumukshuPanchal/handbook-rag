@@ -97,4 +97,8 @@ jobs:
         run: echo "HF_HUB_OFFLINE=1" >> "$GITHUB_ENV"
 
       - name: Retrieval gate
+        # DEMONSTRATION, NOT FOR MERGING: search is forced back to dense only, to show
+        # that the gate fails when the keyword half of hybrid search is lost.
+        env:
+          HANDBOOK_RAG_RETRIEVAL_MODE: dense
         run: uv run handbook-rag eval-gate

@@ -11,8 +11,12 @@ class Citation:
     """A passage the model relied on for part of its answer."""
 
     chunk: Chunk
-    cited_text: str
-    """The exact text of the cited passage, as returned by the API."""
+    cited_text: str | None = None
+    """The exact words the model relied on, when the provider's API reports them.
+
+    ``None`` when the model named the passage by its number: the citation then covers the
+    whole passage.
+    """
 
 
 @dataclass(frozen=True, slots=True)

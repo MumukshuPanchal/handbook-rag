@@ -11,6 +11,7 @@ dependencies = [
     "anthropic>=2.12.0",
     "fastapi>=0.165.0",
     "fastembed>=0.9.1",
+    "google-genai>=3.6.1",
     "markdown-it-py>=4.3.0",
     "opentelemetry-exporter-otlp-proto-http>=1.45.2",
     "opentelemetry-sdk>=1.45.2",
@@ -53,9 +54,13 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "PT", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Slow tests download a model. They are skipped by default: run them with `make test-slow`.
-addopts = "-ra --strict-markers --strict-config -m 'not slow'"
-markers = ["slow: downloads a model or needs a running service"]
+# Slow tests download a model, and live tests send a real request to a model API. Both
+# are skipped by default: run them with `make test-slow` and `make test-live`.
+addopts = "-ra --strict-markers --strict-config -m 'not slow and not live'"
+markers = [
+    "slow: downloads a model or needs a running service",
+    "live: sends a real request to a model API and needs a key in .env",
+]
 filterwarnings = [
     # Tests use Qdrant's embedded mode, where payload indexes are accepted but unused.
     "ignore:Payload indexes have no effect in the local Qdrant:UserWarning",

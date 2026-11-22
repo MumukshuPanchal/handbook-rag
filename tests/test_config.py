@@ -80,3 +80,22 @@ def test_search_is_hybrid_and_not_reranked_unless_configured() -> None:
 
     assert settings.retrieval_mode == "hybrid"
     assert settings.rerank is False
+
+
+def test_answers_are_written_by_an_exact_gemini_model_by_default() -> None:
+    model = Settings().answer_model
+
+    assert model.startswith("gemini-")
+    # An alias such as gemini-flash-latest would change models without notice.
+    assert "latest" not in model
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-flash", "claude-haiku-5-5"])
+def test_answer_model_may_be_a_gemini_or_a_claude_model(model: str) -> None:
+    assert Settings(answer_model=model).answer_model == model
+
+
+@pytest.mark.parametrize("model", ["gpt-4o", "", "Gemini-3.8-flash", "models/gemini-3.8-flash"])
+def test_answer_model_from_an_unknown_provider_is_rejected(model: str) -> None:
+    with pytest.raises(ValidationError, match=r"must be a Gemini model .* or a Claude model"):
+        Settings(answer_model=model)

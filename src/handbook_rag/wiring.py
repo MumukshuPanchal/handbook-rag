@@ -8,10 +8,14 @@ nowhere else.
 from typing import Literal
 
 import anthropic
+from google import genai
+from google.genai import types as genai_types
 from qdrant_client import QdrantClient
 
 from handbook_rag.config import Settings
+from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.claude import ClaudeGenerator
+from handbook_rag.generate.gemini import GeminiGenerator
 from handbook_rag.index.embedder import Embedder, SentenceTransformerEmbedder
 from handbook_rag.index.sparse import Bm25Encoder, SparseEncoder
 from handbook_rag.index.store import QdrantVectorStore, VectorStore, VectorStoreError
@@ -21,6 +25,14 @@ from handbook_rag.retrieve.rerank import CrossEncoderReranker, RerankingRetrieve
 from handbook_rag.retrieve.sparse import SparseRetriever
 
 RetrievalMode = Literal["dense", "sparse", "hybrid"]
+
+# How long one request to an answer model may take.
+MODEL_TIMEOUT_SECONDS = 60.0
+# How often a request to Gemini is sent before giving up, and which failures are worth
+# another try: the server was busy or failed. A rate limit (429) is not among them. On a
+# free key it means waiting a minute or a day, which trying again a second later cannot fix.
+GEMINI_ATTEMPTS = 3
+GEMINI_RETRY_STATUS_CODES = [408, 500, 502, 503, 504]
 
 
 def make_embedder(settings: Settings) -> SentenceTransformerEmbedder:
@@ -140,17 +152,48 @@ def make_retriever(
     return retriever
 
 
-def make_generator(settings: Settings) -> ClaudeGenerator:
-    """Build the answer generator.
+def make_generator(settings: Settings) -> Generator:
+    """Build the answer generator for the configured model.
 
-    The key is passed to the client explicitly when it is set in the settings. It is never
-    exported into the process environment, where other tools could pick it up.
+    The model's name decides the provider: ``gemini-...`` is served by the Gemini API and
+    ``claude-...`` by the Claude API. The settings accept no other name.
+
+    A key is passed to its client explicitly. It is never exported into the process
+    environment, where other tools could pick it up.
     """
+    if settings.answer_model.startswith("gemini-"):
+        return _make_gemini_generator(settings)
+    return _make_claude_generator(settings)
+
+
+def _make_gemini_generator(settings: Settings) -> GeminiGenerator:
+    key = settings.gemini_api_key
+    if key is None or not key.get_secret_value():
+        raise GenerationError(
+            "No Gemini API key was found. Create a free key in Google AI Studio and put it "
+            "in a .env file in the project folder, as GEMINI_API_KEY."
+        )
+    client = genai.Client(
+        api_key=key.get_secret_value(),
+        http_options=genai_types.HttpOptions(
+            timeout=int(MODEL_TIMEOUT_SECONDS * 1000),  # the SDK counts in milliseconds
+            retry_options=genai_types.HttpRetryOptions(
+                attempts=GEMINI_ATTEMPTS, http_status_codes=GEMINI_RETRY_STATUS_CODES
+            ),
+        ),
+    )
+    return GeminiGenerator(
+        client, model=settings.answer_model, max_tokens=settings.answer_max_tokens
+    )
+
+
+def _make_claude_generator(settings: Settings) -> ClaudeGenerator:
     key = settings.anthropic_api_key
+    # Without a key in the settings, the SDK looks in its own standard places.
     client = (
-        anthropic.Anthropic(api_key=key.get_secret_value(), timeout=60.0)
+        anthropic.Anthropic(api_key=key.get_secret_value(), timeout=MODEL_TIMEOUT_SECONDS)
         if key is not None and key.get_secret_value()
-        else anthropic.Anthropic(timeout=60.0)
+        else anthropic.Anthropic(timeout=MODEL_TIMEOUT_SECONDS)
     )
     return ClaudeGenerator(
         client,

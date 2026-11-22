@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow check snapshot chunks qdrant traces up index search ask serve eval-retrieval eval-compare eval-table eval-gate golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve eval-retrieval eval-compare eval-table eval-gate golden-check golden-review
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -24,6 +24,9 @@ test: ## Run the fast tests with coverage
 
 test-slow: ## Run the tests that download a model
 	uv run pytest -m slow
+
+test-live: ## Send one real request to the answer model (needs its key in .env)
+	uv run pytest -m live
 
 check: lint typecheck test ## Run everything CI runs
 

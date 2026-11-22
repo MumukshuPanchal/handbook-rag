@@ -25,7 +25,7 @@ def isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     monkeypatch.chdir(workdir)
 
     for name in os.environ:
-        if name.startswith(("HANDBOOK_RAG_", "ANTHROPIC_")):
+        if name.startswith(("HANDBOOK_RAG_", "ANTHROPIC_", "GEMINI_", "GOOGLE_")):
             monkeypatch.delenv(name)
     get_settings.cache_clear()
 

@@ -811,3 +811,14 @@ def test_ask_reports_a_generation_failure_clearly(
 
     assert result.exit_code == 1
     assert "No Claude API credential" in result.output
+
+
+def test_ask_without_a_key_says_where_to_put_one(fake_pipeline: FakeEmbedder) -> None:
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
+
+    assert result.exit_code == 1
+    assert "error: No Gemini API key was found" in result.output
+    assert "GEMINI_API_KEY" in result.output
+    assert "Traceback" not in result.output

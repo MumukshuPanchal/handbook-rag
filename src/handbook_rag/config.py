@@ -11,10 +11,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from handbook_rag.ingest.chunker import ChunkingConfig
+
+# The providers that can write answers, by how their model names start.
+ANSWER_MODEL_PREFIXES = ("gemini-", "claude-")
 
 
 class Settings(BaseSettings):
@@ -179,17 +182,34 @@ class Settings(BaseSettings):
             "timings, and an error by its kind only. Switch on for local debugging."
         ),
     )
+    gemini_api_key: SecretStr | None = Field(
+        default=None,
+        # Read from the standard variable name, without this application's prefix.
+        validation_alias=AliasChoices("GEMINI_API_KEY", "gemini_api_key"),
+        description=(
+            "Credential for the Gemini API, needed when the answer model is a Gemini "
+            "model. Google AI Studio gives one free of charge. Keep it in .env, which git "
+            "ignores."
+        ),
+    )
     anthropic_api_key: SecretStr | None = Field(
         default=None,
         # Read from the standard variable name, without this application's prefix.
         validation_alias=AliasChoices("ANTHROPIC_API_KEY", "anthropic_api_key"),
         description=(
-            "Credential for the Claude API. Keep it in .env, which git ignores. When it is "
-            "unset, the SDK looks for a credential in its own standard places."
+            "Credential for the Claude API, used when the answer model is a Claude model. "
+            "Keep it in .env, which git ignores. When it is unset, the SDK looks for a "
+            "credential in its own standard places."
         ),
     )
     answer_model: str = Field(
-        default="claude-haiku-5-5", description="Claude model that writes the answers."
+        default="gemini-3.5-flash-lite",
+        description=(
+            "Model that writes the answers. Its name selects the provider: gemini-... is "
+            "served by the Gemini API, claude-... by the Claude API. Use an exact model "
+            "name, not an alias such as gemini-flash-latest: an alias moves to a new "
+            "model without notice, and results would stop being comparable."
+        ),
     )
     answer_max_tokens: int = Field(
         default=4000,
@@ -199,12 +219,22 @@ class Settings(BaseSettings):
     answer_effort: Literal["low", "medium", "high", "xhigh", "max"] = Field(
         default="low",
         description=(
-            "How much reasoning the model spends per answer. Higher is slower and costs more."
+            "How much reasoning a Claude model spends per answer. Higher is slower and "
+            "costs more. A Gemini model uses its own default."
         ),
     )
     answer_context_chunks: int = Field(
         default=5, gt=0, description="How many retrieved chunks the model is given to answer from."
     )
+
+    @field_validator("answer_model")
+    @classmethod
+    def _answer_model_names_a_provider(cls, value: str) -> str:
+        if not value.startswith(ANSWER_MODEL_PREFIXES):
+            raise ValueError(
+                f"must be a Gemini model (gemini-...) or a Claude model (claude-...), not {value!r}"
+            )
+        return value
 
     @property
     def chunking(self) -> ChunkingConfig:

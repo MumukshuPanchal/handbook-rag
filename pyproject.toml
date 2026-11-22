@@ -8,6 +8,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.165.0",
     "fastembed>=0.9.1",
     "markdown-it-py>=4.3.0",
     "opentelemetry-exporter-otlp-proto-http>=1.45.2",
@@ -19,6 +20,7 @@ dependencies = [
     "tokenizers>=0.23.3",
     "torch>=2.15.0",
     "typer>=0.29.2",
+    "uvicorn>=0.54.0",
 ]
 
 [project.scripts]
@@ -71,6 +73,7 @@ branch = true
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.16.2",
     "mypy>=2.4.1",
     "pre-commit>=4.7.0",
     "pytest>=9.2.0",

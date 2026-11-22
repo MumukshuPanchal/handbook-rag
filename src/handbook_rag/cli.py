@@ -265,6 +265,26 @@ def _load_questions(dataset: Path) -> list[GoldenQuestion]:
         raise DatasetError(f"golden set not found: {dataset}") from error
 
 
+@app.command()
+def serve(
+    host: Annotated[
+        str | None, typer.Option(help="Address to listen on. Default: settings.")
+    ] = None,
+    port: Annotated[int | None, typer.Option(help="Port to listen on. Default: settings.")] = None,
+) -> None:
+    """Run the HTTP API. Its documentation is served at /docs."""
+    # Imported here so that other commands do not load the web server.
+    import uvicorn
+
+    settings = get_settings()
+    uvicorn.run(
+        "handbook_rag.api:create_app",
+        factory=True,
+        host=host or settings.api_host,
+        port=port or settings.api_port,
+    )
+
+
 @app.command(name="eval-retrieval")
 def eval_retrieval(
     dataset: Annotated[

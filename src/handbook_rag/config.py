@@ -138,6 +138,14 @@ class Settings(BaseSettings):
         ),
     )
 
+    api_host: str = Field(
+        default="127.0.0.1",
+        description=(
+            "Address the HTTP API listens on. The default accepts connections from this "
+            "machine only; the API has no authentication. A container sets 0.0.0.0."
+        ),
+    )
+    api_port: int = Field(default=8000, gt=0, lt=65536, description="Port of the HTTP API.")
     tracing: bool = Field(
         default=False,
         description=(

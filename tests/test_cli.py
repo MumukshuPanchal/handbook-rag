@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -554,19 +555,24 @@ def test_eval_retrieval_takes_its_mode_and_reranking_from_the_settings(
     assert run_summary(runs, "v1")["config"]["rerank"] is False
 
 
-def write_gate(path: Path, minimums: dict[str, float]) -> Path:
-    path.write_text(json.dumps({"distractor_pages": 1, "seed": 1, "minimums": minimums}))
-    return path
+def gate_command(
+    tmp_path: Path, minimums: dict[str, float], *, distractor_pages: int = 0
+) -> list[str]:
+    """The eval-gate command line for the two-page handbook of ``fake_pipeline``.
 
-
-def gate_command(tmp_path: Path, minimums: dict[str, float]) -> list[str]:
+    The seed differs from the number of extra pages on purpose, so that swapping the two
+    would change which pages are indexed.
+    """
     dataset = tmp_path / "questions.jsonl"
     dataset.write_text(golden_rows("sixteen weeks of paid leave"))
-    config = write_gate(tmp_path / "gate.json", minimums)
+    config = tmp_path / "gate.json"
+    config.write_text(
+        json.dumps({"distractor_pages": distractor_pages, "seed": 5, "minimums": minimums})
+    )
     return ["eval-gate", "--dataset", str(dataset), "--config", str(config)]
 
 
-def test_eval_gate_scores_a_slice_in_memory_and_passes(
+def test_eval_gate_indexes_only_its_slice_in_memory_and_passes(
     fake_pipeline: FakeEmbedder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     def no_server(_settings: Settings) -> QdrantVectorStore:
@@ -577,15 +583,48 @@ def test_eval_gate_scores_a_slice_in_memory_and_passes(
     result = runner.invoke(app, gate_command(tmp_path, {"hit@5": 1.0, "mrr@10": 1.0}))
 
     assert result.exit_code == 0, result.output
-    assert "pages       2 of 2: 1 with evidence, 1 without (seed 1)" in result.output
-    assert "chunks      2, indexed in memory" in result.output
+    assert "pages       1 of 2: 1 with evidence, 0 without (seed 5)" in result.output
+    assert "chunks      1, indexed in memory" in result.output
     assert "mode        hybrid\n" in result.output
     assert "1 scored, 0 failed, 1 unanswerable" in result.output
     assert "Hit@5       1.000  minimum 1.000  ok" in result.output
     assert "MRR@10      1.000  minimum 1.000  ok" in result.output
     assert "Gate passed." in result.output
-    assert len(fake_pipeline.embedded) == 2, "both pages of the slice are embedded"
+    (embedded,) = fake_pipeline.embedded
+    assert "sixteen weeks" in embedded, "only the page with evidence is embedded"
     assert len(fake_pipeline.queries) == 1, "the default retriever, hybrid, embeds the question"
+
+
+def test_eval_gate_adds_the_extra_pages_its_settings_ask_for(
+    fake_pipeline: FakeEmbedder, tmp_path: Path
+) -> None:
+    command = gate_command(tmp_path, {"hit@5": 1.0}, distractor_pages=1)
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 0, result.output
+    assert "pages       2 of 2: 1 with evidence, 1 without (seed 5)" in result.output
+    assert len(fake_pipeline.embedded) == 2
+
+
+def test_eval_gate_scores_the_retriever_the_settings_choose(
+    fake_pipeline: FakeEmbedder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The settings are read once and then cached, so they are set before the command runs.
+    monkeypatch.setenv("HANDBOOK_RAG_RETRIEVAL_MODE", "sparse")
+    monkeypatch.setenv("HANDBOOK_RAG_RERANK", "true")
+    reranker = FakeReranker()
+    monkeypatch.setattr("handbook_rag.wiring.make_reranker", lambda _settings: reranker)
+    command = gate_command(tmp_path, {"hit@5": 1.0}, distractor_pages=1)
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 0, result.output
+    assert "mode        sparse, reranked with" in result.output
+    # What ran, and not only what was printed: keyword search never embeds the question,
+    # and the reranker is called once for the one answerable question.
+    assert fake_pipeline.queries == []
+    assert len(reranker.calls) == 1
 
 
 class WorstFirst:
@@ -622,8 +661,9 @@ def test_eval_gate_fails_when_ranking_gets_worse(
         return WorstFirst(real(*args, **kwargs))
 
     monkeypatch.setattr("handbook_rag.wiring.make_retriever", broken)
+    command = gate_command(tmp_path, {"hit@5": 1.0, "mrr@10": 0.9}, distractor_pages=1)
 
-    result = runner.invoke(app, gate_command(tmp_path, {"hit@5": 1.0, "mrr@10": 0.9}))
+    result = runner.invoke(app, command)
 
     assert result.exit_code == 1
     assert "Hit@5       1.000  minimum 1.000  ok" in result.output
@@ -682,3 +722,30 @@ def test_eval_gate_explains_missing_inputs(monkeypatch: pytest.MonkeyPatch, tmp_
     assert "golden set not found" in no_questions.output
     assert no_snapshot.exit_code == 1
     assert "handbook-rag snapshot" in no_snapshot.output
+
+
+class MissingModelFile:
+    """An embedding model whose files are not in the local cache, as when working offline."""
+
+    name = "missing-model"
+    dimension = 64
+
+    def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        raise FileNotFoundError("model.safetensors is not in the local cache")
+
+    def embed_query(self, text: str) -> list[float]:
+        raise FileNotFoundError("model.safetensors is not in the local cache")
+
+
+@pytest.mark.usefixtures("fake_pipeline")
+def test_a_missing_model_file_is_not_reported_as_a_missing_golden_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("handbook_rag.wiring.make_embedder", lambda _settings: MissingModelFile())
+
+    result = runner.invoke(app, gate_command(tmp_path, {"hit@5": 1.0}))
+
+    assert result.exit_code == 1
+    assert "golden set not found" not in result.output
+    assert isinstance(result.exception, FileNotFoundError)
+    assert "model.safetensors" in str(result.exception)

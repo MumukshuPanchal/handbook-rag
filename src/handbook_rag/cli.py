@@ -17,13 +17,14 @@ from handbook_rag.evals.compare import (
     overview_of_runs,
     results_table,
 )
-from handbook_rag.evals.dataset import DatasetError, load_golden_set
+from handbook_rag.evals.dataset import DatasetError, GoldenQuestion, load_golden_set
 from handbook_rag.evals.gate import (
     GateError,
     evidence_pages,
     gate_problems,
     load_gate_config,
     select_pages,
+    shown_with_minimum,
 )
 from handbook_rag.evals.golden import check_against_corpus, sample_source_chunks
 from handbook_rag.evals.retrieval import METRICS, evaluate_retrieval, write_run
@@ -234,6 +235,18 @@ def search(
         typer.echo(f"   {preview[:220]}{'...' if len(preview) > 220 else ''}")
 
 
+def _load_questions(dataset: Path) -> list[GoldenQuestion]:
+    """Load the golden set, reporting a missing file as what it is.
+
+    Only this call is guarded. A model file that is missing when working offline is
+    also a "file not found" to Python, and must not be reported as a missing golden set.
+    """
+    try:
+        return load_golden_set(dataset)
+    except FileNotFoundError as error:
+        raise DatasetError(f"golden set not found: {dataset}") from error
+
+
 @app.command(name="eval-retrieval")
 def eval_retrieval(
     dataset: Annotated[
@@ -276,13 +289,10 @@ def eval_retrieval(
         if reranked:
             description += " Then reranked by a cross-encoder."
     try:
-        questions = load_golden_set(dataset)
+        questions = _load_questions(dataset)
         corpus = build_corpus(settings)
         retriever = wiring.make_retriever(settings, mode, rerank)
         report = evaluate_retrieval(questions, corpus.documents, retriever)
-    except FileNotFoundError as error:
-        typer.echo(f"error: golden set not found: {dataset}", err=True)
-        raise typer.Exit(code=1) from error
     except (DatasetError, CorpusError, VectorStoreError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=1) from error
@@ -394,13 +404,13 @@ def eval_gate(
     """Score the default retriever on a slice of the handbook, and fail below fixed minimums.
 
     Made for CI. It needs the snapshot and the models but no vector store server: the
-    pages that hold the golden set's evidence, and a fixed sample of others, are
-    indexed in memory.
+    pages that hold the golden set's evidence are indexed in memory, with a fixed
+    sample of other pages if the settings ask for one.
     """
     settings = get_settings()
     try:
         gate = load_gate_config(config)
-        questions = load_golden_set(dataset)
+        questions = _load_questions(dataset)
         snapshot = load_snapshot(settings)
         pages = select_pages(
             snapshot.documents, questions, distractors=gate.distractor_pages, seed=gate.seed
@@ -416,9 +426,6 @@ def eval_gate(
             settings, store=store, embedder=embedder, sparse_encoder=sparse_encoder
         )
         report = evaluate_retrieval(questions, pages, retriever)
-    except FileNotFoundError as error:
-        typer.echo(f"error: golden set not found: {dataset}", err=True)
-        raise typer.Exit(code=1) from error
     except (GateError, DatasetError, CorpusError, VectorStoreError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=1) from error
@@ -443,9 +450,8 @@ def eval_gate(
         estimate = report.summary.get(metric)
         if estimate is not None:
             verdict = "ok" if estimate.mean >= minimum else "BELOW"
-            typer.echo(
-                f"  {labels[metric]:<10}  {estimate.mean:.3f}  minimum {minimum:.3f}  {verdict}"
-            )
+            score, floor = shown_with_minimum(estimate.mean, minimum)
+            typer.echo(f"  {labels[metric]:<10}  {score}  minimum {floor}  {verdict}")
     missed = [result.question.id for result in report.results if not result.scores["hit@5"]]
     if missed:
         typer.echo(f"  not found in the top five: {', '.join(missed)}")

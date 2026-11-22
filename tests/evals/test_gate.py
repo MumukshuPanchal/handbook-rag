@@ -10,6 +10,7 @@ from handbook_rag.evals.gate import (
     gate_problems,
     load_gate_config,
     select_pages,
+    shown_with_minimum,
 )
 from handbook_rag.evals.metrics import Estimate
 from handbook_rag.evals.retrieval import FailedQuestion, QuestionResult, RetrievalReport
@@ -108,6 +109,19 @@ def test_the_gate_passes_at_its_minimums_and_fails_below_them() -> None:
         "hit@5 is 0.900, below the minimum of 0.950"
     ]
     assert gate_problems(measured, {"ndcg@10": 0.5}) == ["ndcg@10 was not measured"]
+
+
+def test_a_score_just_below_its_minimum_is_never_printed_as_equal_to_it() -> None:
+    one_question_short = report({"hit@5": 128 / 132})
+
+    assert gate_problems(one_question_short, {"hit@5": 0.97}) == [
+        "hit@5 is 0.9697, below the minimum of 0.9700"
+    ]
+    assert gate_problems(report({"hit@5": 129 / 132}), {"hit@5": 0.97}) == []
+    assert shown_with_minimum(128 / 132, 0.97) == ("0.9697", "0.9700")
+    assert shown_with_minimum(0.5, 0.9) == ("0.500", "0.900")
+    assert shown_with_minimum(0.97, 0.97) == ("0.970", "0.970")
+    assert shown_with_minimum(0.9924, 0.97) == ("0.992", "0.970")
 
 
 def test_a_question_that_could_not_be_searched_fails_the_gate_whatever_the_scores() -> None:

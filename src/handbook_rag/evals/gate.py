@@ -1,9 +1,10 @@
 """A retrieval check that is quick enough for CI: a slice of the corpus, the real models.
 
 The full evaluation needs the whole handbook embedded, which takes too long to run on
-every pull request. The gate keeps the pages that hold the golden set's evidence, adds a
-fixed sample of other pages, indexes that slice in memory and scores the default
-retriever on it.
+every pull request. The gate keeps the pages that hold the golden set's evidence,
+indexes that slice in memory and scores the default retriever on it. The settings can
+add a fixed sample of other pages to the slice; measured, that made no difference, so
+they add none (ADR 0012).
 
 A slice is easier to search than the whole handbook, so the gate's scores say nothing
 about quality in absolute terms. What the gate can say is that a change broke retrieval:
@@ -90,6 +91,19 @@ def select_pages(
     ]
 
 
+def shown_with_minimum(value: float, minimum: float) -> tuple[str, str]:
+    """A score and its minimum as text, with enough decimals to tell them apart.
+
+    Three decimals are the house style, but 128 of 132 is 0.9697, and "0.970, below the
+    minimum of 0.970" would contradict itself. A score below its minimum gets as many
+    decimals as it takes to show that it is.
+    """
+    places = 3
+    while value < minimum and f"{value:.{places}f}" == f"{minimum:.{places}f}" and places < 12:
+        places += 1
+    return f"{value:.{places}f}", f"{minimum:.{places}f}"
+
+
 def gate_problems(report: RetrievalReport, minimums: Mapping[str, float]) -> list[str]:
     """Every reason the gate fails, one line each. An empty list means it passes.
 
@@ -113,5 +127,6 @@ def gate_problems(report: RetrievalReport, minimums: Mapping[str, float]) -> lis
         if estimate is None:
             problems.append(f"{metric} was not measured")
         elif estimate.mean < minimum:
-            problems.append(f"{metric} is {estimate.mean:.3f}, below the minimum of {minimum:.3f}")
+            score, floor = shown_with_minimum(estimate.mean, minimum)
+            problems.append(f"{metric} is {score}, below the minimum of {floor}")
     return problems

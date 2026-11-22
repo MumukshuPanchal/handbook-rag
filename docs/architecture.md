@@ -117,7 +117,7 @@ flowchart LR
 - **Answer metrics.** A judge model checks each answer against separate criteria: supported by the cited passages, consistent with the reference answer, and correct to answer or abstain. The judge is validated against human labels before its scores are used.
 - **System metrics.** Latency per stage, tokens and cost per answer, taken from API responses and traces.
 - **Bookkeeping.** Every run stores per-question results and traces. Harness failures such as timeouts are recorded separately from wrong answers.
-- **Regression gate.** CI runs the retrieval metrics on a small fixed corpus and fails if they drop.
+- **Regression gate.** CI indexes a fixed slice of the handbook with the real models, scores the default retriever on it, and fails if a score is below its recorded minimum ([ADR 0012](adr/0012-retrieval-gate-on-a-slice.md)).
 
 Details and reasoning: [ADR 0007](adr/0007-evaluation-strategy.md).
 

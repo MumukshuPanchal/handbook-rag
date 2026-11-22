@@ -113,6 +113,24 @@ The comparison refuses to run if the two variants did not score exactly the same
 
 To report results, `make eval-table` prints one row for every run it finds on disk as a Markdown table, read from the files each run wrote. Numbers in a write-up are generated, never copied by hand.
 
+## The retrieval gate in CI
+
+The full evaluation is too slow to run on every pull request: a CI machine has no GPU and would need about an hour to embed the handbook. The unit tests are fast but use stand-in models, so they cannot see the real models retrieving worse. The retrieval gate sits between the two.
+
+```bash
+make eval-gate
+```
+
+It keeps the 134 pages that hold evidence for a golden set question, indexes them in memory with the real models, and scores the default retriever on all 132 answerable questions. It needs the snapshot and the models, and no vector store server. It fails when:
+
+- a mean score is below its minimum in [`evals/gate.json`](../evals/gate.json), currently Hit@5 of 0.97 and MRR@10 of 0.84;
+- any question could not be searched. Elsewhere such failures are kept apart from the scores; a gate that passed while part of the set went unmeasured would be worse than no gate;
+- nothing was scored at all.
+
+Its scores are not quality numbers. A slice of 8% of the handbook is easier to search than the whole, so hybrid search scores 0.992 on Hit@5 there and 0.962 on the full index. The gate's scores are only compared with themselves. What it shows is that a change broke retrieval: on the same slice, dense search alone scores 0.939 and keyword search alone 0.962, and both fail.
+
+When a pull request changes retrieval on purpose, it changes the minimums in the same pull request, with the full evaluation as its evidence. The minimums are a floor to be raised, not a target. The reasoning, and the designs that were measured and rejected, are in [ADR 0012](adr/0012-retrieval-gate-on-a-slice.md).
+
 ## What a run writes
 
 Each kept run is a variant: `baseline` first, then `v1`, `v2` and so on. (`current` is the scratch run.) A variant directory under `evals/runs/retrieval/` contains:

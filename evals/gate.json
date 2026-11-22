@@ -5,5 +5,5 @@
     "hit@5": 0.97,
     "mrr@10": 0.84
   },
-  "note": "Provisional: measured on a laptop on 2026-11-22, to be replaced by the values CI measures."
+  "note": "Measured in CI on 2026-11-22 with the default, hybrid search: Hit@5 0.992, MRR@10 0.867. On the same slice dense search alone scores 0.939 and 0.775, and keyword search alone 0.962 and 0.877, so losing either half of hybrid search fails the gate. Raise the minimums when retrieval improves. Reasoning: docs/adr/0012-retrieval-gate-on-a-slice.md"
 }

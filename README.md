@@ -36,6 +36,7 @@ Retrieval on 132 test questions over 38,881 chunks of the handbook. These are th
 - **Hybrid search is the default.** It clearly beats dense search alone: +0.106 on Hit@5 (95% interval +0.053 to +0.159), with 14 questions gained and none lost. Against keyword search alone the picture is not clear: hybrid is ahead at five results (+0.030, an interval that includes zero) and behind at rank 1. That choice rests partly on judgement, and [ADR 0011](docs/adr/0011-hybrid-retrieval-by-default.md) says why.
 - **Reranking is off by default.** It brings no clear gain at five results, and it makes search about seven times slower.
 - **Two experiments did not help**, and are written up anyway: half-size chunks, and other settings of the rank fusion ([experiment log](docs/experiments/2026-11-22-chunk-size-and-fusion.md)).
+- **CI guards these results.** Every pull request is scored with the real models on a slice of the handbook, and fails if retrieval gets worse ([ADR 0012](docs/adr/0012-retrieval-gate-on-a-slice.md)).
 - **Targets.** The [charter](docs/charter.md) asks for Recall@5 of at least 0.85 and MRR@10 of at least 0.70. Hybrid search reaches 0.962 and 0.807. Answer quality is not measured yet.
 
 **How far to trust these numbers.** The test questions were made by one model session and checked by another, over several rounds. No person has verified them one by one, and most were written by a model that could see the passage. The [dataset card](evals/golden/README.md) says how the set was made, what the checks found, and what its limits are.
@@ -66,6 +67,7 @@ uv run handbook-rag search "what is compa-ratio" --rerank
 make golden-check    # verify every test question against the handbook
 make eval-retrieval  # score the default search, as a scratch run named "current"
 make eval-table      # print a results table with one row per run on disk
+make eval-gate       # the retrieval check CI runs, on a slice of the handbook
 ```
 
 The workflow and conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).

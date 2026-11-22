@@ -5,11 +5,13 @@ Searching means finding the stored vectors closest to a question's vector.
 """
 
 from collections.abc import Iterator, Sequence
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
 from opentelemetry.trace import SpanKind
 from qdrant_client import QdrantClient, models
+from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 
 from handbook_rag.index.sparse import SparseVector
 from handbook_rag.ingest.models import Chunk
@@ -21,7 +23,11 @@ _BATCH = 1000
 
 
 class VectorStoreError(RuntimeError):
-    """The vector store cannot be used as configured."""
+    """The vector store is unavailable, or does not hold what was asked for."""
+
+
+class CollectionMissingError(VectorStoreError):
+    """The collection has not been built yet. The store itself is fine."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,7 +160,13 @@ class QdrantVectorStore:
         return len(stale)
 
     def count(self) -> int:
-        return self._client.count(self._collection, exact=True).count
+        try:
+            return self._client.count(self._collection, exact=True).count
+        except Exception as error:
+            explained = self._explain(error)
+            if explained is None:
+                raise
+            raise explained from error
 
     def search(
         self, vector: Sequence[float], *, limit: int, section: str | None = None
@@ -197,9 +209,15 @@ class QdrantVectorStore:
                     with_payload=True,
                 )
             except Exception as error:
-                # Every failure of the store becomes one kind of error, so callers can
-                # tell "the index is unavailable" from a bug of their own.
-                raise self._explain(error) from error
+                # What went wrong underneath, in the standard attribute for it. The span
+                # itself is marked with the kind of error that leaves this method.
+                span.set_attribute("error.type", f"{type(error).__module__}.{type(error).__name__}")
+                if isinstance(error, UnexpectedResponse) and error.status_code is not None:
+                    span.set_attribute("db.response.status_code", str(error.status_code))
+                explained = self._explain(error)
+                if explained is None:
+                    raise
+                raise explained from error
             span.set_attribute("handbook_rag.results.count", len(response.points))
             return [
                 ScoredChunk(
@@ -208,24 +226,39 @@ class QdrantVectorStore:
                 for point in response.points
             ]
 
-    def _explain(self, error: Exception) -> VectorStoreError:
-        """Turn a failed query into an error that says what to do about it.
+    def _explain(self, error: Exception) -> VectorStoreError | None:
+        """Decide what a failed call to the store means.
 
-        Whether the collection exists is asked only now, after a failure. Asking before
-        every query cost each search a second round trip to the store, about 3 ms each,
-        which was found by reading traces.
+        An unavailable store and a wrong request must not look alike: the first is a
+        reason to try again later, the second is a bug that trying again will not fix.
+        So only what is the store's doing becomes a ``VectorStoreError``. ``None`` means
+        the store was fine and the caller should let the original error through.
+
+        Whether the collection exists is asked only here, after a failure, and never
+        after a timeout. Asking before every query cost each search a second round trip
+        to the store, which was found by reading traces.
         """
-        try:
-            missing = not self._client.collection_exists(self._collection)
-        except Exception:
-            missing = False  # the store cannot be asked, so report the original failure
-        if missing:
-            return VectorStoreError(
-                f"Collection {self._collection} does not exist yet. "
-                "Run `handbook-rag index` to build it."
-            )
-        return VectorStoreError(
-            f"The vector store could not answer the query: {type(error).__name__}: {error}"
+        if isinstance(error, ResponseHandlingException):
+            # No answer at all: the store is down, unreachable or too slow. It is not
+            # asked anything more, which could take as long again.
+            cause = type(error.source).__name__
+            return VectorStoreError(f"The vector store did not answer ({cause}): {error.source}")
+        if isinstance(error, UnexpectedResponse):
+            if error.status_code == 404:
+                return self._missing()
+            if error.status_code is not None and error.status_code >= 500:
+                return VectorStoreError(f"The vector store failed with status {error.status_code}.")
+            return None  # another 4xx: the store is fine and the request was wrong
+        # Qdrant's in-memory mode raises plain errors, so it has to be asked.
+        with suppress(Exception):
+            if not self._client.collection_exists(self._collection):
+                return self._missing()
+        return None
+
+    def _missing(self) -> CollectionMissingError:
+        return CollectionMissingError(
+            f"Collection {self._collection} does not exist yet. "
+            "Run `handbook-rag index` to build it."
         )
 
 

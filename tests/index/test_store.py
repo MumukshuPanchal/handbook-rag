@@ -1,10 +1,12 @@
 from typing import Any, cast
 
+import httpx
 import pytest
 from qdrant_client import QdrantClient
+from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 
 from handbook_rag.index.sparse import SparseVector
-from handbook_rag.index.store import QdrantVectorStore, VectorStoreError
+from handbook_rag.index.store import CollectionMissingError, QdrantVectorStore, VectorStoreError
 from tests.support import make_chunk
 
 NORTH = [1.0, 0.0, 0.0]
@@ -181,29 +183,100 @@ def test_a_search_asks_the_store_once(client: QdrantClient) -> None:
     assert counting.calls == ["query_points", "query_points"]
 
 
-def test_a_store_that_fails_mid_search_is_reported_as_the_store_failing(
-    store: QdrantVectorStore, client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+def bad_response(status: int, body: bytes = b"") -> UnexpectedResponse:
+    """An answer from the store with an error status, as its client raises it."""
+    return UnexpectedResponse(status, "reason", body, httpx.Headers())
+
+
+def test_a_store_that_does_not_answer_is_reported_as_unavailable_and_not_asked_again(
+    client: QdrantClient,
 ) -> None:
-    def broken(*_args: Any, **_kwargs: Any) -> None:
-        raise ConnectionError("connection reset")
+    QdrantVectorStore(client, "test-collection").ensure_collection(dimension=3)
+    counting = CountingClient(client)
+    store = QdrantVectorStore(cast(QdrantClient, counting), "test-collection")
 
-    monkeypatch.setattr(client, "query_points", broken)
+    def no_answer(*_args: Any, **_kwargs: Any) -> None:
+        counting.calls.append("query_points")
+        raise ResponseHandlingException(ConnectionError("connection reset"))
 
-    with pytest.raises(VectorStoreError, match="could not answer the query") as raised:
+    counting.query_points = no_answer  # type: ignore[attr-defined]
+
+    with pytest.raises(VectorStoreError, match="did not answer") as raised:
         store.search(NORTH, limit=1)
 
-    assert "ConnectionError: connection reset" in str(raised.value)
-    assert isinstance(raised.value.__cause__, ConnectionError)
+    assert "ConnectionError" in str(raised.value)
+    assert "connection reset" in str(raised.value)
+    assert isinstance(raised.value.__cause__, ResponseHandlingException)
+    assert not isinstance(raised.value, CollectionMissingError)
+    # A store that hangs must not be waited for twice.
+    assert counting.calls == ["query_points"]
 
 
-def test_a_store_that_cannot_even_be_asked_still_reports_the_first_failure(
+def test_a_store_that_answers_with_a_server_error_is_reported_as_unavailable(
     store: QdrantVectorStore, client: QdrantClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def down(*_args: Any, **_kwargs: Any) -> None:
-        raise ConnectionError("connection refused")
+    def failing(*_args: Any, **_kwargs: Any) -> None:
+        raise bad_response(503)
 
-    monkeypatch.setattr(client, "query_points", down)
-    monkeypatch.setattr(client, "collection_exists", down)
+    monkeypatch.setattr(client, "query_points", failing)
 
-    with pytest.raises(VectorStoreError, match="connection refused"):
+    with pytest.raises(VectorStoreError, match="failed with status 503"):
         store.search_sparse(LAPTOP, limit=1)
+
+
+def test_a_request_the_store_rejects_is_a_bug_and_is_not_dressed_up_as_an_outage(
+    store: QdrantVectorStore, client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rejected = bad_response(400, b"Vector dimension error: expected dim: 384, got 64")
+
+    def wrong_request(*_args: Any, **_kwargs: Any) -> None:
+        raise rejected
+
+    monkeypatch.setattr(client, "query_points", wrong_request)
+
+    with pytest.raises(UnexpectedResponse) as raised:
+        store.search(NORTH, limit=1)
+
+    assert raised.value is rejected
+
+
+def test_a_missing_collection_is_its_own_kind_of_error_on_a_server_too(
+    store: QdrantVectorStore, client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def not_found(*_args: Any, **_kwargs: Any) -> None:
+        raise bad_response(404, b"Collection `test-collection` doesn't exist!")
+
+    monkeypatch.setattr(client, "query_points", not_found)
+    monkeypatch.setattr(client, "count", not_found)
+
+    with pytest.raises(CollectionMissingError, match="handbook-rag index"):
+        store.search(NORTH, limit=1)
+    with pytest.raises(CollectionMissingError, match="does not exist yet"):
+        store.count()
+
+
+def test_counting_a_collection_that_was_never_built_says_so(client: QdrantClient) -> None:
+    never_built = QdrantVectorStore(client, "never-built")
+
+    with pytest.raises(CollectionMissingError, match="never-built does not exist yet"):
+        never_built.count()
+
+
+def test_an_error_that_is_not_the_stores_doing_is_passed_on_unchanged(
+    store: QdrantVectorStore, client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def first(*_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("the first failure")
+
+    def second(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("the second failure")
+
+    monkeypatch.setattr(client, "query_points", first)
+    with pytest.raises(TypeError, match="the first failure"):
+        store.search(NORTH, limit=1)
+
+    # Even when asking whether the collection exists fails too, the first error is the
+    # one that is reported.
+    monkeypatch.setattr(client, "collection_exists", second)
+    with pytest.raises(TypeError, match="the first failure"):
+        store.search(NORTH, limit=1)

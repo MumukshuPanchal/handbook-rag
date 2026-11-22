@@ -180,11 +180,6 @@ class QdrantVectorStore:
             span.set_attribute("db.system.name", "qdrant")
             span.set_attribute("db.collection.name", self._collection)
             span.set_attribute("db.operation.name", "query")
-            if not self._client.collection_exists(self._collection):
-                raise VectorStoreError(
-                    f"Collection {self._collection} does not exist yet. "
-                    "Run `handbook-rag index` to build it."
-                )
             query_filter = None
             if section is not None:
                 query_filter = models.Filter(
@@ -192,14 +187,19 @@ class QdrantVectorStore:
                         models.FieldCondition(key="section", match=models.MatchValue(value=section))
                     ]
                 )
-            response = self._client.query_points(
-                self._collection,
-                query=query,
-                using=using,
-                limit=limit,
-                query_filter=query_filter,
-                with_payload=True,
-            )
+            try:
+                response = self._client.query_points(
+                    self._collection,
+                    query=query,
+                    using=using,
+                    limit=limit,
+                    query_filter=query_filter,
+                    with_payload=True,
+                )
+            except Exception as error:
+                # Every failure of the store becomes one kind of error, so callers can
+                # tell "the index is unavailable" from a bug of their own.
+                raise self._explain(error) from error
             span.set_attribute("handbook_rag.results.count", len(response.points))
             return [
                 ScoredChunk(
@@ -207,6 +207,26 @@ class QdrantVectorStore:
                 )
                 for point in response.points
             ]
+
+    def _explain(self, error: Exception) -> VectorStoreError:
+        """Turn a failed query into an error that says what to do about it.
+
+        Whether the collection exists is asked only now, after a failure. Asking before
+        every query cost each search a second round trip to the store, about 3 ms each,
+        which was found by reading traces.
+        """
+        try:
+            missing = not self._client.collection_exists(self._collection)
+        except Exception:
+            missing = False  # the store cannot be asked, so report the original failure
+        if missing:
+            return VectorStoreError(
+                f"Collection {self._collection} does not exist yet. "
+                "Run `handbook-rag index` to build it."
+            )
+        return VectorStoreError(
+            f"The vector store could not answer the query: {type(error).__name__}: {error}"
+        )
 
 
 def _to_payload(chunk: Chunk) -> dict[str, Any]:

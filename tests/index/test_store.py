@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 import pytest
 from qdrant_client import QdrantClient
 
@@ -145,3 +147,63 @@ def test_sparse_search_can_be_limited_to_one_section(store: QdrantVectorStore) -
     results = store.search_sparse(LAPTOP, limit=5, section="people")
 
     assert [r.chunk.section for r in results] == ["people"]
+
+
+class CountingClient:
+    """Passes every call on to a real client and counts them by name."""
+
+    def __init__(self, client: QdrantClient) -> None:
+        self._client = client
+        self.calls: list[str] = []
+
+    def __getattr__(self, name: str) -> Any:
+        attribute = getattr(self._client, name)
+        if not callable(attribute):
+            return attribute
+
+        def counted(*args: Any, **kwargs: Any) -> Any:
+            self.calls.append(name)
+            return attribute(*args, **kwargs)
+
+        return counted
+
+
+def test_a_search_asks_the_store_once(client: QdrantClient) -> None:
+    QdrantVectorStore(client, "test-collection").ensure_collection(dimension=3)
+    counting = CountingClient(client)
+    store = QdrantVectorStore(cast(QdrantClient, counting), "test-collection")
+    store.upsert([make_chunk("north")], [NORTH], [LAPTOP])
+    counting.calls.clear()
+
+    store.search(NORTH, limit=1)
+    store.search_sparse(LAPTOP, limit=1)
+
+    assert counting.calls == ["query_points", "query_points"]
+
+
+def test_a_store_that_fails_mid_search_is_reported_as_the_store_failing(
+    store: QdrantVectorStore, client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*_args: Any, **_kwargs: Any) -> None:
+        raise ConnectionError("connection reset")
+
+    monkeypatch.setattr(client, "query_points", broken)
+
+    with pytest.raises(VectorStoreError, match="could not answer the query") as raised:
+        store.search(NORTH, limit=1)
+
+    assert "ConnectionError: connection reset" in str(raised.value)
+    assert isinstance(raised.value.__cause__, ConnectionError)
+
+
+def test_a_store_that_cannot_even_be_asked_still_reports_the_first_failure(
+    store: QdrantVectorStore, client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def down(*_args: Any, **_kwargs: Any) -> None:
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr(client, "query_points", down)
+    monkeypatch.setattr(client, "collection_exists", down)
+
+    with pytest.raises(VectorStoreError, match="connection refused"):
+        store.search_sparse(LAPTOP, limit=1)

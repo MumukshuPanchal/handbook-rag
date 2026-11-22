@@ -37,7 +37,9 @@ search                           336 ms
 
 ## Through the HTTP API
 
-A request to the API is traced the same way, and its response carries the trace id in `trace_id`. The web framework adds its own spans around ours: the trace starts with `POST /search`, which records the method, the route and the status code, and our `search` span sits inside it.
+A request to the API is traced the same way. Its response carries the trace id in `trace_id` and in the `X-Trace-Id` header, and the header is also on a failed request, which is the one a caller most needs an id for. The web framework adds its own spans around ours: the trace starts with `POST /search`, which records the method, the route and the status code, and our `search` span sits inside it.
+
+Requests to `/health` are not traced. Something asks for it every few seconds, and those traces would bury the ones made by people.
 
 Start the service with `HANDBOOK_RAG_TRACING=true make serve`.
 
@@ -71,7 +73,7 @@ A trace holds ids, scores, sizes and timings, and the names of things: the colle
 
 **"It was slow."** Find the longest bar. In the trace above the reranker takes 208 of 336 ms.
 
-One trace is one measurement, and on a busy laptop they vary: the search part of that trace took 127 ms, and the same question without reranking took 36 ms a moment earlier. For typical figures, 40 warm searches without reranking had a median of 43 ms, of which the embedding model took 18 and the two Qdrant calls 13 and 11.
+One trace is one measurement, and on a busy laptop they vary: the search part of that trace took 127 ms, and the same question without reranking took 36 ms a moment earlier. For typical figures, 40 warm searches without reranking had a median of 43 ms, of which the embedding model took 18 and the two Qdrant calls 13 and 11. These were measured before the fix described below.
 
 **"The right passage was not returned."** Look for its page among `results.doc_ids`, stage by stage.
 
@@ -86,7 +88,7 @@ One trace is one measurement, and on a busy laptop they vary: the search part of
 
 Reading a handful of traces turned up three things that the summary numbers had not:
 
-1. **The two searches run one after the other.** Neither needs the other's result. Run side by side, a hybrid search should take about as long as the slower one: by the medians above, an estimated 32 ms instead of 43.
+1. **The two searches run one after the other.** Neither needs the other's result. Run side by side, a hybrid search should take about as long as the slower of the two, which would save roughly the time of the keyword search: an estimated 8 to 11 ms.
 2. **Every call to Qdrant was two round trips.** The store asked whether the collection exists before it queried it, and a hybrid search paid for that twice.
 3. **Reranking is most of a reranked request.** It is 62% of the trace above, in which the search part was unusually slow. By the medians recorded in [ADR 0011](adr/0011-hybrid-retrieval-by-default.md), 247 ms with reranking against 33 without, it is nearer 87%. That is the cost the decision record weighed against its gain.
 
@@ -99,9 +101,9 @@ Neither of the first two would have been found by looking at one total.
 | Asking first | 18.1 ms |
 | Asking only after a failure | 12.7 ms |
 
-A query got 5.9 ms faster on average (95% interval 4.8 to 7.0), and was faster in 256 of the 300 pairs. The laptop was busy during the measurement, so the absolute times are higher than the medians above; the difference is what the pairs establish.
+A query got 5.9 ms faster on average (95% interval 4.8 to 7.0), and was faster in 256 of the 300 pairs. That was on a busy laptop, and only dense queries were timed. On a quieter run the check took about 3 ms on its own, so the size of the saving depends on how loaded the machine is. What does not depend on it: every query now makes one round trip where it made two.
 
-**The first is left as it is.** Running the two searches side by side would save an estimated 11 ms and add threads to the search path. Once answers are generated, a request will spend a second or more in the language model, and nobody would notice 11 ms. It is written down so that it is a decision and not an oversight.
+**The first is left as it is.** Running the two searches side by side would save an estimated 8 to 11 ms and add threads to the search path. Once answers are generated, a request will spend a second or more in the language model, and nobody would notice the difference. It is written down so that it is a decision and not an oversight.
 
 ## When no trace backend is running
 

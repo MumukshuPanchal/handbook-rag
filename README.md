@@ -60,12 +60,15 @@ curl -s -X POST localhost:8000/search \
 | Endpoint | What it does |
 |---|---|
 | `POST /search` | `query` (1 to 500 characters), optional `limit` (1 to 20) and `section` |
-| `GET /health` | 200 with the number of chunks in the index, or 503 if the index is empty or cannot be reached |
+| `GET /health` | 200 with the number of chunks in the index. 503 if the vector store cannot be reached, the index has not been built, or it is empty, and it says which |
 | `GET /docs` | Interactive documentation, generated from the code |
 
-- A request that breaks a limit gets a 422 that names the field. A vector store that is down gets a 503, not a 500.
-- The models are loaded and run once when the service starts, so the first caller does not wait for them.
-- There is no authentication. The service listens on this machine only unless `HANDBOOK_RAG_API_HOST` says otherwise.
+- **Bad requests.** A request that breaks a limit gets a 422 that names the field, without repeating what was sent. A body over 8 KB gets a 413.
+- **A vector store that is down** gets a 503 with a fixed message, not a 500. The cause goes to the service's log, because it can name internal addresses. The service starts without the store and works as soon as the store is there.
+- **Trace id.** With tracing on, every response to `/search` carries the id of its trace in the `X-Trace-Id` header, a failed one too.
+- **Speed.** The models are loaded and run once when the service starts. Measured on the full index, searches one after another took 77 to 88 ms, and 124 to 169 ms after 20 to 60 idle seconds.
+- **The embedding model runs on the CPU here**, also on a machine with a GPU. A service embeds one question at a time, which a CPU does as fast and more steadily: on an Apple GPU, the first search after a few idle seconds took over a second. `HANDBOOK_RAG_EMBEDDING_DEVICE` changes it.
+- **Not built for the open internet.** There is no authentication, no rate limit and no limit on requests in flight. The service listens on this machine only unless `HANDBOOK_RAG_API_HOST` says otherwise.
 - `POST /ask`, which answers with citations and streams the answer, arrives with the answering step.
 
 ## Data

@@ -53,7 +53,7 @@ The current set, its counts and its known limits are described in its [dataset c
 make eval-retrieval
 ```
 
-This scores the default configuration and writes it as the run named `current`, which is not committed.
+This scores the default configuration and writes it as the run named `current`. That name is the default and git ignores it, so trying something out never touches a committed run. A run is kept by giving it a name with `--variant`.
 
 No language model is involved, so a run is free and gives the same result every time.
 
@@ -111,11 +111,11 @@ How to read a row:
 
 The comparison refuses to run if the two variants did not score exactly the same questions with the same labels. Every row in `results.jsonl` carries a fingerprint of its question, reference answer and evidence (and of the evidence mode, when that is not the default), so a run made before the golden set changed cannot be compared by accident with one made after.
 
-To report results, `make eval-table` prints one row per variant as a Markdown table, read from the files each run wrote. Numbers in a write-up are generated, never copied by hand.
+To report results, `make eval-table` prints one row for every run it finds on disk as a Markdown table, read from the files each run wrote. Numbers in a write-up are generated, never copied by hand.
 
 ## What a run writes
 
-Each run is a variant: `baseline` first, then `v1`, `v2` and so on. A variant directory under `evals/runs/retrieval/` contains:
+Each kept run is a variant: `baseline` first, then `v1`, `v2` and so on. (`current` is the scratch run.) A variant directory under `evals/runs/retrieval/` contains:
 
 | File | Content |
 |---|---|

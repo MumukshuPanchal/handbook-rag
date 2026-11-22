@@ -233,8 +233,14 @@ def eval_retrieval(
         Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
     ] = Path("evals/golden/questions.jsonl"),
     variant: Annotated[
-        str, typer.Option(help="Name of this run: 'baseline', then 'v1', 'v2' and so on.")
-    ] = "baseline",
+        str,
+        typer.Option(
+            help=(
+                "Name of this run. The default, 'current', is a scratch run that git "
+                "ignores. Name a run to keep it: 'baseline', then 'v1', 'v2' and so on."
+            )
+        ),
+    ] = "current",
     description: Annotated[
         str | None,
         typer.Option(help="One line saying what this variant is. Default: its retrieval mode."),

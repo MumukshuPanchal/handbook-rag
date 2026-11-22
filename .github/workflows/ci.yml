@@ -100,3 +100,20 @@ jobs:
 
       - name: Retrieval gate
         run: uv run handbook-rag eval-gate
+
+  # Builds the container image, so a change to the Dockerfile or the dependencies that
+  # breaks it is caught here and not by the next person who runs `docker compose up`.
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the image
+        run: docker build --tag handbook-rag:ci .
+
+      - name: Check that the image runs, and not as root
+        run: |
+          docker run --rm handbook-rag:ci handbook-rag --version
+          test "$(docker run --rm handbook-rag:ci id -u)" != "0"

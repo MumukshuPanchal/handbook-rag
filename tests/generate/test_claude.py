@@ -196,6 +196,7 @@ def test_usage_model_and_stop_reason_come_from_the_response() -> None:
 
     assert answer.model == "claude-haiku-5-5"
     assert answer.stop_reason == "max_tokens"
+    assert answer.answered  # cut off at the limit, and still an answer
     assert (answer.usage.input_tokens, answer.usage.output_tokens) == (900, 4000)
     assert (answer.usage.cache_read_input_tokens, answer.usage.cache_creation_input_tokens) == (
         300,
@@ -227,6 +228,18 @@ def test_partial_answer_that_mentions_a_gap_still_counts_as_answered() -> None:
     generator, _ = generator_for(response)
 
     assert generator.generate("q", [LEAVE]).answered
+
+
+@pytest.mark.parametrize("stop_reason", ["pause_turn", "model_context_window_exceeded"])
+def test_a_reply_that_did_not_come_to_a_proper_end_is_not_an_answer(stop_reason: str) -> None:
+    blocks = [{"type": "text", "text": "Sixteen weeks.", "citations": [citation(0, LEAVE.text)]}]
+    generator, _ = generator_for(message(blocks, stop_reason=stop_reason))
+
+    answer = generator.generate("q", [LEAVE])
+
+    assert not answer.answered
+    assert answer.stop_reason == stop_reason
+    assert answer.text == "Sixteen weeks."  # what did arrive is kept
 
 
 def test_safety_refusal_is_not_an_answer() -> None:

@@ -44,7 +44,8 @@ class Answer:
     question: str
     segments: tuple[Segment, ...]
     answered: bool
-    """False when the assistant said the handbook does not contain the answer."""
+    """False when the reply is not an answer: the assistant said the handbook does not
+    contain it, the provider withheld it, or it did not come to a proper end."""
     model: str
     stop_reason: str
     usage: TokenUsage = TokenUsage()

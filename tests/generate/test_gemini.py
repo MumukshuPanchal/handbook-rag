@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import httpx
 import httpx2
+import pydantic
 import pytest
 from google import genai
 from google.genai import errors, types
@@ -132,6 +133,17 @@ MODEL_NOT_FOUND = (
     "for generateContent. Call ModelService.ListModels to see the list of available "
     "models and their supported methods."
 )
+
+
+def wrong_shape() -> pydantic.ValidationError:
+    """The error the SDK raises for a reply that is JSON of a shape its types reject."""
+    try:
+        types.GenerateContentResponse.model_validate(
+            {"usage_metadata": {"prompt_token_count": "not a number"}}
+        )
+    except pydantic.ValidationError as error:
+        return error
+    raise AssertionError("the SDK accepted a reply of the wrong shape")
 
 
 def test_answer_text_and_citations_map_back_to_the_right_chunks() -> None:
@@ -410,15 +422,27 @@ def test_no_chunks_means_no_model_call_and_no_answer() -> None:
         (api_error(404, "NOT_FOUND", message=MODEL_NOT_FOUND), f"The model {MODEL} was not found"),
         (
             api_error(429, "RESOURCE_EXHAUSTED", [quota(PER_MINUTE, "15"), RETRY_IN_36S]),
-            f"The per-minute limit for {MODEL} on this Gemini key was reached. Try again in 36s.",
+            f"The per-minute limit for {MODEL} was reached for this key's Google project. "
+            "Try again in 36s.",
         ),
         (
             api_error(429, "RESOURCE_EXHAUSTED", [quota(PER_MINUTE, "15")]),
-            f"The per-minute limit for {MODEL} on this Gemini key was reached. Try again shortly.",
+            f"The per-minute limit for {MODEL} was reached for this key's Google project. "
+            "Try again shortly.",
         ),
         (
             api_error(429, "RESOURCE_EXHAUSTED", [quota(PER_DAY, "20"), RETRY_IN_36S]),
-            f"Today's request limit for {MODEL} on this Gemini key is used up. Try again tomorrow",
+            f"Today's limit for {MODEL} is used up for this key's Google project. "
+            "Try again tomorrow",
+        ),
+        (
+            # Both limits reported at once: the day's limit is the one that decides.
+            api_error(
+                429,
+                "RESOURCE_EXHAUSTED",
+                [quota(PER_MINUTE, "15"), quota(PER_DAY, "20"), RETRY_IN_36S],
+            ),
+            f"Today's limit for {MODEL} is used up",
         ),
         (
             api_error(429, "RESOURCE_EXHAUSTED", [RETRY_IN_36S]),
@@ -453,6 +477,7 @@ def test_no_chunks_means_no_model_call_and_no_answer() -> None:
             errors.UnknownApiResponseError("Failed to parse response as JSON. Raw response: {no"),
             "sent a reply that could not be read",
         ),
+        (wrong_shape(), "sent a reply that could not be read"),
     ],
 )
 def test_api_failures_become_clear_errors(error: BaseException, expected: str) -> None:

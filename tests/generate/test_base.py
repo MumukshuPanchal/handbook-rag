@@ -29,7 +29,17 @@ def test_the_fixed_sentence_without_a_citation_is_a_decline(reply: str) -> None:
     assert not is_answered([Segment(reply)], refused=False)
 
 
-@pytest.mark.parametrize("reply", [NOT_FOUND_MESSAGE, NOT_FOUND_MESSAGE.rstrip(".").lower()])
+@pytest.mark.parametrize(
+    "reply",
+    [
+        NOT_FOUND_MESSAGE,
+        NOT_FOUND_MESSAGE.rstrip(".").lower(),
+        f"**{NOT_FOUND_MESSAGE}**",  # Markdown emphasis
+        f'"{NOT_FOUND_MESSAGE}"',
+        NOT_FOUND_MESSAGE.rstrip(".") + "...",
+        NOT_FOUND_MESSAGE.replace(" ", "  "),
+    ],
+)
 def test_the_fixed_sentence_alone_is_a_decline_even_with_a_citation(reply: str) -> None:
     # A model told to cite every statement may put a marker on this sentence too.
     assert not is_answered([Segment(reply, CITED)], refused=False)

@@ -901,3 +901,16 @@ def test_ask_says_when_the_reply_did_not_come_to_a_proper_end(
     )
 
     assert note in ask_with(monkeypatch, reply)
+
+
+@pytest.mark.parametrize("stop_reason", ["end_turn", "no_context"])
+def test_ask_adds_no_note_when_the_reply_ended_normally(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder, stop_reason: str
+) -> None:
+    reply = FixedReply(NOT_FOUND_MESSAGE, answered=False, stop_reason=stop_reason)
+
+    output = ask_with(monkeypatch, reply)
+
+    assert "stopped early" not in output
+    assert "withheld" not in output
+    assert "cut off" not in output

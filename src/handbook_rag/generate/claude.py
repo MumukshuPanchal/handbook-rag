@@ -94,7 +94,10 @@ class ClaudeGenerator:
         return Answer(
             question=question,
             segments=segments,
-            answered=is_answered(segments, refused=message.stop_reason == "refusal"),
+            # An answer is a reply the model finished, or one that ran out of room.
+            answered=is_answered(
+                segments, refused=message.stop_reason not in ("end_turn", "max_tokens")
+            ),
             model=message.model,
             stop_reason=message.stop_reason or "unknown",
             usage=TokenUsage(

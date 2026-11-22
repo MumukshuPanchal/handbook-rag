@@ -4,6 +4,7 @@ A generator is the part that talks to a language model. There is one per provide
 the rest of the application only ever sees the interface defined here.
 """
 
+import re
 from collections.abc import Callable, Sequence
 from typing import Protocol
 
@@ -58,14 +59,22 @@ def is_answered(segments: Sequence[Segment], *, refused: bool) -> bool:
     - It contains the fixed sentence and cites nothing. An answer that covers part of
       the question may use the sentence for the part it could not find, and still cites
       what it did find.
+
+    Only the words are compared. Capitals, the full stop, quotation marks and Markdown
+    emphasis around the sentence make no difference.
     """
     if refused:
         return False
-    said = "".join(segment.text for segment in segments).strip().lower()
+    said = _words("".join(segment.text for segment in segments))
     if not said:
         return False
-    declined = NOT_FOUND_MESSAGE.rstrip(".").lower()
-    if said.rstrip(".") == declined:
+    declined = _words(NOT_FOUND_MESSAGE)
+    if said == declined:
         return False
     has_citations = any(segment.citations for segment in segments)
     return has_citations or declined not in said
+
+
+def _words(text: str) -> str:
+    """The words of a text in lower case, single spaces between them, nothing else."""
+    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))

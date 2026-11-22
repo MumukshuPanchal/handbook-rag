@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 import httpx2
+import pydantic
 from google import genai
 from google.genai import errors, types
 
@@ -20,9 +21,15 @@ from handbook_rag.ingest.models import Chunk
 
 # The SDK passes failures of the connection on unchanged, from whichever HTTP library it
 # runs on. The first group means the API was not reached or went silent. The second
-# means something arrived that could not be read.
+# means something arrived that could not be read: it could not be decoded, it was not
+# JSON, or it was JSON of a shape the SDK's own types reject.
 _NETWORK_ERRORS = (httpx.TransportError, httpx2.TransportError)
-_UNREADABLE_REPLY_ERRORS = (httpx.RequestError, httpx2.RequestError, errors.UnknownApiResponseError)
+_UNREADABLE_REPLY_ERRORS = (
+    httpx.RequestError,
+    httpx2.RequestError,
+    errors.UnknownApiResponseError,
+    pydantic.ValidationError,
+)
 
 # The two ways of stopping that leave an answer: the model finished, or it ran out of
 # room. After any other stop the reply is not counted as an answer, whatever it holds.
@@ -78,9 +85,10 @@ class GeminiGenerator:
                 config=types.GenerateContentConfig(
                     system_instruction=MARKER_SYSTEM_PROMPT,
                     max_output_tokens=self._max_tokens,
-                    # One question is one request. Left on, the SDK sends the request
-                    # again by itself when a reply stops at the API's size limit, which
-                    # would spend requests from a small daily allowance unseen.
+                    # No follow-up requests. Left on, the SDK sends the request again by
+                    # itself when a reply stops at the API's size limit or the stream
+                    # drops, which would spend a small daily allowance unseen. The only
+                    # repeats left are the attempts after a busy server (see wiring.py).
                     automatic_continuation=False,
                 ),
             )
@@ -138,10 +146,13 @@ class GeminiGenerator:
     def _explain_rate_limit(self, details: Sequence[Mapping[str, Any]]) -> str:
         """Say which limit was reached, when the API tells us.
 
-        A free key has a small number of requests a minute and a fixed number a day, for
-        each model. Which of the two was reached decides what helps: waiting a few
+        The free tier allows a small amount of use a minute and a fixed amount a day,
+        for each model. Which of the two was reached decides what helps: waiting a few
         seconds, or waiting until the next day. When the response does not say, the
         message stays general.
+
+        The limits belong to the Google project a key was made in, not to the key, so
+        the message does not suggest that another key would help.
         """
         limits = [
             str(violation.get("quotaId", ""))
@@ -150,15 +161,15 @@ class GeminiGenerator:
         ]
         if any("PerDay" in limit for limit in limits):
             return (
-                f"Today's request limit for {self._model} on this Gemini key is used up. "
+                f"Today's limit for {self._model} is used up for this key's Google project. "
                 "Try again tomorrow, or choose another model with HANDBOOK_RAG_ANSWER_MODEL."
             )
         wait = next((detail["retryDelay"] for detail in details if "retryDelay" in detail), None)
         when = f"in {wait}" if isinstance(wait, str) and wait else "shortly"
         if any("PerMinute" in limit for limit in limits):
             return (
-                f"The per-minute limit for {self._model} on this Gemini key was reached. "
-                f"Try again {when}."
+                f"The per-minute limit for {self._model} was reached for this key's Google "
+                f"project. Try again {when}."
             )
         return f"The Gemini API rate limit was reached. Try again {when}."
 

@@ -116,4 +116,7 @@ jobs:
       - name: Check that the image runs, and not as root
         run: |
           docker run --rm handbook-rag:ci handbook-rag --version
-          test "$(docker run --rm handbook-rag:ci id -u)" != "0"
+          # In two steps: a command that fails inside "$(...)" would not fail the step.
+          uid=$(docker run --rm handbook-rag:ci id -u)
+          echo "the image runs as uid $uid"
+          test "$uid" != "0"

@@ -4,13 +4,20 @@
 name: handbook-rag
 
 services:
-  # The HTTP API. It serves once the index exists; until then /health answers 503.
-  # Build the index with:
+  # The HTTP API. It starts without an index: /health then answers 503 and says the
+  # index has not been built. Build it with:
   #   docker compose run --rm api handbook-rag snapshot
   #   docker compose run --rm api handbook-rag index
+  # The containers do not read a .env file. They run with the default settings plus the
+  # ones listed here; add a line to change another.
   api:
     build: .
     image: handbook-rag:local
+    # The image exists only on this machine, so there is nothing to pull.
+    pull_policy: build
+    # A small init process passes signals on, so a one-off command such as indexing
+    # stops when it is told to.
+    init: true
     environment:
       HANDBOOK_RAG_QDRANT_URL: http://qdrant:6333
       HANDBOOK_RAG_TRACING: "true"
@@ -27,18 +34,22 @@ services:
       jaeger:
         condition: service_started
     healthcheck:
+      # Is the server up and accepting connections? Whether it can answer a search is a
+      # different question, which GET /health answers: that depends on the index, and
+      # a container that is waiting for its index is not broken.
       # Python is in the image; curl is not.
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+        - "import socket; socket.create_connection(('127.0.0.1', 8000), 3).close()"
       interval: 10s
       timeout: 5s
       retries: 6
       # The first start downloads the models, which takes a while.
       start_period: 180s
-    restart: unless-stopped
+    # No restart policy, unlike the two services below: the API holds port 8000, which
+    # `make serve` also wants, so it should not come back by itself.
 
   qdrant:
     image: qdrant/qdrant:v1.20.2

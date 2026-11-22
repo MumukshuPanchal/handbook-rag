@@ -1741,3 +1741,139 @@ def test_eval_support_needs_an_answer_run_and_a_judge_that_answers(
     summary = json.loads((judged_run["run_dir"] / "summary.json").read_text())
     assert "supported" not in summary["metrics"]
     assert "judge" not in summary
+
+
+def test_eval_support_leaves_out_a_reply_to_a_question_that_was_relabelled_since(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any], tmp_path: Path
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    assert runner.invoke(app, judged_run["support"]).exit_code == 0
+    # The reference answer of the one answerable question is changed. Its saved reply was
+    # made for the old label, and must not be scored under the new one.
+    relabelled = [
+        {**ANSWER_QUESTIONS[0], "reference_answer": "Sixteen weeks, paid."},
+        ANSWER_QUESTIONS[1],
+    ]
+    dataset = Path(judged_run["answers"][2])
+    dataset.write_text("".join(json.dumps(question) + "\n" for question in relabelled))
+
+    result = runner.invoke(app, judged_run["support"])
+
+    assert result.exit_code == 1
+    assert "left out     1 replies to questions that have since been relabelled" in result.output
+    assert "Ask them again with eval-answers." in result.output
+    assert "the run holds no answer to judge" in result.output
+    assert judge.asked == ["q001"]
+    run_dir = judged_run["run_dir"]
+    rows = [json.loads(line) for line in (run_dir / "results.jsonl").read_text().splitlines()]
+    # Only the reply to the question whose label is unchanged is scored.
+    assert [row["prompt_id"] for row in rows] == ["u001"]
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert (summary["questions_scored"], summary["questions_not_asked"]) == (1, 1)
+    assert "supported" not in summary["metrics"]
+    assert "judge" not in summary
+
+    # Asking again makes a reply to the new label, and that one is judged.
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", EvalModel().build)
+    assert runner.invoke(app, judged_run["answers"]).exit_code == 0
+    again = runner.invoke(app, judged_run["support"])
+    assert again.exit_code == 0, again.output
+    assert "left out" not in again.output
+    assert "Supported by its sources     1.000" in again.output
+
+
+def test_eval_support_quotes_only_a_whole_check_that_exists(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any], tmp_path: Path
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+
+    missing = runner.invoke(app, [*judged_run["support"], "--checked", str(tmp_path / "nowhere")])
+
+    assert missing.exit_code == 1
+    assert "there is no judge check in" in missing.output
+    assert "Make one with eval-judge." in missing.output
+
+    # A check that was stopped after one of its two labelled answers.
+    partial = runner.invoke(
+        app, [*judged_run["judge"], "--variant", "partial", "--max-requests", "1"]
+    )
+    assert partial.exit_code == 0, partial.output
+    refused = runner.invoke(
+        app, [*judged_run["support"], "--checked", str(judged_run["checks"] / "partial")]
+    )
+
+    assert refused.exit_code == 1
+    assert "is not finished: it judged 1 of 2 labelled answers" in refused.output
+    assert not (judged_run["run_dir"] / "support.jsonl").exists()
+
+    # Once it is whole, it is quoted, with how much of the labelled set it covers.
+    assert runner.invoke(app, [*judged_run["judge"], "--variant", "partial"]).exit_code == 0
+    quoted = runner.invoke(
+        app, [*judged_run["support"], "--checked", str(judged_run["checks"] / "partial")]
+    )
+    assert quoted.exit_code == 0, quoted.output
+    summary = json.loads((judged_run["run_dir"] / "summary.json").read_text())
+    assert summary["judge"]["check"]["answers"] == {"labelled": 2, "judged": 2}
+
+
+def test_a_check_in_which_the_judge_raised_no_alarm_is_quoted_as_that(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", FakeJudge(lenient=True).build)
+    assert runner.invoke(app, [*judged_run["judge"], "--variant", "lenient"]).exit_code == 0
+
+    result = runner.invoke(
+        app, [*judged_run["support"], "--checked", str(judged_run["checks"] / "lenient")]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "judge check  it caught 0 of 1 statements labelled unsupported, and it raised no alarm"
+        in result.output
+    )
+
+
+def test_a_restart_that_then_fails_does_not_leave_the_old_judged_score_standing(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", FakeJudge().build)
+    assert runner.invoke(app, judged_run["support"]).exit_code == 0
+    run_dir = judged_run["run_dir"]
+    assert "supported" in json.loads((run_dir / "summary.json").read_text())["metrics"]
+
+    failing = FakeJudge(error=JudgeError("The Gemini API returned an error (503): Overloaded."))
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", failing.build)
+    result = runner.invoke(app, [*judged_run["support"], "--restart"])
+
+    assert result.exit_code == 1
+    assert "no answer was judged" in result.output
+    # The verdicts are gone, and so is the score that rested on them.
+    assert not (run_dir / "support.jsonl").exists()
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert "supported" not in summary["metrics"]
+    assert "judge" not in summary
+    rows = [json.loads(line) for line in (run_dir / "results.jsonl").read_text().splitlines()]
+    assert all("supported" not in row["grade"] for row in rows)
+    # What the answer stage measured is still there.
+    assert summary["metrics"]["right_call"]["mean"] == 1.0
+    assert summary["description"] == "Answers by gemini-3.5-flash-lite from 5 passages."
+
+
+def test_restarting_the_answer_run_discards_the_verdicts_on_its_replies(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", FakeJudge().build)
+    assert runner.invoke(app, judged_run["support"]).exit_code == 0
+    run_dir = judged_run["run_dir"]
+    assert (run_dir / "support.jsonl").exists()
+
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", EvalModel().build)
+    restarted = runner.invoke(app, [*judged_run["answers"], "--restart"])
+
+    assert restarted.exit_code == 0, restarted.output
+    assert not (run_dir / "support.jsonl").exists()
+    assert not (run_dir / "support.json").exists()
+    assert "Supported by its sources" not in restarted.output
+    assert "judge" not in json.loads((run_dir / "summary.json").read_text())

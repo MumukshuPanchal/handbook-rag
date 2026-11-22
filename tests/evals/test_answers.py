@@ -21,6 +21,7 @@ from handbook_rag.evals.answers import (
     load_records,
     open_run,
     record_answer,
+    replies_to_current_labels,
     run_answers,
     score_answer,
     summarise_answers,
@@ -334,6 +335,19 @@ def test_a_reply_to_an_older_wording_of_the_label_is_asked_again() -> None:
     run_answers([reworded, LAPTOP_QUESTION, PARKING_QUESTION], DOCUMENTS, ask, saved=first.records)
 
     assert asked == [LEAVE_QUESTION.question]
+
+
+def test_only_replies_to_the_questions_as_they_are_labelled_now_are_kept() -> None:
+    records = run_answers(QUESTIONS, DOCUMENTS, careful).records
+    reworded = LEAVE_QUESTION.model_copy(update={"reference_answer": "16 weeks, fully paid."})
+
+    current = replies_to_current_labels([reworded, PARKING_QUESTION], records)
+
+    # The reply to the reworded question was made for another label, and the laptop
+    # question is no longer in the set.
+    assert set(current) == {"u001"}
+    assert replies_to_current_labels(QUESTIONS, records) == records
+    assert replies_to_current_labels(QUESTIONS, {}) == {}
 
 
 def test_a_saved_reply_to_a_question_no_longer_in_the_set_is_left_out() -> None:

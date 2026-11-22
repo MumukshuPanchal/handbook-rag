@@ -135,10 +135,12 @@ def share_with_interval(successes: int, total: int) -> Estimate:
     centre = share + z * z / (2 * total)
     spread = z * math.sqrt(share * (1 - share) / total + z * z / (4 * total * total))
     scale = 1 + z * z / total
+    # At the two ends the formula gives exactly 0 and exactly 1. They are written out,
+    # because the arithmetic leaves a remainder of rounding there.
     return Estimate(
         mean=share,
-        low=max(0.0, (centre - spread) / scale),
-        high=min(1.0, (centre + spread) / scale),
+        low=0.0 if successes == 0 else (centre - spread) / scale,
+        high=1.0 if successes == total else (centre + spread) / scale,
         count=total,
     )
 

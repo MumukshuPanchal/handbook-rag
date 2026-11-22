@@ -14,6 +14,7 @@ labelled answers and scoring a run never pays twice for the same answer.
 
 import hashlib
 import json
+import statistics
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -32,6 +33,7 @@ from handbook_rag.evals.judge import (
     StatementVerdict,
     SupportCase,
     SupportJudge,
+    Verdict,
 )
 from handbook_rag.evals.metrics import Estimate
 from handbook_rag.evals.retrieval import FailedQuestion
@@ -66,7 +68,7 @@ def judge_check_stage(run_dir: Path) -> Stage:
         "run.json",
         holds="verdicts",
         advice="Give this run another name, or discard its saved verdicts with --restart.",
-        outputs=("summary.json", "disagreements.jsonl", "change.md"),
+        outputs=("summary.json", "disagreements.jsonl"),
     )
 
 
@@ -97,6 +99,9 @@ def support_cases(
                 )
             passages.append(JudgedPassage(passage.number, chunk.context_header, chunk.text))
         spoken = [s for s in record.statements if any(c.isalnum() for c in s.text)]
+        if not spoken:
+            # Nothing in the reply says anything, so there is nothing to judge.
+            continue
         cases.append(
             SupportCase(
                 case_id=question.id,
@@ -159,7 +164,7 @@ def load_labelled_cases(path: Path, chunks: Mapping[str, Chunk]) -> list[Labelle
                     JudgedPassage(int(passage["number"]), chunk.context_header, chunk.text)
                 )
             statements = tuple(
-                JudgedStatement(int(s["number"]), str(s["text"]), tuple(s["cites"]))
+                JudgedStatement(int(s["number"]), str(s["text"]), _numbers(s["cites"]))
                 for s in row["statements"]
             )
             expected = {int(s["number"]): str(s["expected"]) for s in row["statements"]}
@@ -173,6 +178,9 @@ def load_labelled_cases(path: Path, chunks: Mapping[str, Chunk]) -> list[Labelle
         unknown = sorted(set(expected.values()) - {*VERDICTS, UNCLEAR})
         if unknown:
             raise DatasetError(f"{path}:{number}: {case_id} has an unknown verdict: {unknown}")
+        problem = _fault_in_case(passages, statements, expected, planted)
+        if problem:
+            raise DatasetError(f"{path}:{number}: {case_id} {problem}")
         if case_id in seen:
             raise DatasetError(f"{path}:{number}: the id {case_id} is used twice")
         seen.add(case_id)
@@ -187,6 +195,37 @@ def load_labelled_cases(path: Path, chunks: Mapping[str, Chunk]) -> list[Labelle
     if not cases:
         raise DatasetError(f"{path} holds no labelled answer")
     return cases
+
+
+def _numbers(value: object) -> tuple[int, ...]:
+    """Passage numbers as they must be written: a list of whole numbers."""
+    if not isinstance(value, list) or not all(type(item) is int for item in value):
+        raise TypeError(f"cites must be a list of passage numbers, not {value!r}")
+    return tuple(value)
+
+
+def _fault_in_case(
+    passages: Sequence[JudgedPassage],
+    statements: Sequence[JudgedStatement],
+    expected: Mapping[int, str],
+    planted: Mapping[int, str],
+) -> str | None:
+    """What is wrong with a labelled answer that the judge could not be fairly given."""
+    if not statements:
+        return "has no statement"
+    numbers = [statement.number for statement in statements]
+    if len(set(numbers)) != len(numbers):
+        return "numbers two statements alike"
+    given = [passage.number for passage in passages]
+    if len(set(given)) != len(given):
+        return "numbers two passages alike"
+    for statement in statements:
+        if not set(statement.cites) <= set(given):
+            return f"has statement {statement.number} citing a passage it does not list"
+    for statement_number in planted:
+        if expected[statement_number] != "unsupported":
+            return f"has a planted fault in statement {statement_number} that is not unsupported"
+    return None
 
 
 def _text_hash(text: str) -> str:
@@ -241,10 +280,11 @@ def load_judgements(path: Path) -> dict[str, Judgement]:
     return judgements
 
 
-def _verdict(value: object) -> Any:
-    if value not in VERDICTS:
-        raise ValueError(f"unknown verdict {value!r}")
-    return value
+def _verdict(value: object) -> Verdict:
+    for verdict in VERDICTS:
+        if value == verdict:
+            return verdict
+    raise ValueError(f"unknown verdict {value!r}")
 
 
 @dataclass(slots=True)
@@ -300,15 +340,15 @@ def run_judge(
     # still judged a fair sample, with and without planted faults.
     pending.sort(key=lambda case: hashlib.sha256(case.case_id.encode("utf-8")).hexdigest())
 
-    def attempt(case: SupportCase) -> None:
-        judgement = judge.judge(case)
+    def keep(case: SupportCase, judgement: Judgement) -> None:
         run.judgements[case.case_id] = judgement
         if on_judgement is not None:
             on_judgement(case, judgement, True)
 
     outcome = run_carefully(
         pending,
-        attempt,
+        judge.judge,
+        keep,
         name=lambda case: case.case_id,
         errors=(JudgeError,),
         things="answers",
@@ -377,7 +417,6 @@ def judge_record(run_dir: Path, judged: Mapping[str, Judgement]) -> dict[str, ob
     stage = support_stage(run_dir)
     config = stage.config()
     verdicts = [verdict.verdict for judgement in judged.values() for verdict in judgement.verdicts]
-    seconds = sorted(judgement.seconds for judgement in judged.values())
     record: dict[str, object] = {
         "config": config,
         "attempts": stage.attempts(),
@@ -385,14 +424,14 @@ def judge_record(run_dir: Path, judged: Mapping[str, Judgement]) -> dict[str, ob
         "statements": {name: verdicts.count(name) for name in VERDICTS},
         "input_tokens": sum(judgement.input_tokens for judgement in judged.values()),
         "output_tokens": sum(judgement.output_tokens for judgement in judged.values()),
-        "median_seconds": seconds[len(seconds) // 2],
+        "median_seconds": statistics.median(j.seconds for j in judged.values()),
         "check": None,
     }
     check_file = run_dir / CHECK_FILE
     if check_file.is_file():
         check = json.loads(check_file.read_text(encoding="utf-8"))
         if isinstance(check, dict) and check.get("config") == config:
-            record["check"] = {"run": check.get("run"), "agreement": check.get("agreement")}
+            record["check"] = {key: check.get(key) for key in ("run", "answers", "agreement")}
     return record
 
 

@@ -53,8 +53,9 @@ class Agreement:
     """Share of statements on which judge and label agree whether it is unsupported.
     This is the decision an answer's score depends on."""
     kappa: float
-    """Cohen's kappa for that decision: agreement beyond what chance alone would give,
-    from 0 (no better than chance) to 1 (complete)."""
+    """Cohen's kappa for that decision: agreement beyond what chance alone would give.
+    1 is complete agreement, 0 is no better than chance, and a judge that does worse than
+    chance scores below 0, down to -1."""
     recall: Estimate | None
     """Of the statements labelled unsupported, the share the judge called unsupported."""
     precision: Estimate | None

@@ -237,6 +237,13 @@ def test_a_share_has_an_interval_that_stays_open_at_the_ends(
     assert 0.0 <= estimate.low <= estimate.mean <= estimate.high <= 1.0
 
 
+@pytest.mark.parametrize("total", [1, 7, 41, 1000])
+def test_the_interval_of_a_share_never_leaves_the_range_from_nothing_to_all(total: int) -> None:
+    # Rounding in the arithmetic would otherwise put the ends a hair outside.
+    assert share_with_interval(0, total).low == 0.0
+    assert share_with_interval(total, total).high == 1.0
+
+
 @pytest.mark.parametrize(("successes", "total"), [(0, 0), (1, 0), (-1, 5), (6, 5)])
 def test_a_share_needs_a_count_it_fits_in(successes: int, total: int) -> None:
     with pytest.raises(ValueError, match="share"):

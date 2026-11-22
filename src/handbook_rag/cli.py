@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+import statistics
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -532,6 +533,9 @@ def eval_answers(
         generator = wiring.make_generator(settings, attempts=1)
         # Last, so that a run that cannot start leaves nothing behind.
         saved = answer_runs.open_run(run_dir, config, restart=restart)
+        if restart:
+            # Verdicts on the discarded replies go with them.
+            support_stage(run_dir).discard()
     except (
         DatasetError,
         CorpusError,
@@ -658,6 +662,7 @@ def _score_answers(
     chunks: Sequence[Chunk],
 ) -> tuple[answer_runs.AnswerReport, dict[str, Judgement]]:
     """Score a run's replies, with the judge's verdicts on them where it has any."""
+    records = answer_runs.replies_to_current_labels(questions, records)
     judged: dict[str, Judgement] = {}
     if support_stage(run_dir).rows_path.is_file():
         cases = support_cases(questions, records, {chunk.chunk_id: chunk for chunk in chunks})
@@ -720,20 +725,21 @@ def _echo_judge_record(judge: Mapping[str, Any]) -> None:
         return
     agreement = check["agreement"]
     recall, precision = agreement["recall"], agreement["precision"]
-    caught = "no unsupported statement among the labels"
-    if recall is not None:
+    if recall is None:
+        caught = "the labels it was checked against held no unsupported statement"
+    else:
         caught = (
-            f"caught {round(recall['mean'] * recall['count'])} of {recall['count']} "
+            f"it caught {round(recall['mean'] * recall['count'])} of {recall['count']} "
             "statements labelled unsupported"
         )
-    alarms = ""
-    if precision is not None:
+    if precision is None:
+        alarms = "it raised no alarm"
+    else:
         wrong = precision["count"] - round(precision["mean"] * precision["count"])
         alarms = (
-            f", and {wrong} of its {precision['count']} alarms "
-            f"{'was' if wrong == 1 else 'were'} false"
+            f"{wrong} of its {precision['count']} alarms {'was' if wrong == 1 else 'were'} false"
         )
-    typer.echo(f"  judge check  it {caught}{alarms} ({check['run']})")
+    typer.echo(f"  judge check  {caught}, and {alarms} ({check['run']})")
 
 
 def _judge_carefully(
@@ -795,6 +801,43 @@ def _judge_carefully(
         rest=lambda: pacer.rest(REST_AFTER_FAILURE_SECONDS),
         max_attempts=max_requests,
     )
+
+
+def _judge_check_to_quote(
+    checked: Path, config: Mapping[str, object]
+) -> tuple[dict[str, Judgement], dict[str, Any]]:
+    """The verdicts and the agreement of a judge check, if it may be quoted for this judge.
+
+    It may be quoted only if it was made with the same judge, and only if it is whole: a
+    check that judged part of the labelled answers would be quoted as if it were all.
+    """
+    check_stage = judge_check_stage(checked)
+    summary_file = checked / "summary.json"
+    if not check_stage.state_path.is_file() or not summary_file.is_file():
+        raise SavedRunError(f"there is no judge check in {checked}. Make one with eval-judge.")
+    if check_stage.config() != dict(config):
+        raise SavedRunError(
+            f"the check in {checked} was made with another judge. Check this judge with "
+            "eval-judge, or leave --checked out."
+        )
+    try:
+        summary = json.loads(summary_file.read_text(encoding="utf-8"))
+        answers = {"labelled": summary["answers_labelled"], "judged": summary["answers_judged"]}
+        agreement = summary["agreement"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise SavedRunError(f"{summary_file} cannot be read as a judge check: {error}") from error
+    if answers["judged"] != answers["labelled"]:
+        raise SavedRunError(
+            f"the check in {checked} is not finished: it judged {answers['judged']} of "
+            f"{answers['labelled']} labelled answers. Finish it with eval-judge."
+        )
+    check = {
+        "run": str(checked),
+        "config": dict(config),
+        "answers": answers,
+        "agreement": agreement,
+    }
+    return load_judgements(check_stage.rows_path), check
 
 
 def _judge_stopped_badly(run: JudgeRun, max_requests: int | None) -> bool:
@@ -910,7 +953,7 @@ def eval_judge(
         "agreement": agreement_headline(agreement),
         "input_tokens": sum(judgement.input_tokens for judgement in judged),
         "output_tokens": sum(judgement.output_tokens for judgement in judged),
-        "median_seconds": sorted(judgement.seconds for judgement in judged)[len(judged) // 2],
+        "median_seconds": statistics.median(judgement.seconds for judgement in judged),
     }
     (run_dir / "summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -985,8 +1028,8 @@ def eval_support(
     run_dir = runs / variant
     stage = support_stage(run_dir)
     try:
-        records = answer_runs.load_records(run_dir / answer_runs.ANSWERS_FILE)
-        if not records:
+        saved_replies = answer_runs.load_records(run_dir / answer_runs.ANSWERS_FILE)
+        if not saved_replies:
             raise SavedRunError(
                 f"{run_dir} holds no replies. Make the answer run first, with eval-answers."
             )
@@ -995,31 +1038,18 @@ def eval_support(
         reuse: dict[str, Judgement] = {}
         check: dict[str, Any] | None = None
         if checked is not None:
-            check_stage = judge_check_stage(checked)
-            if check_stage.config() != config:
-                raise SavedRunError(
-                    f"the check in {checked} was made with another judge. Check this judge "
-                    "with eval-judge, or leave --checked out."
-                )
-            reuse = load_judgements(check_stage.rows_path)
-            agreement = json.loads((checked / "summary.json").read_text(encoding="utf-8"))
-            check = {"run": str(checked), "config": config, "agreement": agreement["agreement"]}
+            reuse, check = _judge_check_to_quote(checked, config)
         questions = _load_questions(dataset)
+        # A reply to a question that has since been relabelled is a reply to another test.
+        records = answer_runs.replies_to_current_labels(questions, saved_replies)
+        outdated = len({q.id for q in questions} & set(saved_replies)) - len(records)
         corpus = build_corpus(settings)
         cases = support_cases(
             questions, records, {chunk.chunk_id: chunk for chunk in corpus.chunks}
         )
         judge = wiring.make_judge(settings, attempts=1)
         stage.open(config, restart=restart)
-    except (
-        DatasetError,
-        CorpusError,
-        GenerationError,
-        SavedRunError,
-        OSError,
-        KeyError,
-        json.JSONDecodeError,
-    ) as error:
+    except (DatasetError, CorpusError, GenerationError, SavedRunError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=1) from error
     if check is not None:
@@ -1029,6 +1059,11 @@ def eval_support(
 
     typer.echo(f"Support of answers: {variant}")
     typer.echo(f"  judge        {settings.judge_model}")
+    if outdated:
+        typer.echo(
+            f"  left out     {outdated} replies to questions that have since been relabelled. "
+            "Ask them again with eval-answers."
+        )
     run = _judge_carefully(
         stage,
         cases,
@@ -1040,13 +1075,27 @@ def eval_support(
     report, judged = _score_answers(
         run_dir, questions, records, answer_runs.load_failures(run_dir), corpus.chunks
     )
-    if not judged:
-        for failure in run.failures[:5]:
-            typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
-        typer.echo(f"error: no answer was judged. {run.stopped or ''}".rstrip(), err=True)
-        raise typer.Exit(code=1)
     record = judge_record(run_dir, judged)
     answers_stage = answer_runs.answers_stage(run_dir)
+    if not judged:
+        # Written all the same, without a judged score: after a restart the run's files
+        # must not go on showing a score that has no verdict behind it.
+        if report.scored:
+            answer_runs.write_answer_run(
+                report,
+                runs,
+                variant,
+                answer_runs.saved_description(run_dir) or "Answers.",
+                answers_stage.config(),
+                attempts=answers_stage.attempts(),
+            )
+        for failure in run.failures[:5]:
+            typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
+        if not cases:
+            typer.echo("error: the run holds no answer to judge.", err=True)
+        else:
+            typer.echo(f"error: no answer was judged. {run.stopped or ''}".rstrip(), err=True)
+        raise typer.Exit(code=1)
     answer_runs.write_answer_run(
         report,
         runs,

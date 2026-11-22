@@ -54,9 +54,10 @@ class CarefulRun:
     """Why the pass ended before every item was tried, if it did."""
 
 
-def run_carefully[T](
+def run_carefully[T, R](
     pending: Sequence[T],
-    attempt: Callable[[T], None],
+    send: Callable[[T], R],
+    keep: Callable[[T, R], None],
     *,
     name: Callable[[T], str],
     errors: tuple[type[Exception], ...],
@@ -69,14 +70,19 @@ def run_carefully[T](
 ) -> CarefulRun:
     """Try every pending item, and the ones that fail once more.
 
-    ``attempt`` sends the request for one item and keeps its result. It raises one of
+    ``send`` makes the request for one item and returns its result. It raises one of
     ``errors`` when the request fails for a reason outside our code, such as a model or a
-    store that cannot be reached. Any other exception is a fault in our code, and is
-    passed on. ``wait`` is called before each try and returns when the next request may
-    start: it is where the pace is kept and the attempt is counted. ``on_failure``
-    receives each failure as it happens, including one that a second try then makes good.
-    ``rest`` is called after each failure, before anything else is tried: a pause there
-    lets a service that is briefly overloaded recover, and costs no request.
+    store that cannot be reached. ``keep`` is given the result of a request that worked,
+    and is where it is recorded and saved. Only ``send`` is watched for ``errors``: any
+    exception from ``keep``, and any other exception from ``send``, is a fault in our
+    code and is passed on.
+
+    ``wait`` is called before each try and returns when the next request may start: it is
+    where the pace is kept and the attempt is counted. ``on_failure`` receives each
+    failure as it happens, including one that a second try then makes good. ``rest`` is
+    called between a failure and the next try, whatever that try is: a pause there lets a
+    service that is briefly overloaded recover, and costs no request. There is no rest
+    when nothing is left to try.
 
     An item that fails is tried once more after all the others. When several items fail
     one after another, the pass stops: the cause is then almost certainly the day's
@@ -86,6 +92,7 @@ def run_carefully[T](
     run = CarefulRun()
     failed: dict[str, FailedQuestion] = {}
     failures_in_a_row = 0
+    rest_is_due = False
     # The second round gives each item that failed one more try.
     for _ in range(2):
         again: list[T] = []
@@ -93,11 +100,14 @@ def run_carefully[T](
             if max_attempts is not None and run.attempts >= max_attempts:
                 run.stopped = f"the limit of {max_attempts} requests for this run was reached"
                 break
+            if rest_is_due and rest is not None:
+                rest()
+            rest_is_due = False
             if wait is not None:
                 wait()
             run.attempts += 1
             try:
-                attempt(item)
+                result = send(item)
             except errors as error:
                 failed[name(item)] = FailedQuestion(name(item), type(error).__name__, str(error))
                 if on_failure is not None:
@@ -109,11 +119,11 @@ def run_carefully[T](
                         f"{failures_in_a_row} {things} in a row failed. The last error: {error}"
                     )
                     break
-                if rest is not None:
-                    rest()
+                rest_is_due = True
                 continue
             failures_in_a_row = 0
             failed.pop(name(item), None)
+            keep(item, result)
         if run.stopped is not None or not again:
             break
         pending = again

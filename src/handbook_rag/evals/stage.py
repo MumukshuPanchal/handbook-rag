@@ -36,6 +36,11 @@ class Stage:
     traces: bool = False
     """Whether the stage writes one file per question into ``traces/``."""
 
+    def __post_init__(self) -> None:
+        names = [self.rows_file, self.state_file, *self.outputs]
+        if len(set(names)) != len(names):
+            raise ValueError(f"A stage needs a different file for each purpose, not {names}.")
+
     @property
     def rows_path(self) -> Path:
         return self.run_dir / self.rows_file

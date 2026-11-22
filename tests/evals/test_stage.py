@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from handbook_rag.evals.answers import answers_stage
 from handbook_rag.evals.stage import SavedRunError, Stage, load_rows
+from handbook_rag.evals.support import judge_check_stage, support_stage
 
 CONFIG: dict[str, object] = {"judge_model": "fake-judge", "instructions": "abc"}
 
@@ -86,6 +88,25 @@ def test_messages_name_what_the_stage_holds_and_what_to_do(tmp_path: Path) -> No
         stage.check(CONFIG)
 
 
+def test_a_stage_needs_a_file_of_its_own_for_each_purpose(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="a different file for each purpose"):
+        Stage(tmp_path, "rows.jsonl", "rows.jsonl")
+    with pytest.raises(ValueError, match="a different file for each purpose"):
+        Stage(tmp_path, "rows.jsonl", "state.json", outputs=("summary.json", "rows.jsonl"))
+
+
+def test_the_stages_of_a_run_share_no_file(tmp_path: Path) -> None:
+    # Restarting one stage removes its files. None of them may belong to another stage.
+    answers, support = answers_stage(tmp_path), support_stage(tmp_path)
+
+    def files(stage: Stage) -> set[str]:
+        return {stage.rows_file, stage.state_file, *stage.outputs}
+
+    assert files(answers) & files(support) == set()
+    # A judge check has a directory of its own, where it uses the same names as a run.
+    assert judge_check_stage(tmp_path).rows_file not in files(answers) | files(support)
+
+
 def test_a_line_that_is_not_a_row_is_reported(tmp_path: Path) -> None:
     path = tmp_path / "rows.jsonl"
     path.write_text('{"case": "q001"}\n[1, 2]\n')
@@ -105,3 +126,12 @@ def test_the_settings_are_kept_as_they_read_after_being_saved(tmp_path: Path) ->
         "attempts": 0,
     }
     assert stage.config() == {"sizes": [320, 60], "rerank": False}
+
+
+def test_settings_are_saved_as_they_read(tmp_path: Path) -> None:
+    stage = stage_in(tmp_path)
+
+    stage.open({"description": "Zwölf Wochen"})
+
+    assert "Zwölf Wochen" in stage.state_path.read_text(encoding="utf-8")
+    assert stage.config() == {"description": "Zwölf Wochen"}

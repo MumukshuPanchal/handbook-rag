@@ -157,6 +157,24 @@ def test_a_judge_that_always_raises_an_alarm_on_sound_statements_only_is_worse_t
     assert agreement.kappa == -1.0
 
 
+def test_the_table_of_verdicts_reads_label_first_and_judge_second() -> None:
+    agreement = measure_agreement(
+        pairs(
+            ("a", 1, "supported", "unsupported", "real"),
+            ("b", 1, "supported", "unsupported", "real"),
+            ("c", 1, "unsupported", "supported", "number"),
+            ("d", 1, "no_claim", "supported", "real"),
+        )
+    )
+
+    # Two sound statements faulted, one fault let through, one empty statement passed.
+    assert agreement.matrix == {
+        "supported": {"supported": 0, "unsupported": 2, "no_claim": 0},
+        "unsupported": {"supported": 1, "unsupported": 0, "no_claim": 0},
+        "no_claim": {"supported": 1, "unsupported": 0, "no_claim": 0},
+    }
+
+
 def test_agreement_needs_something_to_compare() -> None:
     with pytest.raises(ValueError, match="at least one labelled statement"):
         measure_agreement([])

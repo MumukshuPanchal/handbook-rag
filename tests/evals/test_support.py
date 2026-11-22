@@ -175,6 +175,13 @@ def test_a_reply_that_declined_and_a_question_without_a_reply_are_not_read() -> 
     assert cases == []
 
 
+def test_an_answer_in_which_nothing_is_said_is_not_given_to_the_judge() -> None:
+    # It cannot be judged, and asking would only spend attempts on a certain failure.
+    silent = {"q001": record("q001", Statement(" \n", ()), Statement("---", (2,)))}
+
+    assert support_cases(QUESTIONS, silent, CHUNKS) == []
+
+
 def test_a_cited_passage_that_is_not_in_the_corpus_stops_the_stage() -> None:
     without_leave = {EXPENSES.chunk_id: EXPENSES, CANADA.chunk_id: CANADA}
 
@@ -201,6 +208,17 @@ def test_the_fingerprint_of_a_case_changes_with_anything_the_judge_reads() -> No
 
     assert len(prints) == len(variants)
     assert case_fingerprint(case) not in prints
+    # The numbers are read by the judge too: the same words under other numbers is
+    # another prompt, and a verdict names its statement by number.
+    renumbered_statements = replace(
+        case, statements=tuple(replace(s, number=s.number + 1) for s in case.statements)
+    )
+    renumbered_passages = replace(
+        case, passages=tuple(replace(p, number=p.number + 5) for p in case.passages)
+    )
+    assert (
+        len({case_fingerprint(c) for c in (case, renumbered_statements, renumbered_passages)}) == 3
+    )
     # The id is a name, not something the judge reads.
     assert case_fingerprint(replace(case, case_id="another-name")) == case_fingerprint(case)
     assert len(case_fingerprint(case)) == 16
@@ -298,6 +316,73 @@ def test_labelled_answers_are_read_with_their_passages_fetched_from_the_corpus(
     ],
 )
 def test_a_labelled_answer_that_cannot_be_trusted_stops_the_check(
+    tmp_path: Path, row: dict[str, Any], problem: str
+) -> None:
+    with pytest.raises(DatasetError, match=rf"cases\.jsonl:1: .*{problem}"):
+        load_labelled_cases(write_cases(tmp_path, row), CHUNKS)
+
+
+@pytest.mark.parametrize(
+    ("row", "problem"),
+    [
+        (labelled_row(statements=[]), "q001 has no statement"),
+        (
+            labelled_row(
+                statements=[
+                    {"number": 1, "text": "x", "cites": [2], "expected": "supported"},
+                    {"number": 1, "text": "y", "cites": [2], "expected": "supported"},
+                ]
+            ),
+            "numbers two statements alike",
+        ),
+        (
+            labelled_row(
+                passages=[
+                    {"number": 2, "chunk_id": LEAVE.chunk_id, "text_sha256": text_hash(LEAVE.text)},
+                    {
+                        "number": 2,
+                        "chunk_id": CANADA.chunk_id,
+                        "text_sha256": text_hash(CANADA.text),
+                    },
+                ]
+            ),
+            "numbers two passages alike",
+        ),
+        (
+            labelled_row(
+                statements=[{"number": 1, "text": "x", "cites": [7], "expected": "supported"}]
+            ),
+            "statement 1 citing a passage it does not list",
+        ),
+        (
+            labelled_row(
+                statements=[{"number": 1, "text": "x", "cites": "12", "expected": "supported"}]
+            ),
+            "cites must be a list of passage numbers",
+        ),
+        (
+            labelled_row(
+                statements=[{"number": 1, "text": "x", "cites": [2.0], "expected": "supported"}]
+            ),
+            "cites must be a list of passage numbers",
+        ),
+        (
+            labelled_row(
+                statements=[
+                    {
+                        "number": 1,
+                        "text": "x",
+                        "cites": [2],
+                        "expected": "supported",
+                        "planted": "number",
+                    }
+                ]
+            ),
+            "planted fault in statement 1 that is not unsupported",
+        ),
+    ],
+)
+def test_a_labelled_answer_the_judge_could_not_be_fairly_given_is_refused(
     tmp_path: Path, row: dict[str, Any], problem: str
 ) -> None:
     with pytest.raises(DatasetError, match=rf"cases\.jsonl:1: .*{problem}"):
@@ -510,11 +595,22 @@ def test_a_limit_on_requests_and_a_wait_before_each_apply_to_the_judge_too() -> 
     assert len(run.judgements) == 1
 
 
-def test_a_fault_in_our_own_code_is_not_counted_as_a_failed_request() -> None:
+@pytest.mark.parametrize("error", [TypeError("our own mistake"), ValueError("our own mistake")])
+def test_a_fault_in_our_own_code_is_not_counted_as_a_failed_request(error: Exception) -> None:
     cases = support_cases(QUESTIONS, RECORDS, CHUNKS)
 
-    with pytest.raises(TypeError, match="our own mistake"):
-        run_judge(cases, ScriptedJudge(error=TypeError("our own mistake")))
+    with pytest.raises(type(error), match="our own mistake"):
+        run_judge(cases, ScriptedJudge(error=error))
+
+
+def test_the_judging_rests_after_a_failure_before_it_tries_anything_else() -> None:
+    cases = support_cases(QUESTIONS, RECORDS, CHUNKS)
+    first = sorted(cases, key=lambda c: hashlib.sha256(c.case_id.encode()).hexdigest())[0]
+    rests: list[str] = []
+
+    run_judge(cases, ScriptedJudge(failing={first.case_id: 1}), rest=lambda: rests.append("rest"))
+
+    assert rests == ["rest"]
 
 
 # From verdicts to scores
@@ -583,13 +679,28 @@ def test_the_record_of_the_judge_says_what_it_read_and_cost_and_how_it_was_check
         "median_seconds": 1.5,
         "check": None,
     }
+    # The middle of the times, which for two answers lies between them.
+    slower = {**judged, "q002": dataclasses.replace(judged["q002"], seconds=4.5)}
+    timed = judge_record(tmp_path, slower)
+    assert timed is not None
+    assert timed["median_seconds"] == 3.0
 
     agreement = {"recall": {"mean": 0.9, "low": 0.8, "high": 1.0, "count": 41}}
-    check = {"run": "evals/runs/judge/baseline", "config": CONFIG, "agreement": agreement}
+    answers = {"labelled": 169, "judged": 169}
+    check = {
+        "run": "evals/runs/judge/baseline",
+        "config": CONFIG,
+        "answers": answers,
+        "agreement": agreement,
+    }
     (tmp_path / CHECK_FILE).write_text(json.dumps(check))
     checked = judge_record(tmp_path, judged)
     assert checked is not None
-    assert checked["check"] == {"run": "evals/runs/judge/baseline", "agreement": agreement}
+    assert checked["check"] == {
+        "run": "evals/runs/judge/baseline",
+        "answers": answers,
+        "agreement": agreement,
+    }
 
     # A check of another judge says nothing about this one.
     (tmp_path / CHECK_FILE).write_text(

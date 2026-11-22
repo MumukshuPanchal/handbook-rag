@@ -4,7 +4,11 @@ from pydantic import SecretStr
 
 from handbook_rag import wiring
 from handbook_rag.config import Settings
-from handbook_rag.evals.judge import SUPPORT_INSTRUCTIONS, GeminiSupportJudge
+from handbook_rag.evals.judge import (
+    SUPPORT_INSTRUCTIONS,
+    GeminiSupportJudge,
+    request_fingerprint,
+)
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
@@ -215,6 +219,7 @@ def test_verdicts_record_the_judge_that_made_them(monkeypatch: pytest.MonkeyPatc
         "judge_model": "gemini-3.5-flash-lite",
         "judge_max_tokens": 2000,
         "judge_instructions": described["judge_instructions"],
+        "judge_request": request_fingerprint(),
     }
     assert len(str(described["judge_instructions"])) == 16
 

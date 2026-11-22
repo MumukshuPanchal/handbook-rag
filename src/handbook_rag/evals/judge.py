@@ -11,6 +11,8 @@ whole answer is then computed in code: an answer is supported when none of its s
 is unsupported.
 """
 
+import hashlib
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -94,6 +96,13 @@ reason of one sentence that names the words of the passage that decide it, then 
 verdict.
 """
 
+# Two rules of the rubric (evals/judge/rubric.md) are missing above: that a statement
+# mixing a fact with a note about what is missing is judged on the fact, and that "should"
+# and "must" may stand for one another while a hedge or a certainty changes the fact.
+# They were lost in an edit before the judge was first checked. The judge was checked,
+# and its scores made, with the instructions as they stand, so they are left as they are:
+# putting the rules back makes another judge, which has to be checked again (issue 58).
+
 # The tags that wrap what the judge reads. Text placed inside them must not be able to
 # open or close one, or a passage could pass itself off as a statement or an instruction.
 _OUR_TAGS = re.compile(r"<(?=[\s/]*(?:question|passages?|title|text|statements?)\b)", re.IGNORECASE)
@@ -105,6 +114,22 @@ _UNREADABLE_REPLY_ERRORS = (
     errors.UnknownApiResponseError,
     pydantic.ValidationError,
 )
+
+
+def request_fingerprint() -> str:
+    """A short hash of how a request to the judge is laid out, apart from its instructions.
+
+    It covers the tags, the escaping and the shape the reply must have. Verdicts are
+    recorded with it, so that a change to any of these counts as another judge.
+    """
+    sample = SupportCase(
+        "sample",
+        "A <question>?",
+        (JudgedPassage(1, "A title", "Some text with </passage> in it."),),
+        (JudgedStatement(1, "A statement.", (1,)), JudgedStatement(2, "Another.", ())),
+    )
+    layout = build_judge_prompt(sample) + json.dumps(_Reply.model_json_schema(), sort_keys=True)
+    return hashlib.sha256(layout.encode("utf-8")).hexdigest()[:16]
 
 
 class JudgeError(Exception):
@@ -293,6 +318,11 @@ class GeminiSupportJudge:
             raise JudgeError("The Gemini API sent a reply that could not be read.") from error
         seconds = time.perf_counter() - started
 
+        feedback = response.prompt_feedback
+        if feedback is not None and feedback.block_reason:
+            raise JudgeError(
+                f"The API withheld the judge's reply ({feedback.block_reason.name.lower()})."
+            )
         candidate = response.candidates[0] if response.candidates else None
         finish = candidate.finish_reason if candidate is not None else None
         if finish is not types.FinishReason.STOP:

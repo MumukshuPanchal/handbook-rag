@@ -14,7 +14,12 @@ from google.genai import types as genai_types
 from qdrant_client import QdrantClient
 
 from handbook_rag.config import Settings
-from handbook_rag.evals.judge import SUPPORT_INSTRUCTIONS, GeminiSupportJudge, SupportJudge
+from handbook_rag.evals.judge import (
+    SUPPORT_INSTRUCTIONS,
+    GeminiSupportJudge,
+    SupportJudge,
+    request_fingerprint,
+)
 from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
@@ -244,14 +249,16 @@ def make_judge(settings: Settings, *, attempts: int | None = None) -> SupportJud
 def describe_judge(settings: Settings) -> dict[str, object]:
     """The settings that decide a verdict, for recording with the verdicts.
 
-    The instructions are recorded as a short hash, as for an answer. Verdicts made under
-    reworded instructions come from a different judge, and its agreement with the labels
-    has to be measured again.
+    The instructions are recorded as a short hash, as for an answer, and so is the layout
+    of a request. Verdicts made under reworded instructions, or from a request laid out
+    another way, come from a different judge, and its agreement with the labels has to
+    be measured again.
     """
     return {
         "judge_model": settings.judge_model,
         "judge_max_tokens": settings.judge_max_tokens,
         "judge_instructions": hashlib.sha256(SUPPORT_INSTRUCTIONS.encode("utf-8")).hexdigest()[:16],
+        "judge_request": request_fingerprint(),
     }
 
 

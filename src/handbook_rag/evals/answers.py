@@ -221,6 +221,21 @@ class AnswerRun:
     """Why the run ended before every question was asked, if it did."""
 
 
+def replies_to_current_labels(
+    questions: Sequence[GoldenQuestion], records: Mapping[str, AnswerRecord]
+) -> dict[str, AnswerRecord]:
+    """The saved replies that were made for the questions as they are labelled now.
+
+    A reply to a question whose wording, reference answer or evidence has since changed
+    is a reply to another test. It is left out, here and wherever replies are scored.
+    """
+    return {
+        question.id: records[question.id]
+        for question in questions
+        if question.id in records and records[question.id].fingerprint == question.fingerprint
+    }
+
+
 def in_run_order(questions: Sequence[GoldenQuestion]) -> list[GoldenQuestion]:
     """A fixed order that mixes the kinds of question.
 
@@ -263,18 +278,10 @@ def run_answers(
     """
     pages = {document.doc_id: document for document in documents}
     spans = {question.id: locate_evidence(question, pages) for question in questions}
-    saved = saved or {}
-    run = AnswerRun(
-        records={
-            question.id: saved[question.id]
-            for question in questions
-            if question.id in saved and saved[question.id].fingerprint == question.fingerprint
-        }
-    )
+    run = AnswerRun(records=replies_to_current_labels(questions, saved or {}))
     pending = [question for question in in_run_order(questions) if question.id not in run.records]
 
-    def attempt(question: GoldenQuestion) -> None:
-        answer = ask(question.question)
+    def keep(question: GoldenQuestion, answer: Answer) -> None:
         record = record_answer(question, answer, spans[question.id])
         run.records[question.id] = record
         if on_record is not None:
@@ -282,7 +289,8 @@ def run_answers(
 
     outcome = run_carefully(
         pending,
-        attempt,
+        lambda question: ask(question.question),
+        keep,
         name=lambda question: question.id,
         errors=(GenerationError, VectorStoreError),
         wait=wait,

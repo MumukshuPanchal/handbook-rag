@@ -110,7 +110,8 @@ class Settings(BaseSettings):
         default="hybrid",
         description=(
             "How chunks are retrieved: by meaning (dense), by keyword (sparse), or both "
-            "merged (hybrid). Hybrid is the default because it measured best (ADR 0011)."
+            "merged (hybrid). Hybrid is the default; ADR 0011 gives the measurements "
+            "and the reasoning."
         ),
     )
     fusion_candidates: int = Field(

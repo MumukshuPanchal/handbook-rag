@@ -2,7 +2,7 @@
 
 A knowledge assistant that answers questions from a company handbook, built the way a production team would build it: answers grounded in retrieved passages and cited, quality measured by an evaluation suite, and every request traced for latency and cost.
 
-**Status: retrieval is built and measured; answering is next.** The handbook is indexed, hybrid search is the default, and every change is judged on a checked set of test questions. Answering with citations is written and still has to be verified against the model API. This README is updated as each milestone lands.
+**Status: retrieval is built and measured; answering is next.** The handbook is indexed, hybrid search is the default, and every change is judged on a checked set of test questions. Answering with citations is drafted in an [open pull request](https://github.com/MumukshuPanchal/production-rag-pipeline/pull/29). It has not been run against the model API yet, so it is not part of this branch. This README is updated as each milestone lands.
 
 ## Documents
 
@@ -24,7 +24,7 @@ A knowledge assistant that answers questions from a company handbook, built the 
 
 ## Results so far
 
-Retrieval on 132 test questions over 38,881 chunks of the handbook. The table is printed by `make eval-table` from the runs in [`evals/runs/retrieval`](evals/runs/retrieval).
+Retrieval on 132 test questions over 38,881 chunks of the handbook. These are the first four rows that `uv run handbook-rag eval-table --metric hit@5 --metric hit@1 --metric mrr@10` prints from the runs in [`evals/runs/retrieval`](evals/runs/retrieval). The later rows are the experiments linked below.
 
 | Run | What it is | Questions | Hit@5 (95% interval) | Hit@1 | MRR@10 | Median time |
 |---|---|---|---|---|---|---|
@@ -33,7 +33,7 @@ Retrieval on 132 test questions over 38,881 chunks of the handbook. The table is
 | v2 | Dense and BM25 merged with reciprocal rank fusion. | 132 | 0.962 (0.924 to 0.992) | 0.697 | 0.807 | 33 ms |
 | v3 | Hybrid, then the top 30 reranked by a cross-encoder (ms-marco-MiniLM-L6-v2). | 132 | 0.939 (0.894 to 0.977) | 0.773 | 0.852 | 247 ms |
 
-- **Hybrid search is the default.** It clearly beats dense search alone: +0.106 on Hit@5 (95% interval +0.053 to +0.159), with 14 questions gained and none lost. The reasoning is in [ADR 0011](docs/adr/0011-hybrid-retrieval-by-default.md).
+- **Hybrid search is the default.** It clearly beats dense search alone: +0.106 on Hit@5 (95% interval +0.053 to +0.159), with 14 questions gained and none lost. Against keyword search alone the picture is not clear: hybrid is ahead at five results (+0.030, an interval that includes zero) and behind at rank 1. That choice rests partly on judgement, and [ADR 0011](docs/adr/0011-hybrid-retrieval-by-default.md) says why.
 - **Reranking is off by default.** It brings no clear gain at five results, and it makes search about seven times slower.
 - **Two experiments did not help**, and are written up anyway: half-size chunks, and other settings of the rank fusion ([experiment log](docs/experiments/2026-11-22-chunk-size-and-fusion.md)).
 - **Targets.** The [charter](docs/charter.md) asks for Recall@5 of at least 0.85 and MRR@10 of at least 0.70. Hybrid search reaches 0.962 and 0.807. Answer quality is not measured yet.
@@ -64,8 +64,8 @@ make index      # embed the chunks and store them; safe to run again
 make search q="how do I expense a laptop"
 uv run handbook-rag search "what is compa-ratio" --rerank
 make golden-check    # verify every test question against the handbook
-make eval-retrieval  # score the default search on the test questions
-make eval-table      # print the results table of every committed run
+make eval-retrieval  # score the default search, as a scratch run named "current"
+make eval-table      # print a results table with one row per run on disk
 ```
 
 The workflow and conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).

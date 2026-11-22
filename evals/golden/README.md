@@ -2,46 +2,94 @@
 
 The test questions this project is measured with. Each question has a reference answer and the handbook passage that supports it, or is marked as one the handbook cannot answer. The format is described in the [evaluation guide](../../docs/evaluation.md).
 
-> **Status: draft.** Every question was drafted by a model and none has been reviewed by a person yet (`"review": "pending"`). Numbers measured with this set are provisional until the review is done.
+> **Status: checked by independent model sessions, not verified by a person.** Every question was made by one model session and checked by another that had not seen how it was made. The project's author read through the set and asked for this maker-checker review in place of checking each question by hand. Every question is therefore marked `"review": "checked"`, and none is marked `"verified"`.
 
 ## What is in it
 
 | | Count |
 |---|---|
-| Questions the handbook answers | 123 |
-| Questions the handbook cannot answer | 34 |
+| Questions the handbook answers, written from a passage (`model-drafted`) | 122 |
+| Questions the handbook answers, written without seeing the handbook (`model-blind`) | 10 |
+| Questions the handbook cannot answer | 33 |
 | of which near-miss (topic covered, detail missing) | 19 |
-| of which out-of-scope (a handbook would never hold it) | 12 |
+| of which out-of-scope (a handbook would never hold it) | 11 |
 | of which false-premise (assumes something the company does not have) | 3 |
-| Handbook sections covered by answerable questions | 30 of 34 |
-| Written by a person | 0 |
-| Reviewed by a person | 0 |
+| Checked by an independent model session | 165 |
+| Verified by a person | 0 |
 
 The questions are tied to the handbook at commit `e645aac6dc6fbb0b759b92ed32f016aaed5ef4b8`. `make golden-check` verifies every evidence quote against that snapshot.
 
-## How it was built
+## How it was made: makers and checkers
 
-1. **Sampling.** `handbook-rag golden-candidates --count 180 --seed 7` drew 180 passages, at most one per page. Each handbook section's share grows with the square root of its size, so large sections get more questions without crowding out small ones. Passages that are mostly tables or code were not sampled.
-2. **Drafting.** Claude (`claude-fable-5-2`) wrote one question per passage, or skipped it, following the [drafting guidelines](drafting-guidelines.md). It wrote 136 questions and skipped 44 passages: lists of links, templates, diagram fragments, and passages whose content is repeated elsewhere in the handbook.
-3. **Automatic check.** Every evidence quote must appear word for word in its page, and on no other page.
-4. **Independent audit of the answerable questions.** A second pass by the same model, in a fresh session that saw only the question, the answer, the quote and the passage, checked each question against the whole corpus. It looked for answers the passage does not support, questions that only make sense next to their page, and above all for a second passage that answers the same question. It removed 12 of the 136: 11 because a second passage answers the same question, and one whose evidence sits on a leftover backup page. It found no reference answer that the passage does not support, and no quote that misses its answer. 12 of the remaining questions carry a `note` with a softer concern for the reviewer, mostly that general knowledge could answer them.
-5. **Unanswerable questions.** 50 were drafted, each searched for in the handbook by keyword before it was kept. Each was then put to the project's strongest retriever (hybrid search with reranking), and an auditor read the six passages it returned and searched further. No question turned out to be answered by the handbook. 16 were set aside because the handbook partly answers them or corrects their premise, which leaves 34.
-6. **Check of the misses.** Four retrieval variants were scored on the set. For each of the 25 questions that at least one variant missed, a reviewer (the same model, in a fresh session) read the passages returned instead. One question was removed because a passage from another page answers it. The other 24 misses are real.
-7. **Review by a person.** Not done yet. `make golden-review` writes a page that shows each question beside its passage with the evidence marked.
+Nobody checked their own work. A maker produced each item, and a checker that had not seen how it was made looked for the maker's mistakes. Makers and checkers ran as separate sessions, and from round 5 on the checker was a different model from the maker.
+
+| Round | Role | Model | What happened |
+|---|---|---|---|
+| 1 | Sampling | script | 180 passages drawn with a fixed seed, at most one per page, spread across handbook sections |
+| 2 | Maker | claude-fable-5-2 | Wrote 136 questions from those passages and skipped 44. Wrote 50 questions the handbook should not be able to answer |
+| 3 | Checker | claude-fable-5-2 | Searched the whole handbook for a second passage that answers the same question. 12 questions removed. 16 unanswerable questions set aside because the handbook partly answers them |
+| 4 | Checker | claude-fable-5-2 | Read what the searches returned for every missed question. One more second source found, and that question removed |
+| 5 | Checker | claude-opus-5-5 | Reviewed all 157 remaining items as a strict reviewer. 127 accepted, 30 sent back |
+| 6 | Maker | claude-fable-5-2 | Repaired the 27 answerable questions that were sent back |
+| 7 | Checker | claude-opus-5-5 | Checked the repairs. 26 accepted, 1 sent back |
+| 8 | Maker | claude-sonnet-5-5 | Wrote 36 blind questions from a list of section names and page titles, with no handbook text |
+| 9 | Maker | claude-sonnet-5-5 | Searched the handbook for each blind question. Clear evidence found for 19. The other 17 were ambiguous or only partly answered |
+| 10 | Checker | claude-opus-5-5 | Checked those 19 labels. 4 accepted, 15 sent back, mostly because the quote was too short to support the answer |
+| 11 | Maker | claude-opus-5-5 | Repaired 12 labels and 1 question. 3 blind questions dropped because their wording did not match what the handbook says |
+| 12 | Checker | claude-fable-5-2 | Last check of those repairs. 10 accepted, 1 accepted with the checker's exact correction, 2 rejected |
+| 13 | Checker | script | After every round: each quote must be in its page word for word, and on no other page. This rejected one repair |
+| 14 | Checker | claude-opus-5-5 | Read what the searches returned for the 12 missed questions that were new or reworded. 7 real misses. 1 incomplete label, completed with three more passages. 4 blind questions removed as ambiguous |
+
+What the strict review in round 5 sent back:
+
+| Finding | Items |
+|---|---|
+| A yes-or-no question whose wording gives the answer away | 20 |
+| The reference answer leaves out part of what the passage says | 5 |
+| Unanswerable question with the wrong kind, or partly answered | 3 |
+| The quote does not cover the whole answer | 2 |
+| Reads like a quiz, not like an employee's question | 2 |
+| Wording copied from the passage | 1 |
+
+Some items had two findings. In most of the yes-or-no questions the answer was "no", so an assistant that always said "no" would have scored well on them. They are now open questions. The earlier check in round 3 had not looked for this.
+
+Two rules shaped the blind questions:
+
+- **A blind question is never reworded by anyone who has seen the handbook.** When its wording did not fit what the handbook says, it was dropped.
+- **Not finding an answer never makes a question "unanswerable".** A blind question with no clear evidence was left out.
+
+Of the 36 blind questions, 10 remain. 17 had no single clear answer in the handbook, 5 did not fit the handbook's wording or could not be labelled correctly, and 4 turned out to be ambiguous once the searches' results were read: the handbook gives a different valid answer elsewhere, for example a rule that applies to one team.
+
+## How the two kinds of question behave
+
+Measured on the full index, on the runs in [`evals/runs/retrieval`](../runs/retrieval).
+
+| Search | From a passage (122): Hit@1 | Hit@5 | Blind (10): Hit@1 | Hit@5 |
+|---|---|---|---|---|
+| Embedding model | 0.574 | 0.844 | 0.70 | 1.00 |
+| Keyword (BM25) | 0.754 | 0.926 | 0.40 | 1.00 |
+| Hybrid | 0.705 | 0.959 | 0.60 | 1.00 |
+| Hybrid with reranking | 0.762 | 0.934 | 0.90 | 1.00 |
+
+- **The blind questions cannot separate the searches at five results.** Every search finds the evidence in its top five. That is partly selection: only questions whose evidence a search could find were kept, and ambiguous ones were removed.
+- **At rank 1 the order is different.** Keyword search is the best single search on passage-written questions and the worst on blind ones, and reranking helps most on blind ones. With ten questions none of this is statistically clear: for keyword search against the embedding model at rank 1, the difference is -0.30 with a 95% interval from -0.70 to +0.20. It is a reason to grow the blind subset, not a result.
+- **Word overlap does not explain it.** By a simple count, blind questions share 41% of their meaningful words with their evidence and passage-written ones 35%. Blind questions are short and name the thing they ask about. Passage-written ones were paraphrased on purpose.
+
+One warning from building this. Before round 14, keyword search appeared to do much worse than the embedding model on blind questions at five results (0.64 against 0.86). Reading what the searches had returned showed that this came from one incomplete label and four ambiguous questions. A result that rests on three questions has to be checked this way before anyone believes it.
 
 ## Known limits
 
 Read these before trusting a number.
 
-- **Written by a model that could see the passage.** Such questions tend to reuse the words of their source: on average a question shares 36% of its meaningful words with its evidence. This favours keyword search over search by meaning. Questions typed by people who have not seen the page are needed to measure that gap, and there are none yet.
-- **One model family drafted, audited and will answer.** Shared blind spots are possible. Review by a person is the remedy.
-- **One recorded passage per question.** The evaluation credits only that passage. If another passage also answers the question and a retriever returns it, the retriever is scored as wrong. The audit and the check of the misses removed the cases they found. The audit searched by keyword, and the check looked only at what four retrieval variants returned, so neither can have found them all. Retrieval scores are therefore lower bounds, and the misses of a new variant need the same check before they are believed.
-- **Small.** With about 123 questions, a 95% confidence interval on Hit@5 is roughly 5 points either side. Smaller differences between two systems cannot be told apart; `make eval-compare` reports this.
-- **No question needs two pages.** Every answer sits in one passage, so nothing here tests combining information.
-- **Yes-or-no questions lean one way.** About one answerable question in six can be answered yes or no, and the reference answer is usually "no". For answer evaluation this makes guessing pay.
-- **Few false-premise questions.** Most drafted ones were set aside: the handbook names what the company really uses, so the right behaviour is to correct the premise, not to decline. That behaviour deserves its own test (#37).
+- **Checked by models, not verified by a person.** The makers and checkers are different sessions and partly different models, but all are Claude models and can share blind spots.
+- **Mostly written by a model that could see the passage.** 122 of the 132 answerable questions were written from their passage.
+- **The blind subset is small and selected.** Ten questions, kept only when evidence was found and the answer was unambiguous. Absolute scores on it are optimistic.
+- **One recorded passage for most questions.** The evaluation credits only recorded passages. If another passage also answers a question and a search returns it, the search is scored as wrong. The checks removed or completed the cases they found, and cannot have found them all, so retrieval scores are lower bounds. The misses of any new search variant need the same check before they are believed.
+- **Small.** With 132 answerable questions, a 95% interval on Hit@5 is roughly 5 points either side. Smaller differences cannot be told apart; `make eval-compare` reports this.
+- **Almost no question needs two passages.** One does.
 - **A snapshot in time.** Budgets, dates and tool names in the handbook change. The questions are valid for the pinned commit only.
 - **English only**, and prose only: facts that live in tables are under-represented.
+- **Questions with a false assumption that the handbook corrects are not in the set.** The right behaviour there is to correct the assumption, not to decline, and that needs its own test (issue 37).
 
 ## Licence and attribution
 

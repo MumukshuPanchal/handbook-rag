@@ -26,16 +26,30 @@ search results you were given, and do not add a list of sources at the end.
 """
 )
 
-# A marker, with the spaces before it: " [2]" or " [1, 3]".
-_MARKER = re.compile(r"[ \t]*\[(\d{1,3}(?:\s*,\s*\d{1,3})*)\]")
+# A marker is short by definition: a few spaces, then up to ten numbers of up to three
+# digits in square brackets. The limits are what keeps the parser's work per piece of
+# text small, however long the text is or however oddly a model behaves: no pattern
+# below can run on over thousands of characters.
+_SPACES = r"[ \t]{0,8}"
+_NUMBERS = r"\d{1,3}(?:[ \t]{0,2},[ \t]{0,2}\d{1,3}){0,9}"
+_LONGEST_NUMBERS = 3 + 9 * (2 + 1 + 2 + 3)
+# What needs a decision in a piece of model output: a run of backticks, a line break, or
+# a marker with the spaces before it, as in " [2]" or " [1, 3]".
+_TOKEN = re.compile(
+    rf"(?P<ticks>`+)|(?P<newline>\n)|(?P<marker>{_SPACES}\[(?P<numbers>{_NUMBERS})\])"
+)
 # The end of a piece of text that may still become a marker once more text arrives:
 # spaces, then perhaps an opening bracket with numbers and no closing bracket yet.
-_UNFINISHED = re.compile(r"[ \t]*(?:\[[\d,\s]*)?\Z")
+_UNFINISHED = re.compile(rf"{_SPACES}(?:\[[\d, \t]{{0,{_LONGEST_NUMBERS}}})?\Z")
+_LONGEST_UNFINISHED = 8 + 1 + _LONGEST_NUMBERS
 # Punctuation that closes the statement before it: in "...leave [1]. Next", the full
 # stop belongs to the statement that was just cited, not to the next one.
 _CLOSING_PUNCTUATION = ".,;:!?)"
-# The tags this module wraps passages in.
-_OUR_TAGS = re.compile(r"<(/?(?:search_results?|title|content)\b)", re.IGNORECASE)
+# A backtick run this long or longer opens a code block, which runs over several lines.
+# A shorter run opens code inside a line.
+_FENCE = 3
+# The start of one of the tags this module wraps passages in, however it is spaced.
+_OUR_TAGS = re.compile(r"<(?=\s*/?\s*(?:search_results?|title|content)\b)", re.IGNORECASE)
 
 
 def build_numbered_prompt(question: str, chunks: Sequence[Chunk]) -> str:
@@ -64,7 +78,7 @@ def _inert(text: str) -> str:
     passage holding ``</search_result>`` could otherwise end its own block early and make
     the text after it look like something other than a passage.
     """
-    return _OUR_TAGS.sub(r"&lt;\1", text)
+    return _OUR_TAGS.sub("&lt;", text)
 
 
 class MarkerParser:
@@ -75,12 +89,18 @@ class MarkerParser:
     has stopped, ``finish`` returns what was still held back, and ``segments`` holds the
     answer as runs of text with the passages that support each run.
 
-    A piece can end in the middle of a marker, so text that could still become one is
-    held back until the next piece settles it.
+    Three rules decide what a marker is:
 
-    A marker counts as a citation only when it names a passage that was sent. Brackets
-    around any other number are left in the text exactly as the model wrote them, so a
-    citation the model made up stays visible instead of being silently removed.
+    - **Every number in it names a passage that was sent.** Brackets around any other
+      number are left in the text exactly as the model wrote them, so a citation the
+      model made up stays visible instead of being silently removed.
+    - **It is not inside code.** Between backticks, ``argv[1]`` and ``[1, 2, 3]`` are
+      part of the answer.
+    - **It is short**, as described above.
+
+    A piece can end in the middle of a marker, so text that could still become one is
+    held back until the next piece settles it. The result does not depend on where the
+    stream is cut.
     """
 
     def __init__(self, chunks: Sequence[Chunk]) -> None:
@@ -89,11 +109,13 @@ class MarkerParser:
         self._open = ""  # text of the segment being written
         self._closed: list[Segment] = []
         self._just_cited = False
+        self._ticks = 0  # length of the run of backticks the text read so far ends with
+        self._code = 0  # length of the backtick run that opened the code we are in, or 0
 
     def feed(self, piece: str) -> str:
         """Take the next piece of model output. Returns the answer text now known."""
         buffer = self._held + piece
-        tail = _UNFINISHED.search(buffer)
+        tail = _UNFINISHED.search(buffer, max(0, len(buffer) - _LONGEST_UNFINISHED))
         cut = len(buffer) if tail is None else tail.start()
         self._held = buffer[cut:]
         return self._read(buffer[:cut])
@@ -116,28 +138,60 @@ class MarkerParser:
         """Take in text in which every marker is whole. Returns it without its markers."""
         shown: list[str] = []
         position = 0
-        for match in _MARKER.finditer(text):
-            cited = self._passages(match.group(1))
-            if not cited:
-                continue  # names no passage we sent: not a citation, so it stays as text
-            shown.append(self._write(text[position : match.start()]))
-            self._cite(cited)
-            position = match.end()
-        shown.append(self._write(text[position:]))
+        for token in _TOKEN.finditer(text):
+            before = text[position : token.start()]
+            if before:
+                self._end_backtick_run()
+                shown.append(self._write(before))
+            position = token.end()
+            if token.group("ticks") is not None:
+                # Backticks are ordinary text. What they mean depends on how long the
+                # run is, and it may go on in the next piece, so it is only counted here.
+                self._ticks += len(token.group())
+                shown.append(self._write(token.group()))
+                continue
+            self._end_backtick_run()
+            if token.group("newline") is not None:
+                if 0 < self._code < _FENCE:
+                    # Code inside a line ends with the line. Without this, one stray
+                    # backtick would hide every marker in the rest of the answer.
+                    self._code = 0
+                shown.append(self._write(token.group()))
+                continue
+            cited = [] if self._code else self._passages(token.group("numbers"))
+            if cited:
+                self._cite(cited)
+            else:
+                shown.append(self._write(token.group()))  # not a citation: it stays as text
+        rest = text[position:]
+        if rest:
+            self._end_backtick_run()
+            shown.append(self._write(rest))
         return "".join(shown)
 
+    def _end_backtick_run(self) -> None:
+        """Other text followed a run of backticks: the run opens code, closes it, or neither."""
+        run, self._ticks = self._ticks, 0
+        if run == 0:
+            return
+        if self._code == 0:
+            self._code = run
+        elif self._code == run:
+            self._code = 0
+        # A run of another length inside code is part of the code.
+
     def _passages(self, numbers: str) -> list[int]:
-        """The numbers in a marker that name a passage we sent, each one once."""
+        """The passages a marker names, each once. None at all unless every number names one."""
         wanted: list[int] = []
         for number in map(int, re.findall(r"\d+", numbers)):
-            if 1 <= number <= len(self._chunks) and number not in wanted:
+            if not 1 <= number <= len(self._chunks):
+                return []
+            if number not in wanted:
                 wanted.append(number)
         return wanted
 
     def _write(self, text: str) -> str:
         """Add answer text. Returns what was added."""
-        if not text:
-            return ""
         if self._just_cited and not self._open:
             rest = text.lstrip(_CLOSING_PUNCTUATION)
             closing = text[: len(text) - len(rest)]
@@ -145,9 +199,11 @@ class MarkerParser:
                 last = self._closed[-1]
                 self._closed[-1] = Segment(last.text + closing, last.citations)
             self._open = rest
+            # Closing punctuation may itself arrive in two pieces, as in "[1])" then ".".
+            self._just_cited = not rest
         else:
             self._open += text
-        self._just_cited = False
+            self._just_cited = False
         return text
 
     def _cite(self, numbers: Sequence[int]) -> None:
@@ -161,5 +217,6 @@ class MarkerParser:
             last = self._closed[-1]
             known = {citation.chunk.chunk_id for citation in last.citations}
             new = tuple(c for c in citations if c.chunk.chunk_id not in known)
-            self._closed[-1] = Segment(last.text, last.citations + new)
+            self._closed[-1] = Segment(last.text + self._open, last.citations + new)
+            self._open = ""
         self._just_cited = True

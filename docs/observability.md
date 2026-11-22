@@ -117,5 +117,5 @@ Backends built for language-model applications show token counts and cost per re
 
 ## Not traced yet
 
-- **Answer generation**: the model call, its token counts and whether the assistant declined. These arrive with the answering step.
+- **Answer generation**: the model call, its token counts and whether the assistant declined. The answering step exists now, and its span is the next step.
 - **Evaluation runs and indexing.** An evaluation run records per-question latency in its own files.

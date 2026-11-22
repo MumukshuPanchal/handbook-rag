@@ -33,3 +33,7 @@ Knowing whether the model declined matters for two reasons. The evaluation must 
 - A citation identifies a block within a chunk, not a sentence.
 - Detecting a decline relies on the model using the exact sentence. The abstention metrics in milestone M2 measure how often that holds.
 - Search result blocks are specific to this provider. Another provider would need the marker-based fallback described in ADR 0006.
+
+## Update, 2026-11-22
+
+That fallback now exists, for Gemini: [ADR 0013](0013-gemini-free-tier-with-marker-citations.md). The fixed sentence for declining, the rule for recognising it and the rule of no model call without context are shared by both generators.

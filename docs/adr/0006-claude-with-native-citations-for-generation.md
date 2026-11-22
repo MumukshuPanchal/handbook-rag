@@ -28,3 +28,7 @@ Generate answers with Claude through the Anthropic API, using its Citations feat
 - The feature is provider-specific. Another provider would need the marker-based fallback.
 - Citations cannot be combined with schema-constrained output in the same request. Machine-readable fields, such as whether the assistant abstained, need a separate mechanism.
 - Answers cost money per request and need network access. Token usage is recorded for every call so cost is always visible.
+
+## Update, 2026-11-22
+
+The project has no Claude API key yet, so this generator has not been run against the API. [ADR 0013](0013-gemini-free-tier-with-marker-citations.md) makes Gemini on its free tier the default, using the marker-based fallback named above. The Claude generator stays behind the same interface, and a model name starting with `claude-` selects it.

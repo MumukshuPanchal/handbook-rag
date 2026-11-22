@@ -2,13 +2,14 @@
 
 A knowledge assistant that answers questions from a company handbook, built the way a production team would build it: answers grounded in retrieved passages and cited, quality measured by an evaluation suite, and every request traced for latency and cost.
 
-**Status: search is built, measured, served and traced; answering is next.**
+**Status: the assistant answers real questions with citations. Search is built, measured, served and traced; measuring the answers is next.**
 
 - The handbook is indexed, and hybrid search is the default, chosen on a checked set of test questions.
 - It runs as a service: an HTTP API, and `docker compose up` for the whole system.
 - Every request is traced, stage by stage.
 - CI fails when retrieval breaks.
-- Answering with citations is drafted in an [open pull request](https://github.com/MumukshuPanchal/production-rag-pipeline/pull/29). It has not been run against the model API yet, so it is not merged.
+- `ask` retrieves passages and has a language model write an answer that cites them, or says the handbook does not cover the question. It runs on Gemini with a free API key, and ran for real on 22 November 2026.
+- Not done yet: the answers are not measured, `ask` is a command and not an HTTP endpoint, and the model call is not traced.
 
 This README is updated as each milestone lands.
 
@@ -77,7 +78,7 @@ curl -s -X POST localhost:8000/search \
 - **Speed.** The models are loaded and run once when the service starts. Measured on the full index, searches one after another took 77 to 88 ms, and 124 to 169 ms after 20 to 60 idle seconds.
 - **The embedding model runs on the CPU here**, also on a machine with a GPU. A service embeds one question at a time, which a CPU does as fast and more steadily: on an Apple GPU, the first search after a few idle seconds took over a second. `HANDBOOK_RAG_EMBEDDING_DEVICE` changes it.
 - **Not built for the open internet.** There is no authentication, no rate limit and no limit on requests in flight. The service listens on this machine only unless `HANDBOOK_RAG_API_HOST` says otherwise.
-- `POST /ask`, which answers with citations and streams the answer, arrives with the answering step.
+- `POST /ask`, which answers with citations and streams the answer, is the next step.
 
 ## Tracing
 
@@ -138,13 +139,37 @@ make search q="how do I expense a laptop"
 make traces     # start the trace backend; see docs/observability.md
 make serve      # run the HTTP API at http://127.0.0.1:8000
 uv run handbook-rag search "what is compa-ratio" --rerank
-make ask q="how do I expense a laptop"   # answer with citations; needs a Claude API key
+make ask q="how do I expense a laptop"   # answer with citations; needs a free Gemini API key
+make test-live       # send two real requests to the answer model
 make golden-check    # verify every test question against the handbook
 make eval-retrieval  # score the default search, as a scratch run named "current"
 make eval-table      # print a results table with one row per run on disk
 make eval-gate       # the retrieval check CI runs, on a slice of the handbook
 ```
 
-Answers are written by Claude. Copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`. The `.env` file is ignored by git, and the key is read only by this application.
+### Answers
+
+```console
+$ make ask q="How many days of paid time off can I take, and do I need approval?"
+GitLab does not set a specific annual limit on the amount of Flexible PTO you can take. However, time off exceeding 25 consecutive calendar days requires special permission from your Manager, People Business Partner, and the Absence Management Team.
+
+You do need to coordinate your planned time off with your manager in advance and make a coverage plan.
+
+Sources
+  [1] GitLab Canada Corp > Time Away & Leave > Paid Time Off & Vacation
+      https://handbook.gitlab.com/handbook/total-rewards/benefits/general-and-entity-benefits/canada-corp-benefits/
+  [2] Time Off Types > Flexible Paid Time Off (PTO) > Overview
+      https://handbook.gitlab.com/handbook/people-group/time-off-and-absence/time-off-types/
+
+gemini-3.5-flash-lite | 1,728 tokens in | 79 out | 2.0 s
+```
+
+That is real output from 22 November 2026. A question the handbook does not cover gets one fixed sentence, "I could not find this in the handbook.", and no sources.
+
+- **The model.** Answers are written by Gemini (`gemini-3.5-flash-lite`). Copy `.env.example` to `.env` and set `GEMINI_API_KEY`. [Google AI Studio](https://aistudio.google.com/) gives a key free of charge, with no card. The `.env` file is ignored by git, and the key is read only by this application.
+- **A free key is for public text only.** On the free tier Google may use what is sent to improve its products. The handbook is public, so that is fine here. It would not be for private documents.
+- **Citations.** The passages are numbered, the model names the numbers, and code checks that each number belongs to a passage that was really sent. That check cannot tell whether the passage supports the statement, which is what the answer evaluation is for.
+- **Claude instead.** Set `HANDBOOK_RAG_ANSWER_MODEL=claude-haiku-5-5` and `ANTHROPIC_API_KEY`. Claude's API returns the quoted words with every citation, a stronger guarantee. This path is unit-tested and has not been run against the Claude API yet.
+- The reasoning for all of this is in [ADR 0013](docs/adr/0013-gemini-free-tier-with-marker-citations.md).
 
 The workflow and conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).

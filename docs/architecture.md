@@ -44,7 +44,7 @@ flowchart LR
     R1 --> F["Fuse<br/>reciprocal rank fusion"]
     R2 --> F
     F --> RR["Rerank<br/>cross-encoder"]
-    RR --> G["Generate<br/>Claude with citations"]
+    RR --> G["Generate<br/>Gemini or Claude, with citations"]
     G --> API
     R1 <--> Q[("Qdrant")]
     R2 <--> Q
@@ -55,8 +55,10 @@ flowchart LR
 2. **Retrieve candidates** twice: by meaning (dense) and by exact terms (sparse).
 3. **Fuse** the two ranked lists into one with reciprocal rank fusion.
 4. **Rerank** the fused candidates with a cross-encoder, which reads the question and each chunk together and scores how well they match. Keep the top few.
-5. **Generate** an answer. The kept chunks are sent to Claude as search results with citations enabled. The instructions tell the model to answer only from them, and to reply with one fixed sentence when they do not contain the answer. Details: [ADR 0010](adr/0010-search-result-blocks-and-declining.md).
-6. **Return** the answer, its citations (page, section, quoted text, URL), whether the assistant answered or abstained, and a trace ID.
+5. **Generate** an answer. The kept chunks are sent to a language model as search results. The instructions tell the model to answer only from them, to say which search result supports each statement, and to reply with one fixed sentence when they do not contain the answer. The model's name selects the provider:
+   - **Gemini, the default.** The passages are numbered, the model writes the numbers as markers such as `[2]`, and our code turns the markers into citations. Details: [ADR 0013](adr/0013-gemini-free-tier-with-marker-citations.md).
+   - **Claude.** The API's built-in citations return the quoted words with each statement. Details: [ADR 0010](adr/0010-search-result-blocks-and-declining.md). This generator has not been run against the Claude API yet.
+6. **Return** the answer, its citations (page, section, URL, and the quoted text when the provider reports it), whether the assistant answered or abstained, and a trace ID.
 
 The first working version (the baseline) used dense search only and skipped steps 3 and 4. Hybrid search is now the default, and reranking is available but switched off. Both decisions, with the measurements and the judgement behind them, are in [ADR 0011](adr/0011-hybrid-retrieval-by-default.md).
 
@@ -70,8 +72,8 @@ The first working version (the baseline) used dense search only and skipped step
 | Vector store | Store and search vectors with metadata | Qdrant | [ADR 0004](adr/0004-qdrant-as-vector-store.md) |
 | Fusion | Merge dense and sparse rankings | Our own code (reciprocal rank fusion) | [ADR 0003](adr/0003-own-pipeline-code-instead-of-a-framework.md) |
 | Reranker | Re-score candidates against the question | sentence-transformers cross-encoder | [ADR 0005](adr/0005-local-embedding-and-reranking-models.md) |
-| Generator | Write a grounded, cited answer | Claude through the Anthropic API | [ADR 0006](adr/0006-claude-with-native-citations-for-generation.md), [ADR 0010](adr/0010-search-result-blocks-and-declining.md) |
-| API | HTTP interface: `POST /search` and `GET /health` today, `POST /ask` with streaming when the answering step lands | FastAPI | This document |
+| Generator | Write a grounded, cited answer | Gemini through Google's API by default, or Claude through the Anthropic API | [ADR 0013](adr/0013-gemini-free-tier-with-marker-citations.md), [ADR 0006](adr/0006-claude-with-native-citations-for-generation.md), [ADR 0010](adr/0010-search-result-blocks-and-declining.md) |
+| API | HTTP interface: `POST /search` and `GET /health` today, `POST /ask` with streaming next | FastAPI | This document |
 | Evaluation | Measure retrieval and answer quality | Our own harness | [ADR 0007](adr/0007-evaluation-strategy.md) |
 | Tracing | Record every stage of every request | OpenTelemetry | [ADR 0008](adr/0008-opentelemetry-tracing.md) |
 
@@ -125,9 +127,9 @@ Details and reasoning: [ADR 0007](adr/0007-evaluation-strategy.md).
 
 Each request produces one trace with a span per stage: dense search, sparse search, fusion, rerank, generate. Spans record what is needed to explain an answer: which chunks were retrieved with which scores, which model was called, how many tokens were used, and whether the assistant abstained.
 
-The Anthropic SDK adds its own spans for the model call, including token usage. Spans are exported over OTLP to a local trace backend, and to any other OTLP-compatible backend by changing configuration.
+Spans are exported over OTLP to a local trace backend, and to any other OTLP-compatible backend by changing configuration.
 
-The retrieval stages are traced today, and [the observability guide](observability.md) shows how to read a trace. The model call is traced when the answering step lands.
+The retrieval stages are traced today, and [the observability guide](observability.md) shows how to read a trace. The model call is not traced yet: its span, with the token counts, is the next step.
 
 Details and reasoning: [ADR 0008](adr/0008-opentelemetry-tracing.md).
 
@@ -135,7 +137,7 @@ Details and reasoning: [ADR 0008](adr/0008-opentelemetry-tracing.md).
 
 - All settings come from environment variables with defaults in one settings module: model names, retrieval depth, chunk size, endpoints.
 - `.env.example` documents every variable. A real `.env` is ignored by git.
-- The Claude API credential is read from the environment by the SDK. Nothing in the repository contains a secret.
+- A model API key is read from the environment or the `.env` file and handed to its client directly. It is never exported into the process environment, and nothing in the repository contains a secret.
 
 ## Repository layout (planned)
 
@@ -145,7 +147,7 @@ src/handbook_rag/
     ingest/             loading, cleaning, chunking
     index/              embedding and vector store
     retrieve/           dense, sparse, fusion, rerank
-    generate/           prompt assembly, Claude client, citation mapping
+    generate/           prompt assembly, one generator per provider, citation mapping
     pipeline.py         the single entry point: question in, answer out
     api/                FastAPI application
     observability/      tracing setup

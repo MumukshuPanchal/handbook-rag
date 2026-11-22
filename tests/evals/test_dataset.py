@@ -183,3 +183,23 @@ def test_alternative_evidence_needs_at_least_two_pieces(tmp_path: Path) -> None:
 
     with pytest.raises(DatasetError, match="at least two"):
         load_golden_set(path)
+
+
+def test_fingerprint_of_a_default_question_does_not_depend_on_the_evidence_mode_field() -> None:
+    import hashlib
+
+    question = GoldenQuestion.model_validate(ANSWERABLE)
+    as_recorded_by_earlier_runs = hashlib.sha256(
+        json.dumps(
+            [
+                question.question,
+                question.type,
+                question.reference_answer,
+                [[evidence.doc_id, evidence.quote] for evidence in question.evidence],
+            ],
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+
+    assert question.evidence_mode == "all"
+    assert question.fingerprint == as_recorded_by_earlier_runs

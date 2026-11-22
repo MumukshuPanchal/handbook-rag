@@ -107,7 +107,7 @@ How to read a row:
 - **unclear** means the two variants cannot be told apart with this many questions. That is a finding too: it says not to pay extra latency or complexity for the candidate on this evidence.
 - **better** and **worse** count the questions where the candidate scored higher or lower. A gain of 15 against a loss of 0 is more convincing than 40 against 25, even when the means match. The questions that got worse are the ones to read.
 
-The comparison refuses to run if the two variants did not score exactly the same questions with the same labels. Every row in `results.jsonl` carries a fingerprint of its question, reference answer and evidence, so a run made before the golden set changed cannot be compared by accident with one made after.
+The comparison refuses to run if the two variants did not score exactly the same questions with the same labels. Every row in `results.jsonl` carries a fingerprint of its question, reference answer and evidence (and of the evidence mode, when that is not the default), so a run made before the golden set changed cannot be compared by accident with one made after.
 
 To report results, `make eval-table` prints one row per variant as a Markdown table, read from the files each run wrote. Numbers in a write-up are generated, never copied by hand.
 

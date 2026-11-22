@@ -75,15 +75,19 @@ class GoldenQuestion(BaseModel):
 
         Two evaluation runs can be compared question by question only if both scored the
         same label. Rewording the question, changing the reference answer or moving the
-        evidence changes the fingerprint; setting the review status or a note does not.
+        evidence changes the fingerprint, and so does changing how several pieces of
+        evidence relate; setting the review status or a note does not.
         """
-        label = [
+        label: list[object] = [
             self.question,
             self.type,
             self.reference_answer,
             [[evidence.doc_id, evidence.quote] for evidence in self.evidence],
-            self.evidence_mode,
         ]
+        if self.evidence_mode != "all":
+            # Added only when it differs from the default, so a question written before
+            # the mode existed keeps the fingerprint that its earlier runs recorded.
+            label.append(self.evidence_mode)
         encoded = json.dumps(label, ensure_ascii=False).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()[:16]
 

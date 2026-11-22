@@ -76,5 +76,8 @@ def is_answered(segments: Sequence[Segment], *, refused: bool) -> bool:
 
 
 def _words(text: str) -> str:
-    """The words of a text in lower case, single spaces between them, nothing else."""
-    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+    """The words of a text in lower case, single spaces between them, nothing else.
+
+    A word is letters and digits of any script, so an answer in Japanese has words too.
+    """
+    return " ".join(re.findall(r"[^\W_]+", text.lower()))

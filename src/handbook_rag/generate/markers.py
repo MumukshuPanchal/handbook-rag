@@ -40,8 +40,9 @@ _LONGEST_UNFINISHED = 8 + 1 + _LONGEST_NUMBERS
 _LONGEST_RUN = 16
 # A run of this many backticks or more opens a code block when it starts a line.
 _FENCE = 3
-# What may follow the backticks that open a code block on their line: a word like "python".
-_LONGEST_INFO = 40
+# What may follow the backticks that open a code block on their line: a word like
+# "python", or a longer label. Together with the backticks it stays under the size below.
+_LONGEST_INFO = 180
 # Code inside a line, from its first backtick to its last.
 _LONGEST_CODE = 200
 # How a line may begin before the backticks of a code block: indentation, perhaps a list marker.
@@ -110,10 +111,16 @@ class MarkerParser:
       number are left in the text exactly as the model wrote them, so a citation the
       model made up stays visible instead of being silently removed.
     - **It is not inside code.** Between backticks, ``argv[1]`` and ``[1, 2, 3]`` are
-      part of the answer. Code is what Markdown says it is: text between two equal runs
-      of backticks on one line, or the lines between two lines that start with three or
-      more. A backtick with no partner is an ordinary character.
+      part of the answer. Code is recognised in the two forms Markdown writes with
+      backticks: text between two equal runs of backticks on one line, and the lines
+      between two lines that start with three or more. A backtick with no partner is an
+      ordinary character.
     - **It is short**, as described above.
+
+    This follows Markdown closely, not completely. Code marked in another way (an
+    indented block, a block fenced with ``~~~``, a block inside a quotation) is read as
+    ordinary text, and a line that starts with enough backticks closes a block even when
+    more text follows on it.
 
     The parser cannot know what a piece of text is until it has seen enough of it: a
     piece can end in the middle of a marker, or after a backtick whose partner has not
@@ -189,9 +196,9 @@ class MarkerParser:
             return token.end()
         cited = self._passages(token.group("numbers"))
         if cited:
+            # A citation is taken out of the text, so it leaves no trace on the line: what
+            # starts a line, or continues a run of backticks, is judged on what is shown.
             self._cite(cited)
-            self._line = None
-            self._run_settled = False
         else:
             self._show(token.group(), shown)  # not a citation: it stays as text
         return token.end()

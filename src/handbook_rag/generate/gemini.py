@@ -78,19 +78,21 @@ class GeminiGenerator:
         usage: types.GenerateContentResponseUsageMetadata | None = None
         served_by: str | None = None
         blocked = False
+        # Built before the request, so that a mistake in our own settings is never
+        # reported as a reply that could not be read.
+        prompt = build_numbered_prompt(question, chunks)
+        config = types.GenerateContentConfig(
+            system_instruction=MARKER_SYSTEM_PROMPT,
+            max_output_tokens=self._max_tokens,
+            # No follow-up requests. Left on, the SDK sends the request again by itself
+            # when a reply stops at the API's size limit or the stream drops, which would
+            # spend a small daily allowance unseen. The only repeats left are the attempts
+            # after a failed one (see wiring.py).
+            automatic_continuation=False,
+        )
         try:
             stream = self._client.models.generate_content_stream(
-                model=self._model,
-                contents=build_numbered_prompt(question, chunks),
-                config=types.GenerateContentConfig(
-                    system_instruction=MARKER_SYSTEM_PROMPT,
-                    max_output_tokens=self._max_tokens,
-                    # No follow-up requests. Left on, the SDK sends the request again by
-                    # itself when a reply stops at the API's size limit or the stream
-                    # drops, which would spend a small daily allowance unseen. The only
-                    # repeats left are the attempts after a busy server (see wiring.py).
-                    automatic_continuation=False,
-                ),
+                model=self._model, contents=prompt, config=config
             )
             for piece in stream:
                 text = _answer_text(piece)

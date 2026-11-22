@@ -35,6 +35,7 @@ def test_the_fixed_sentence_without_a_citation_is_a_decline(reply: str) -> None:
         NOT_FOUND_MESSAGE,
         NOT_FOUND_MESSAGE.rstrip(".").lower(),
         f"**{NOT_FOUND_MESSAGE}**",  # Markdown emphasis
+        f"_{NOT_FOUND_MESSAGE}_",
         f'"{NOT_FOUND_MESSAGE}"',
         NOT_FOUND_MESSAGE.rstrip(".") + "...",
         NOT_FOUND_MESSAGE.replace(" ", "  "),
@@ -43,6 +44,12 @@ def test_the_fixed_sentence_without_a_citation_is_a_decline(reply: str) -> None:
 def test_the_fixed_sentence_alone_is_a_decline_even_with_a_citation(reply: str) -> None:
     # A model told to cite every statement may put a marker on this sentence too.
     assert not is_answered([Segment(reply, CITED)], refused=False)
+
+
+@pytest.mark.parametrize("reply", ["十六週間の有給休暇があります。", "Шестнадцать недель.", "16."])
+def test_an_answer_in_any_script_is_an_answer(reply: str) -> None:
+    assert is_answered([Segment(reply, CITED)], refused=False)
+    assert is_answered([Segment(reply)], refused=False)
 
 
 def test_an_answer_that_names_a_gap_and_cites_what_it_found_is_an_answer() -> None:

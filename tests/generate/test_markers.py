@@ -165,6 +165,12 @@ def test_brackets_that_are_not_a_marker_stay_in_the_text_exactly_as_written(text
         ("Steps:\n  ```\n  items[1]\n  ```\nDone [3].", [TRAVEL]),
         ("1. ```bash\n   echo ${ARGV[2]}\n   ```\n2. Done [1].", [LEAVE]),
         ("A block that is never closed:\n```\ncode [1]", []),
+        # Other list markers carry a block too, and a list item inside a block does not end it.
+        ("* ```\n  items[1]\n  ```\nAfter the block [2].", [EXPENSES]),
+        ("1) ```\n   items[1]\n   ```\nAfter the block [2].", [EXPENSES]),
+        ("```\n- ```\nitems[1]\n```\nAfter the block [2].", [EXPENSES]),
+        # Code inside a line ends at a run of exactly the same length, not at a longer one.
+        ("`a``b[1]` is one piece of code [2].", [EXPENSES]),
     ],
 )
 def test_brackets_inside_code_are_part_of_the_answer(text: str, expected: list[Chunk]) -> None:
@@ -189,7 +195,11 @@ def test_brackets_inside_code_are_part_of_the_answer(text: str, expected: list[C
         ("- ```git status``` shows changes [1]\n- then commit [2]", [LEAVE, EXPENSES]),
         # More backticks in a row than can mark code, and a line too long to be a block's first.
         ("`" * 20 + " is only a long run [1].", [LEAVE]),
-        ("```" + "x" * 50 + " [1]\nand the next line [2].", [LEAVE, EXPENSES]),
+        ("```" + "x" * 190 + " [1]\nand the next line [2].", [LEAVE, EXPENSES]),
+        # A list marker needs a space after it before it can carry a block.
+        ("-```\nNo block opened here [1].", [LEAVE]),
+        # Text between a long run of backticks and later code keeps the two apart.
+        ("`" * 20 + " then `x[1]` is code, and this counts [2].", [EXPENSES]),
         # Code inside a line has a longest size. Past it, the backtick was not code.
         ("`" + "x" * 250 + " is not code [1]. Nor this [2].", [LEAVE, EXPENSES]),
         # Two backticks do not open a block, and neither do three after deep indentation.
@@ -217,6 +227,43 @@ def test_code_inside_a_line_is_at_most_two_hundred_characters_long() -> None:
     assert all_cited(parse(span(196))[1]) == [EXPENSES]
     # One more, and the first backticks were not code, so the marker after them counts.
     assert all_cited(parse(span(197))[1]) == [LEAVE, EXPENSES]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Sixteen backticks in a row can still mark code. Seventeen are ordinary text.
+        ("`" * 16 + "a[1]" + "`" * 16 + " and [2].", [EXPENSES]),
+        ("`" * 17 + "a[1]" + "`" * 17 + " and [2].", [LEAVE, EXPENSES]),
+        # The first line of a block may carry 180 characters after its backticks.
+        ("```" + "p" * 180 + "\nitems[1]\n```\nAfter [2].", [EXPENSES]),
+        ("```" + "p" * 181 + "\nNot in a block [1].", [LEAVE]),
+        # A block may open after 24 characters of indentation, and no more.
+        (" " * 24 + "```\nitems[1]\n" + " " * 24 + "```\nAfter [2].", [EXPENSES]),
+        (" " * 25 + "```\nNot in a block [1].", [LEAVE]),
+    ],
+)
+def test_the_sizes_the_parser_allows_are_exact(text: str, expected: list[Chunk]) -> None:
+    _, segments = parse(text)
+
+    assert all_cited(segments) == expected
+    assert parse(*text)[1] == segments
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # With the marker gone, the line starts with the backticks, so a block opens.
+        ("[1]```python\nitems[2]\n```\nAfter [3].", [LEAVE, TRAVEL]),
+        # With the marker gone, the backticks after it continue the long run before it.
+        ("`" * 20 + "[1]```x[2]``` and [3].", CHUNKS),
+    ],
+)
+def test_a_citation_leaves_no_trace_on_what_is_shown(text: str, expected: Sequence[Chunk]) -> None:
+    shown, segments = parse(text)
+
+    assert all_cited(segments) == list(expected)
+    assert parse(*text) == (shown, segments)
 
 
 def test_a_marker_right_after_code_is_a_citation() -> None:
@@ -260,6 +307,8 @@ def test_a_marker_before_any_text_is_not_lost() -> None:
         # Backticks left over from a run that was already dealt with must not pair up.
         "`" * 20 + "x[1]``` and then [2].",
         "```\ncode\n`````x[1]`` and then [2].",
+        # A list item inside a block, and a citation at the start of a line.
+        "```\n- ```\nitems[1]\n```\nAfter the block [2].\n[1]```python\nitems[2]\n```\nEnd [3].",
     ],
 )
 def test_the_result_does_not_depend_on_where_the_stream_is_cut(text: str) -> None:
@@ -283,6 +332,7 @@ def test_the_longest_marker_is_recognised_wherever_the_stream_is_cut() -> None:
 def test_random_text_gives_the_same_result_however_it_is_cut() -> None:
     pieces = ["word", " ", "  ", "\t", "\n", "`", "``", "```", "````", "[1]", " [2]", "[1, 3]"]
     pieces += ["[9]", "[", "]", ".", ",", ")", "x[1]", "- ", "1. ", "python", "[1", "2]"]
+    pieces += ["x" * 60, "`" * 17, "* ", "> "]
     randomness = random.Random(13)
 
     for _ in range(300):
@@ -293,6 +343,11 @@ def test_random_text_gives_the_same_result_however_it_is_cut() -> None:
         cuts = sorted(randomness.sample(range(len(text) + 1), k=min(3, len(text))))
         parts = [text[start:end] for start, end in zip([0, *cuts], [*cuts, len(text)], strict=True)]
         assert parse(*parts) == whole, (text, cuts)
+        # However the text arrives, at most 200 characters of it are ever held back.
+        parser = MarkerParser(CHUNKS)
+        for character in text:
+            parser.feed(character)
+            assert len(parser._pending) <= 200, repr(text)
 
 
 @pytest.mark.parametrize(
@@ -340,6 +395,13 @@ def test_text_after_a_backtick_waits_for_its_partner_only_so_long() -> None:
     assert parser.feed("a `" + "x" * 100) == "a "
     # Code inside a line is at most 200 characters long. Past that it was not code.
     assert parser.feed("y" * 150) == "`" + "x" * 100 + "y" * 150
+
+    # The longest wait: code of exactly 200 characters, until it is clear that its last
+    # backtick is the last one.
+    parser = MarkerParser(CHUNKS)
+    assert parser.feed("`" + "x" * 198) == ""
+    assert parser.feed("`") == ""
+    assert parser.feed("!") == "`" + "x" * 198 + "`!"
 
 
 def test_long_runs_of_one_character_do_not_slow_the_parser_down() -> None:

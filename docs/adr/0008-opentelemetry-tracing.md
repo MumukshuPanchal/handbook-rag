@@ -28,3 +28,7 @@ The pipeline is instrumented with OpenTelemetry, the vendor-neutral standard for
 - The same standard is used for ordinary services, so the skill carries over beyond LLM apps.
 - The SDK's tracing support is in beta, so its span names and attributes may change. The SDK version is pinned.
 - LLM-specific views such as cost per request depend on the chosen backend understanding the GenAI conventions.
+
+## Update, 2026-11-22
+
+The retrieval stages are traced, and the local backend is Jaeger: a small container that accepts OTLP directly. The comparison of backends is still open, on purpose. Backends built for language-model applications differ from Jaeger on spans of model calls, and there are none until the answering step is traced. See [the observability guide](../observability.md).

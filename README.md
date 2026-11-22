@@ -13,6 +13,7 @@ A knowledge assistant that answers questions from a company handbook, built the 
 | [Decision records](docs/adr/) | Why each major technical choice was made |
 | [Roadmap](docs/roadmap.md) | Milestones and how work flows |
 | [Evaluation](docs/evaluation.md) | The golden set, the metrics and how to read a run |
+| [Observability](docs/observability.md) | How a request is traced, and how to read a trace to debug it |
 | [Experiments](docs/experiments/) | What was tried, with numbers, including what did not work |
 
 ## Planned scope
@@ -63,6 +64,7 @@ make chunks     # clean and chunk it, and print a summary
 make qdrant     # start the Qdrant vector store in Docker
 make index      # embed the chunks and store them; safe to run again
 make search q="how do I expense a laptop"
+make traces     # start the trace backend; see docs/observability.md
 uv run handbook-rag search "what is compa-ratio" --rerank
 make golden-check    # verify every test question against the handbook
 make eval-retrieval  # score the default search, as a scratch run named "current"

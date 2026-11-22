@@ -127,6 +127,8 @@ Each request produces one trace with a span per stage: dense search, sparse sear
 
 The Anthropic SDK adds its own spans for the model call, including token usage. Spans are exported over OTLP to a local trace backend, and to any other OTLP-compatible backend by changing configuration.
 
+The retrieval stages are traced today, and [the observability guide](observability.md) shows how to read a trace. The model call is traced when the answering step lands.
+
 Details and reasoning: [ADR 0008](adr/0008-opentelemetry-tracing.md).
 
 ## Configuration and secrets

@@ -155,8 +155,9 @@ class Settings(BaseSettings):
     trace_content: bool = Field(
         default=False,
         description=(
-            "Whether traces include the text of questions. Off by default: a trace then "
-            "holds ids, scores, sizes and timings only. Switch on for local debugging."
+            "Whether traces include the text of questions and the message and stack "
+            "trace of errors. Off by default: a trace then holds ids, scores, sizes and "
+            "timings, and an error by its kind only. Switch on for local debugging."
         ),
     )
 

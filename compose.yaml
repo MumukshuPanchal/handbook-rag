@@ -17,7 +17,9 @@ services:
     restart: unless-stopped
 
   # Receives traces over OTLP and shows them in a web page at http://localhost:16686.
-  # It keeps them in memory, so they are gone when the container stops.
+  # It keeps them in memory, so they are gone when the container stops. The image has no
+  # shell to run a health check with, so `make traces` returns when the container is
+  # running, a moment before it accepts spans.
   jaeger:
     image: jaegertracing/jaeger:2.23.0
     # No authentication, so it listens on this machine only.

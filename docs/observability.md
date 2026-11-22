@@ -16,6 +16,8 @@ HANDBOOK_RAG_TRACING=true uv run handbook-rag search "how do I expense a laptop"
 
 The command prints the id of its trace on the last line. Open <http://localhost:16686>, choose the service `handbook-rag`, and open the trace, or paste the id into the lookup box.
 
+The command starts a new process each time, so its trace shows a cold start: the first run of the embedding model alone took about 400 ms when measured. The traces below are warm. Each is the last of six searches made in one process, which is how a running service behaves.
+
 ![A reranked search as a trace in Jaeger: ten spans, with the reranker taking 208 of 336 milliseconds](images/trace-reranked-search.png)
 
 This is one search with reranking switched on. The same trace as text:
@@ -47,47 +49,52 @@ search                           336 ms
 | `fuse` | Reciprocal rank fusion | `fuse.in_both`: how many chunks both searches returned |
 | `rerank` | The cross-encoder | `model` and `candidates` |
 
-Every retrieval span carries `results.count`, `results.chunk_ids`, `results.doc_ids` and `results.scores`. Our own attributes start with `handbook_rag.`. The database spans also use the standard `db.*` names, which is why Jaeger shows them with a database icon.
+Every `search` and `retrieve.*` span carries `results.count`, `results.chunk_ids`, `results.doc_ids` and `results.scores`. A `vector_store.query` span carries the count only, because the span around it has the rest. Our own attributes start with `handbook_rag.`. The database spans also use the standard `db.*` names, which is why Jaeger shows them with a database icon.
 
 ## What is not recorded
 
-A trace holds ids, scores, sizes and timings. It does not hold text.
+A trace holds ids, scores, sizes and timings, and the names of things: the collection, the models, the handbook section a search was limited to. It does not hold what was asked or what was found.
 
-- **The question** is recorded as its length only. Questions can contain personal or confidential details, and traces are usually kept longer and read by more people than the application's own data. `HANDBOOK_RAG_TRACE_CONTENT=true` adds the question's text, for debugging on your own machine.
+- **The question** is recorded as its length only. Questions can contain personal or confidential details, and traces are usually kept longer and read by more people than the application's own data.
 - **Chunk text** is never copied into a trace. A chunk id leads back to the text in the index.
+- **An error** is recorded as its kind only, for example `handbook_rag.index.store.VectorStoreError`. An error message can quote the input that caused it, and a stack trace holds file paths from the machine it ran on.
+
+`HANDBOOK_RAG_TRACE_CONTENT=true` adds the question's text and the full message and stack trace of an error, for debugging on your own machine.
 
 ## Using a trace to debug
 
-**"It was slow."** Find the longest bar. In the trace above the reranker takes 208 of 336 ms. Without reranking the same search takes about 36 ms, of which the embedding model takes 17 and the two Qdrant calls 11 and 8.
+**"It was slow."** Find the longest bar. In the trace above the reranker takes 208 of 336 ms.
+
+One trace is one measurement, and on a busy laptop they vary: the search part of that trace took 127 ms, and the same question without reranking took 36 ms a moment earlier. For typical figures, 40 warm searches without reranking had a median of 43 ms, of which the embedding model took 18 and the two Qdrant calls 13 and 11.
 
 **"The right passage was not returned."** Look for its page among `results.doc_ids`, stage by stage.
 
 - It is in `retrieve.dense` or `retrieve.sparse` but not in the final list: the merge or the reranker pushed it out. Compare its rank in each list.
-- It is in neither: no search found it within its 30 candidates. That is a question of wording or of how the page was chunked, and no setting of the merge will fix it.
+- It is in neither: no search found it within its 30 candidates. That is a question of wording or of how the page was chunked. Asking each search for more candidates (`HANDBOOK_RAG_FUSION_CANDIDATES`) is the only setting that could bring it in, and the merge constant cannot.
 - `query.terms` is 0: the question contained only stop words, so keyword search had nothing to match on.
 - `fuse.in_both` is low: the two searches disagree, and each result rests on one of them. In the trace above they share 6 of their 30 candidates.
 
-**"It failed."** The failing span is marked as an error, with the exception attached, and so is every span around it. A search against a collection that was never built fails in `vector_store.query` with "Collection ... does not exist yet".
+**"It failed."** The failing span is marked as an error with the kind of exception, and so is every span around it. A search against a collection that was never built fails in `vector_store.query` with a `VectorStoreError`; the command line prints the message, "Collection ... does not exist yet".
 
 ## What the first traces showed
 
 Reading a handful of traces turned up three things that the summary numbers had not:
 
-1. **The two searches run one after the other.** Neither needs the other's result. Run side by side, a hybrid search should take about as long as the slower one: an estimated 28 ms instead of 36.
-2. **Every call to Qdrant is two round trips.** The store asks whether the collection exists before it queries it. That check takes about 3 ms, and a hybrid search pays it twice.
-3. **Reranking is 62% of a reranked request.** That is the cost [ADR 0011](adr/0011-hybrid-retrieval-by-default.md) weighed against its gain.
+1. **The two searches run one after the other.** Neither needs the other's result. Run side by side, a hybrid search should take about as long as the slower one: by the medians above, an estimated 32 ms instead of 43.
+2. **Every call to Qdrant is two round trips.** The store asks whether the collection exists before it queries it. That check took 3 to 5 ms when timed on its own, and a hybrid search pays it twice.
+3. **Reranking is most of a reranked request.** It is 62% of the trace above, in which the search part was unusually slow. By the medians recorded in [ADR 0011](adr/0011-hybrid-retrieval-by-default.md), 247 ms with reranking against 33 without, it is nearer 87%. That is the cost the decision record weighed against its gain.
 
 The first two are improvements to make. Both are small, and neither would have been found by looking at one total.
 
 ## When no trace backend is running
 
-With tracing switched on and nothing listening, a search still works and still exits with success. The trace is lost: the exporter retries for a few seconds, then gives up and says that the spans could not be exported. In one measurement the command took about five seconds longer.
+With tracing switched on and nothing listening, a search still works and still exits with success. The trace is lost: the exporter retries for up to three seconds, which is its time limit, then says that the spans could not be exported. The command still prints a trace id, which then leads nowhere.
 
 ## Which backend
 
-The local backend is [Jaeger](https://www.jaegertracing.io/): one container of 57 MB that uses about 20 MB of memory and accepts OTLP directly. Spans are sent over OTLP, so another backend needs a different `HANDBOOK_RAG_OTLP_ENDPOINT` and no change to the code.
+The local backend is [Jaeger](https://www.jaegertracing.io/): one container, a download of 53 MB, that used 20 to 35 MB of memory here and accepts OTLP directly. Spans are sent over OTLP, so another backend needs a different `HANDBOOK_RAG_OTLP_ENDPOINT` and no change to the code. A hosted backend also wants a credential, which the exporter reads from the standard `OTEL_EXPORTER_OTLP_TRACES_HEADERS` variable.
 
-Backends built for language-model applications show token counts and cost per request. They differ from Jaeger only on spans of model calls, and the pipeline has none yet. The comparison that ADR 0008 asks for is therefore made when the answering step is traced.
+Backends built for language-model applications show token counts and cost per request. What sets them apart is how they present spans of model calls, and the pipeline has none yet. The comparison that ADR 0008 asks for is therefore made when the answering step is traced.
 
 ## Not traced yet
 

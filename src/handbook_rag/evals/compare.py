@@ -48,6 +48,8 @@ class RunComparison:
     candidate: RunScores
     questions: int
     metrics: dict[str, MetricComparison]
+    not_compared: tuple[str, ...] = ()
+    """Scores that a run has, but that no question has in both runs."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +116,11 @@ def compare_runs(base_dir: Path, candidate_dir: Path) -> RunComparison:
     The comparison refuses to run otherwise. If one run scored a question the other did
     not, or the label changed in between, the difference would mix a change in the system
     with a change in the test.
+
+    A score that does not apply to every question, such as one about an answer when the
+    assistant declined, is compared on the questions that have it in both runs. Its two
+    means are then taken over those questions only, so they can differ from the means
+    each run reports for itself. A score with no such question is listed as not compared.
     """
     base, candidate = load_run(base_dir), load_run(candidate_dir)
     if not base.scores:
@@ -138,7 +145,14 @@ def compare_runs(base_dir: Path, candidate_dir: Path) -> RunComparison:
     # Not every score applies to every question: a retrieval score needs evidence, and a
     # score about an answer needs an answer. Each metric is compared on the questions for
     # which both runs have it, which keeps the comparison paired.
-    metric_ids = list(dict.fromkeys(name for question in order for name in base.scores[question]))
+    metric_ids = list(
+        dict.fromkeys(
+            name
+            for scores in (base.scores, candidate.scores)
+            for question in order
+            for name in scores[question]
+        )
+    )
     metrics: dict[str, MetricComparison] = {}
     for metric in metric_ids:
         shared = [
@@ -155,7 +169,13 @@ def compare_runs(base_dir: Path, candidate_dir: Path) -> RunComparison:
             candidate=mean_with_interval(after),
             change=paired_difference(before, after),
         )
-    return RunComparison(base=base, candidate=candidate, questions=len(order), metrics=metrics)
+    return RunComparison(
+        base=base,
+        candidate=candidate,
+        questions=len(order),
+        metrics=metrics,
+        not_compared=tuple(metric for metric in metric_ids if metric not in metrics),
+    )
 
 
 def _run_order(name: str) -> tuple[bool, list[int | str]]:

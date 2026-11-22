@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -1061,11 +1062,21 @@ def test_eval_answers_does_not_continue_a_run_made_with_another_model(
 
     monkeypatch.setenv("HANDBOOK_RAG_ANSWER_MODEL", "gemini-9-other")
     get_settings.cache_clear()
+    loaded: list[str] = []
+    real_retriever = wiring.make_retriever
+
+    def loading_retriever(settings: Settings) -> Retriever:
+        loaded.append("retriever")
+        return real_retriever(settings)
+
+    monkeypatch.setattr("handbook_rag.wiring.make_retriever", loading_retriever)
     refused = runner.invoke(app, answer_run)
 
     assert refused.exit_code == 1
     assert "was made with other settings (answer_model)" in refused.output
     assert len(model.questions) == 2
+    # It was refused before any model was loaded, which on a real run takes a while.
+    assert loaded == []
 
     restarted = runner.invoke(app, [*answer_run, "--restart"])
 
@@ -1174,6 +1185,56 @@ def test_eval_answers_counts_a_request_before_it_is_sent(
     assert len((run_dir / "answers.jsonl").read_text().splitlines()) == 1
 
 
+def test_eval_answers_reports_a_reply_that_cites_a_passage_it_was_not_given(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    class CitesElsewhere(EvalModel):
+        def generate(
+            self,
+            question: str,
+            chunks: Sequence[Chunk],
+            *,
+            on_text: Callable[[str], None] | None = None,
+        ) -> Answer:
+            stranger = dataclasses.replace(chunks[0], chunk_id="a-chunk-that-was-not-given")
+            return super().generate(question, [stranger], on_text=on_text)
+
+    model = CitesElsewhere()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+
+    result = runner.invoke(app, answer_run)
+
+    # A short message and a failing exit, not a traceback.
+    assert result.exit_code == 1
+    assert "cites a passage the model was not given (a-chunk-that-was-not-given)" in result.output
+    assert not isinstance(result.exception, ValueError)
+    # Every request that was sent is counted, the one whose reply could not be kept too.
+    attempts = json.loads((tmp_path / "runs" / "current" / "run.json").read_text())["attempts"]
+    assert attempts == len(model.questions) >= 1
+
+
+def test_eval_compare_names_a_score_it_could_not_compare(tmp_path: Path) -> None:
+    for name, grade in (("baseline", {"answered": 1.0}), ("v1", {"fully_cited": 1.0})):
+        run_dir = tmp_path / name
+        run_dir.mkdir()
+        row = {
+            "prompt_id": "q1",
+            "status": "ok",
+            "fingerprint": "label-q1",
+            "grade": {"right_call": 1.0, **grade},
+        }
+        (run_dir / "results.jsonl").write_text(json.dumps(row) + "\n")
+        (run_dir / "summary.json").write_text(json.dumps({"description": name}))
+
+    result = runner.invoke(app, ["eval-compare", "baseline", "v1", "--runs", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "not compared, because no question has the score in both runs: answered, fully_cited"
+        in result.output
+    )
+
+
 def test_eval_answers_describes_the_run_by_the_passages_it_really_gave(
     monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
 ) -> None:
@@ -1220,9 +1281,14 @@ def test_answer_runs_can_be_compared_and_tabled_like_retrieval_runs(
     lines = {line.split()[0]: line for line in compared.output.splitlines() if line.strip()}
     assert "-0.500" in lines["Right"]
     # A score that applies to one of the two questions says so.
-    assert "(on 1 questions)" in lines["Declines"]
-    assert "(on 1 questions)" in lines["Answers"]
+    assert lines["Declines"].endswith("(on 1 question)")
+    assert lines["Answers"].endswith("(on 1 question)")
     assert "(on" not in lines["Right"]
+
+    # A run that stopped early did not score the same questions, and is refused as before.
+    partial = runner.invoke(app, ["eval-compare", "baseline", "v2", "--runs", runs])
+    assert partial.exit_code == 1
+    assert "did not score the same questions" in partial.output
 
     table = runner.invoke(
         app, ["eval-table", "--runs", runs, "--metric", "right_call", "--metric", "declined"]

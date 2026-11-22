@@ -410,8 +410,15 @@ def eval_compare(
             f"  {label:<9} {metric.base.mean:>9.3f} {metric.candidate.mean:>9.3f}   "
             f"{interval:<27} {metric.change.better:>6} {metric.change.worse:>6} "
             f"{metric.change.same:>6}  {'clear' if metric.change.is_clear else 'unclear'}"
-            + (f"  (on {scored} questions)" if scored != comparison.questions else "")
+            + (
+                f"  (on {scored} question{'' if scored == 1 else 's'})"
+                if scored != comparison.questions
+                else ""
+            )
         )
+    if comparison.not_compared:
+        names = ", ".join(labels.get(name, name) for name in comparison.not_compared)
+        typer.echo(f"  not compared, because no question has the score in both runs: {names}")
     typer.echo("")
     typer.echo("  clear    the interval excludes zero: chance is an unlikely explanation")
     typer.echo("  unclear  the two runs cannot be told apart with this many questions")
@@ -484,6 +491,9 @@ def eval_answers(
     config = {**wiring.describe_retrieval(settings), **wiring.describe_generation(settings)}
     run_dir = output / variant
     try:
+        if not restart:
+            # Before the models are loaded, which takes a while.
+            answer_runs.check_run(run_dir, config)
         questions = _load_questions(dataset)
         corpus = build_corpus(settings)
         retriever = wiring.make_retriever(settings)
@@ -561,7 +571,7 @@ def eval_answers(
             on_failure=show_failure,
             max_attempts=max_requests,
         )
-    except DatasetError as error:
+    except (DatasetError, answer_runs.ReplyError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=1) from error
     attempts = answer_runs.attempts_so_far(run_dir)

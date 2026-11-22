@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -11,11 +12,13 @@ from handbook_rag.evals.answers import (
     METRIC_IDS,
     Pacer,
     Passage,
+    ReplyError,
     SavedRunError,
     Statement,
     add_attempts,
     append_record,
     attempts_so_far,
+    check_run,
     in_run_order,
     load_records,
     open_run,
@@ -176,7 +179,7 @@ def test_a_citation_of_a_passage_the_model_was_not_given_is_a_fault_and_says_so(
         LEAVE_QUESTION, Segment("Sixteen weeks.", (Citation(LEAVE_CHUNK),)), given=(EXPENSE_CHUNK,)
     )
 
-    with pytest.raises(ValueError, match="q001 cites a passage the model was not given"):
+    with pytest.raises(ReplyError, match="q001 cites a passage the model was not given"):
         record_answer(LEAVE_QUESTION, answer, [])
 
 
@@ -633,6 +636,40 @@ def test_replies_without_a_record_of_their_settings_are_not_adopted(tmp_path: Pa
         open_run(tmp_path, CONFIG)
 
 
+def test_a_run_can_be_checked_before_anything_is_loaded_and_nothing_is_written(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "runs" / "baseline"
+
+    # A run that does not exist yet can be started, and checking does not create it.
+    check_run(run_dir, CONFIG)
+    assert not run_dir.exists()
+
+    open_run(run_dir, CONFIG)
+    append_record(run_dir, run_answers(QUESTIONS, DOCUMENTS, careful).records["q001"])
+    before = (run_dir / "run.json").read_text()
+
+    check_run(run_dir, CONFIG)
+    with pytest.raises(SavedRunError, match=r"other settings \(answer_model\)"):
+        check_run(run_dir, {**CONFIG, "answer_model": "another-model"})
+
+    assert (run_dir / "run.json").read_text() == before
+    assert sorted(path.name for path in run_dir.iterdir()) == ["answers.jsonl", "run.json"]
+
+
+def test_blank_lines_and_other_line_ends_between_replies_are_passed_over(tmp_path: Path) -> None:
+    records = run_answers(QUESTIONS, DOCUMENTS, careful).records
+    open_run(tmp_path, CONFIG)
+    append_record(tmp_path, records["q001"])
+    append_record(tmp_path, records["q002"])
+    answers = tmp_path / "answers.jsonl"
+    first, second = answers.read_text().splitlines()
+
+    answers.write_bytes(f"{first}\r\n\r\n\n  \n{second}\n".encode())
+
+    assert load_records(answers) == {"q001": records["q001"], "q002": records["q002"]}
+
+
 def test_a_run_that_holds_no_reply_takes_new_settings(tmp_path: Path) -> None:
     # For example a run whose every request failed, or one that never got to ask.
     open_run(tmp_path, CONFIG)
@@ -646,7 +683,16 @@ def test_a_run_that_holds_no_reply_takes_new_settings(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "damaged", ["{", "[]", '{"attempts": 2}', '{"config": {}, "attempts": "x"}']
+    "damaged",
+    [
+        "{",
+        "[]",
+        '{"attempts": 2}',
+        '{"config": {}, "attempts": "x"}',
+        '{"config": {}, "attempts": -3}',
+        '{"config": {}, "attempts": 2.5}',
+        '{"config": {}, "attempts": true}',
+    ],
 )
 def test_a_damaged_record_of_the_settings_is_reported_and_can_be_discarded(
     tmp_path: Path, damaged: str
@@ -1039,15 +1085,31 @@ def test_traces_of_questions_that_are_no_longer_scored_are_removed(tmp_path: Pat
     assert [p.name for p in (tmp_path / "baseline" / "traces").iterdir()] == ["q001_rep0.json"]
 
 
-def test_a_killed_write_never_leaves_half_a_file(tmp_path: Path) -> None:
+def test_a_killed_write_never_leaves_half_a_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     run_dir = tmp_path / "run"
     open_run(run_dir, CONFIG)
+    replaced: list[tuple[str, str, str]] = []
+    real_replace = os.replace
+
+    def watching_replace(source: Path, target: Path) -> None:
+        # At the moment of the swap the old file is still whole, and the new one is ready.
+        replaced.append((source.name, target.name, target.read_text()))
+        real_replace(source, target)
+
+    monkeypatch.setattr("handbook_rag.evals.answers.os.replace", watching_replace)
 
     add_attempts(run_dir, 7)
 
-    # The file is replaced in one step, and the partial copy does not stay behind.
+    # The new content is written beside the file and swapped in with one step.
+    assert [(source, target) for source, target, _ in replaced] == [
+        ("run.json.partial", "run.json")
+    ]
+    assert json.loads(replaced[0][2])["attempts"] == 0
     assert sorted(path.name for path in run_dir.iterdir()) == ["run.json"]
     assert attempts_so_far(run_dir) == 7
+    assert (run_dir / "run.json").read_text().endswith("}\n")
 
 
 def test_passages_are_kept_by_id_and_not_by_their_text(tmp_path: Path) -> None:

@@ -56,6 +56,10 @@ class SavedRunError(ValueError):
     """A saved run cannot be continued: other settings made it, or its file cannot be read."""
 
 
+class ReplyError(ValueError):
+    """A reply breaks a rule the generator must keep, so it cannot be recorded."""
+
+
 @dataclass(frozen=True, slots=True)
 class Passage:
     """One passage the model was given."""
@@ -136,7 +140,7 @@ def record_answer(
     for segment in answer.segments:
         for citation in segment.citations:
             if citation.chunk.chunk_id not in numbers:
-                raise ValueError(
+                raise ReplyError(
                     f"The reply to {question.id} cites a passage the model was not given "
                     f"({citation.chunk.chunk_id}). That is a fault in the generator."
                 )
@@ -343,11 +347,39 @@ def open_run(
     it wrote, is removed here. Left in place, the next reply would be written onto it.
     """
     run_dir.mkdir(parents=True, exist_ok=True)
-    run_file, answers_file = run_dir / RUN_FILE, run_dir / ANSWERS_FILE
-    wanted = json.loads(json.dumps(dict(config)))
+    run_file = run_dir / RUN_FILE
+    wanted = _as_saved(config)
     if restart:
         _discard(run_dir)
-    _remove_cut_line(answers_file)
+    _remove_cut_line(run_dir / ANSWERS_FILE)
+    saved = _replies_to_continue(run_dir, wanted)
+    if not run_file.is_file():
+        _write_json(run_file, {"config": wanted, "attempts": 0})
+    else:
+        state = _run_state(run_file)
+        if state["config"] != wanted:
+            _write_json(run_file, {**state, "config": wanted})
+    return saved
+
+
+def check_run(run_dir: Path, config: Mapping[str, object]) -> None:
+    """Refuse a run that these settings cannot continue. Reads only, and writes nothing.
+
+    It is for refusing early, before models are loaded, which takes a while. A run that
+    passes is opened later with :func:`open_run`.
+    """
+    _replies_to_continue(run_dir, _as_saved(config))
+
+
+def _as_saved(config: Mapping[str, object]) -> dict[str, Any]:
+    """Settings in the shape they have after being saved and read back."""
+    saved: dict[str, Any] = json.loads(json.dumps(dict(config)))
+    return saved
+
+
+def _replies_to_continue(run_dir: Path, wanted: Mapping[str, object]) -> dict[str, AnswerRecord]:
+    """The replies a run holds, once it is clear that these settings may continue it."""
+    run_file, answers_file = run_dir / RUN_FILE, run_dir / ANSWERS_FILE
     saved = load_records(answers_file)
     if not run_file.is_file():
         if saved:
@@ -355,20 +387,14 @@ def open_run(
                 f"{answers_file} holds replies, but nothing records the settings that made "
                 "them. Give this run another name, or discard them with --restart."
             )
-        _write_json(run_file, {"config": wanted, "attempts": 0})
         return saved
-    state = _run_state(run_file)
-    stored = state["config"]
-    if stored != wanted:
-        if saved:
-            changed = sorted(
-                key for key in {*stored, *wanted} if stored.get(key) != wanted.get(key)
-            )
-            raise SavedRunError(
-                f"the run in {run_dir} was made with other settings ({', '.join(changed)}). "
-                "Give this run another name, or discard its saved replies with --restart."
-            )
-        _write_json(run_file, {**state, "config": wanted})
+    stored = _run_state(run_file)["config"]
+    if saved and stored != wanted:
+        changed = sorted(key for key in {*stored, *wanted} if stored.get(key) != wanted.get(key))
+        raise SavedRunError(
+            f"the run in {run_dir} was made with other settings ({', '.join(changed)}). "
+            "Give this run another name, or discard its saved replies with --restart."
+        )
     return saved
 
 
@@ -391,7 +417,9 @@ def _run_state(run_file: Path) -> dict[str, Any]:
         state = json.loads(run_file.read_text(encoding="utf-8"))
         if not isinstance(state, dict) or not isinstance(state.get("config"), dict):
             raise TypeError("it does not hold a run's settings")
-        attempts = int(state.get("attempts", 0))
+        attempts = state.get("attempts", 0)
+        if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+            raise TypeError("its count of attempts is not a whole number")
     except (ValueError, TypeError) as error:
         raise SavedRunError(
             f"{run_file} cannot be read ({error}). Discard the run with --restart."

@@ -118,11 +118,24 @@ def test_a_score_is_compared_on_the_questions_that_have_it_in_both_runs(tmp_path
     assert comparison.metrics["declined"].change.worse == 1
 
 
-def test_a_score_that_no_question_has_in_both_runs_is_left_out(tmp_path: Path) -> None:
+def test_a_score_that_no_question_has_in_both_runs_is_named_as_not_compared(
+    tmp_path: Path,
+) -> None:
     base = write_graded_run(tmp_path, "baseline", {"q1": {"right_call": 1.0, "answered": 1.0}})
     candidate = write_graded_run(tmp_path, "v1", {"q1": {"right_call": 1.0, "fully_cited": 1.0}})
 
-    assert list(compare_runs(base, candidate).metrics) == ["right_call"]
+    comparison = compare_runs(base, candidate)
+
+    assert list(comparison.metrics) == ["right_call"]
+    # Neither is dropped without a word: one is only in the base run, one only in the other.
+    assert comparison.not_compared == ("answered", "fully_cited")
+
+
+def test_every_score_is_compared_when_all_questions_have_all_of_them(tmp_path: Path) -> None:
+    base = write_run(tmp_path, "baseline", {"q1": 1.0, "q2": 0.0})
+    candidate = write_run(tmp_path, "v1", {"q1": 1.0, "q2": 1.0})
+
+    assert compare_runs(base, candidate).not_compared == ()
 
 
 def test_a_question_with_a_character_some_tools_take_for_a_line_end_is_one_row(

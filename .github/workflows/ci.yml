@@ -42,3 +42,59 @@ jobs:
 
       - name: Test
         run: uv run pytest --cov --cov-report=term-missing
+
+  # Scores the default retriever with the real models on a slice of the handbook, and
+  # fails if a score falls below the minimums in evals/gate.json. See docs/evaluation.md.
+  retrieval-gate:
+    name: Retrieval gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # The handbook is not stored in this repository. It is downloaded at the pinned
+      # commit and kept between runs, under a key that changes when the pin changes.
+      - name: Read the pinned handbook commit
+        id: pin
+        run: |
+          commit=$(uv run python -c "from handbook_rag.config import get_settings; print(get_settings().handbook_commit)")
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the handbook snapshot
+        id: handbook
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: data/handbook
+          key: handbook-${{ steps.pin.outputs.commit }}
+
+      - name: Download the handbook snapshot
+        if: steps.handbook.outputs.cache-hit != 'true'
+        run: uv run handbook-rag snapshot
+
+      - name: Keep the keyword model next to the others
+        run: echo "FASTEMBED_CACHE_PATH=$HOME/.cache/fastembed" >> "$GITHUB_ENV"
+
+      - name: Restore the models
+        id: models
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/huggingface
+            ~/.cache/fastembed
+          key: models-${{ hashFiles('src/handbook_rag/config.py', 'uv.lock') }}
+
+      # With the model files restored nothing has to be fetched, so the gate cannot fail
+      # because the model hub is slow or down.
+      - name: Work offline when the models are restored
+        if: steps.models.outputs.cache-hit == 'true'
+        run: echo "HF_HUB_OFFLINE=1" >> "$GITHUB_ENV"
+
+      - name: Retrieval gate
+        run: uv run handbook-rag eval-gate

@@ -71,7 +71,7 @@ The first working version (the baseline) used dense search only and skipped step
 | Fusion | Merge dense and sparse rankings | Our own code (reciprocal rank fusion) | [ADR 0003](adr/0003-own-pipeline-code-instead-of-a-framework.md) |
 | Reranker | Re-score candidates against the question | sentence-transformers cross-encoder | [ADR 0005](adr/0005-local-embedding-and-reranking-models.md) |
 | Generator | Write a grounded, cited answer | Claude through the Anthropic API | [ADR 0006](adr/0006-claude-with-native-citations-for-generation.md) |
-| API | HTTP interface with streaming | FastAPI | This document |
+| API | HTTP interface: `POST /search` and `GET /health` today, `POST /ask` with streaming when the answering step lands | FastAPI | This document |
 | Evaluation | Measure retrieval and answer quality | Our own harness | [ADR 0007](adr/0007-evaluation-strategy.md) |
 | Tracing | Record every stage of every request | OpenTelemetry | [ADR 0008](adr/0008-opentelemetry-tracing.md) |
 

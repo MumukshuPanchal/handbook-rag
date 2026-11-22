@@ -35,6 +35,12 @@ search                           336 ms
     rerank                       208 ms   the cross-encoder reads the question with each of 30 chunks
 ```
 
+## Through the HTTP API
+
+A request to the API is traced the same way, and its response carries the trace id in `trace_id`. The web framework adds its own spans around ours: the trace starts with `POST /search`, which records the method, the route and the status code, and our `search` span sits inside it.
+
+Start the service with `HANDBOOK_RAG_TRACING=true make serve`.
+
 ## What each span records
 
 | Span | What it covers | Worth looking at |
@@ -81,10 +87,21 @@ One trace is one measurement, and on a busy laptop they vary: the search part of
 Reading a handful of traces turned up three things that the summary numbers had not:
 
 1. **The two searches run one after the other.** Neither needs the other's result. Run side by side, a hybrid search should take about as long as the slower one: by the medians above, an estimated 32 ms instead of 43.
-2. **Every call to Qdrant is two round trips.** The store asks whether the collection exists before it queries it. That check took 3 to 5 ms when timed on its own, and a hybrid search pays it twice.
+2. **Every call to Qdrant was two round trips.** The store asked whether the collection exists before it queried it, and a hybrid search paid for that twice.
 3. **Reranking is most of a reranked request.** It is 62% of the trace above, in which the search part was unusually slow. By the medians recorded in [ADR 0011](adr/0011-hybrid-retrieval-by-default.md), 247 ms with reranking against 33 without, it is nearer 87%. That is the cost the decision record weighed against its gain.
 
-The first two are improvements to make. Both are small, and neither would have been found by looking at one total.
+Neither of the first two would have been found by looking at one total.
+
+**The second is fixed.** The store now asks whether the collection exists only after a query has failed, to explain the failure. Measuring the gain needed some care: the time of a whole run varies by ten milliseconds from one run to the next on a busy laptop, which hides a difference of a few. So both versions were timed back to back on the same 300 queries, in alternating order, and compared pair by pair, the same way two search variants are compared in the [evaluation guide](evaluation.md).
+
+| | Median time of one store query |
+|---|---|
+| Asking first | 18.1 ms |
+| Asking only after a failure | 12.7 ms |
+
+A query got 5.9 ms faster on average (95% interval 4.8 to 7.0), and was faster in 256 of the 300 pairs. The laptop was busy during the measurement, so the absolute times are higher than the medians above; the difference is what the pairs establish.
+
+**The first is left as it is.** Running the two searches side by side would save an estimated 11 ms and add threads to the search path. Once answers are generated, a request will spend a second or more in the language model, and nobody would notice 11 ms. It is written down so that it is a decision and not an oversight.
 
 ## When no trace backend is running
 

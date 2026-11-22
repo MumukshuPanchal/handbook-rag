@@ -42,6 +42,32 @@ Retrieval on 132 test questions over 38,881 chunks of the handbook. These are th
 
 **How far to trust these numbers.** The test questions were made by one model session and checked by another, over several rounds. No person has verified them one by one, and most were written by a model that could see the passage. The [dataset card](evals/golden/README.md) says how the set was made, what the checks found, and what its limits are.
 
+## HTTP API
+
+`make serve` runs the assistant as a service. It needs the index (`make qdrant`, `make index`).
+
+```bash
+curl -s localhost:8000/health
+# {"status":"ok","version":"0.1.0","chunks":38881,"detail":null}
+
+curl -s -X POST localhost:8000/search \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "how do I expense a laptop", "limit": 2}'
+```
+
+`POST /search` returns the passages most relevant to a question, best first. Each has its text, its page, the headings above it, a link to the page and a score. The response also says how the passages were found and how long that took, and carries the id of the request's trace when tracing is on.
+
+| Endpoint | What it does |
+|---|---|
+| `POST /search` | `query` (1 to 500 characters), optional `limit` (1 to 20) and `section` |
+| `GET /health` | 200 with the number of chunks in the index, or 503 if the index is empty or cannot be reached |
+| `GET /docs` | Interactive documentation, generated from the code |
+
+- A request that breaks a limit gets a 422 that names the field. A vector store that is down gets a 503, not a 500.
+- The models are loaded and run once when the service starts, so the first caller does not wait for them.
+- There is no authentication. The service listens on this machine only unless `HANDBOOK_RAG_API_HOST` says otherwise.
+- `POST /ask`, which answers with citations and streams the answer, arrives with the answering step.
+
 ## Data
 
 The assistant is built on the [GitLab Handbook](https://handbook.gitlab.com/), which GitLab publishes under the [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) licence. The handbook text is not stored in this repository. `make snapshot` downloads its Markdown pages at a pinned commit (4,206 pages, 43 MB) and writes a manifest that records the source, commit and a checksum of what was fetched. The reasoning is in [ADR 0002](docs/adr/0002-handbook-corpus.md).
@@ -65,6 +91,7 @@ make qdrant     # start the Qdrant vector store in Docker
 make index      # embed the chunks and store them; safe to run again
 make search q="how do I expense a laptop"
 make traces     # start the trace backend; see docs/observability.md
+make serve      # run the HTTP API at http://127.0.0.1:8000
 uv run handbook-rag search "what is compa-ratio" --rerank
 make golden-check    # verify every test question against the handbook
 make eval-retrieval  # score the default search, as a scratch run named "current"

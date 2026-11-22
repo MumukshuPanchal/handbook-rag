@@ -151,6 +151,7 @@ make eval-gate       # the retrieval check CI runs, on a slice of the handbook
 
 ```console
 $ make ask q="How many days of paid time off can I take, and do I need approval?"
+uv run handbook-rag ask "How many days of paid time off can I take, and do I need approval?"
 GitLab does not set a specific annual limit on the amount of Flexible PTO you can take. However, time off exceeding 25 consecutive calendar days requires special permission from your Manager, People Business Partner, and the Absence Management Team.
 
 You do need to coordinate your planned time off with your manager in advance and make a coverage plan.
@@ -164,7 +165,7 @@ Sources
 gemini-3.5-flash-lite | 1,728 tokens in | 79 out | 2.0 s
 ```
 
-That is real output from 22 November 2026. A question the handbook does not cover gets one fixed sentence, "I could not find this in the handbook.", and no sources.
+That is real output from 22 November 2026, and all of it: the first line is `make` showing the command it runs, and nothing else is printed. The time on the last line is the model call alone. Each command takes about ten seconds to start here, because it loads PyTorch and the embedding model, which the API server does once. Asking the same question again gives an answer that differs in wording and in detail, because the model chooses its words with some randomness. A question the handbook does not cover gets one fixed sentence, "I could not find this in the handbook.", and no sources.
 
 - **The model.** Answers are written by Gemini (`gemini-3.5-flash-lite`). Copy `.env.example` to `.env` and set `GEMINI_API_KEY`. [Google AI Studio](https://aistudio.google.com/) gives a key free of charge, without setting up billing. The `.env` file is ignored by git, and the key is read only by this application.
 - **A free key is for public text only.** On the free tier Google may use what is sent to improve its products. The handbook is public, so that is fine here. It would not be for private documents.

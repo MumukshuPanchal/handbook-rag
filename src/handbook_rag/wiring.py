@@ -26,11 +26,14 @@ from handbook_rag.retrieve.sparse import SparseRetriever
 
 RetrievalMode = Literal["dense", "sparse", "hybrid"]
 
-# How long one request to an answer model may take.
+# How long an answer model's API may take to accept a connection, and how long it may
+# then stay silent, before the request is given up. It is not a limit on the whole answer.
 MODEL_TIMEOUT_SECONDS = 60.0
-# How often a request to Gemini is sent before giving up, and which failures are worth
-# another try: the server was busy or failed. A rate limit (429) is not among them. On a
-# free key it means waiting a minute or a day, which trying again a second later cannot fix.
+# How often a request to Gemini is sent before giving up, and which replies are worth
+# another try: the server was busy or failed. The SDK also tries again by itself when the
+# connection fails or times out, so in the worst case the wait is three time limits.
+# A rate limit (429) is not retried. On a free key it means waiting a minute or a day,
+# which trying again a second later cannot fix.
 GEMINI_ATTEMPTS = 3
 GEMINI_RETRY_STATUS_CODES = [408, 500, 502, 503, 504]
 

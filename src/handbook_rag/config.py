@@ -184,7 +184,8 @@ class Settings(BaseSettings):
     )
     gemini_api_key: SecretStr | None = Field(
         default=None,
-        # Read from the standard variable name, without this application's prefix.
+        # Read from the provider's standard variable name. This application's prefix is
+        # not needed, though the prefixed name works too.
         validation_alias=AliasChoices("GEMINI_API_KEY", "gemini_api_key"),
         description=(
             "Credential for the Gemini API, needed when the answer model is a Gemini "
@@ -194,7 +195,8 @@ class Settings(BaseSettings):
     )
     anthropic_api_key: SecretStr | None = Field(
         default=None,
-        # Read from the standard variable name, without this application's prefix.
+        # Read from the provider's standard variable name. This application's prefix is
+        # not needed, though the prefixed name works too.
         validation_alias=AliasChoices("ANTHROPIC_API_KEY", "anthropic_api_key"),
         description=(
             "Credential for the Claude API, used when the answer model is a Claude model. "
@@ -206,9 +208,9 @@ class Settings(BaseSettings):
         default="gemini-3.5-flash-lite",
         description=(
             "Model that writes the answers. Its name selects the provider: gemini-... is "
-            "served by the Gemini API, claude-... by the Claude API. Use an exact model "
-            "name, not an alias such as gemini-flash-latest: an alias moves to a new "
-            "model without notice, and results would stop being comparable."
+            "served by the Gemini API, claude-... by the Claude API. It must be an exact "
+            "model name: an alias such as gemini-flash-latest is rejected, because it "
+            "moves to a new model without notice and results would stop being comparable."
         ),
     )
     answer_max_tokens: int = Field(
@@ -230,9 +232,16 @@ class Settings(BaseSettings):
     @field_validator("answer_model")
     @classmethod
     def _answer_model_names_a_provider(cls, value: str) -> str:
-        if not value.startswith(ANSWER_MODEL_PREFIXES):
+        if not any(
+            value.startswith(prefix) and value != prefix for prefix in ANSWER_MODEL_PREFIXES
+        ):
             raise ValueError(
                 f"must be a Gemini model (gemini-...) or a Claude model (claude-...), not {value!r}"
+            )
+        if value.endswith("-latest"):
+            raise ValueError(
+                f"must be an exact model name: {value!r} is an alias that moves to a new "
+                "model without notice, and results would stop being comparable"
             )
         return value
 

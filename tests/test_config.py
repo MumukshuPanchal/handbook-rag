@@ -95,7 +95,28 @@ def test_answer_model_may_be_a_gemini_or_a_claude_model(model: str) -> None:
     assert Settings(answer_model=model).answer_model == model
 
 
-@pytest.mark.parametrize("model", ["gpt-4o", "", "Gemini-3.8-flash", "models/gemini-3.8-flash"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-4o",
+        "",
+        "Gemini-3.8-flash",
+        "models/gemini-3.8-flash",
+        "geminiX",  # the dash is part of the name
+        "gemini-",  # a provider and no model
+        "claude-",
+    ],
+)
 def test_answer_model_from_an_unknown_provider_is_rejected(model: str) -> None:
     with pytest.raises(ValidationError, match=r"must be a Gemini model .* or a Claude model"):
         Settings(answer_model=model)
+
+
+@pytest.mark.parametrize("model", ["gemini-flash-latest", "gemini-flash-lite-latest"])
+def test_answer_model_must_be_an_exact_name_not_an_alias(model: str) -> None:
+    with pytest.raises(ValidationError, match="must be an exact model name"):
+        Settings(answer_model=model)
+
+
+def test_the_model_is_given_five_chunks_by_default() -> None:
+    assert Settings().answer_context_chunks == 5

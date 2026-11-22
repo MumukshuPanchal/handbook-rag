@@ -33,12 +33,10 @@ def test_gemini_requests_have_a_time_limit_and_retry_only_what_a_retry_can_fix()
     assert options.timeout == 60_000  # milliseconds
     assert options.retry_options is not None
     assert options.retry_options.attempts == 3
-    codes = options.retry_options.http_status_codes
-    assert codes is not None
-    assert 503 in codes
-    # A rate limit on a free key lasts a minute or a day. Trying again at once only
+    # A busy or failing server is worth another try. A rate limit (429) is not in the
+    # list: on a free key it lasts a minute or a day, and trying again at once only
     # spends another request, so it is reported instead.
-    assert 429 not in codes
+    assert options.retry_options.http_status_codes == [408, 500, 502, 503, 504]
 
 
 @pytest.mark.parametrize("key", [None, SecretStr("")])
@@ -68,12 +66,30 @@ def test_a_claude_model_name_selects_the_claude_generator(
     assert isinstance(generator, ClaudeGenerator)
     assert generator._model == CLAUDE
     assert generator._client.api_key == "sk-ant-test-not-a-real-key"
+    assert generator._client.timeout == 60.0
     assert "ANTHROPIC_API_KEY" not in monkeypatch_environment
 
 
 def test_claude_generator_can_be_built_without_a_key_in_the_settings() -> None:
     # The Claude SDK then looks in its own standard places, and a Gemini key is not needed.
-    assert isinstance(make_generator(Settings(answer_model=CLAUDE)), ClaudeGenerator)
+    generator = make_generator(Settings(answer_model=CLAUDE))
+
+    assert isinstance(generator, ClaudeGenerator)
+    assert generator._client.timeout == 60.0
+
+
+@pytest.mark.parametrize("model", ["gemini-3.5-flash-lite", CLAUDE])
+def test_the_answer_length_limit_comes_from_the_settings(model: str) -> None:
+    settings = Settings(
+        answer_model=model,
+        answer_max_tokens=123,
+        gemini_api_key=SecretStr("test-key-not-a-real-one"),
+    )
+
+    generator = make_generator(settings)
+
+    assert isinstance(generator, GeminiGenerator | ClaudeGenerator)
+    assert generator._max_tokens == 123
 
 
 @pytest.mark.parametrize(

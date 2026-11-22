@@ -63,8 +63,8 @@ All 165 test questions, answered by `gemini-3.5-flash-lite` from the five passag
 | Cites the passage that holds the evidence | 0.992 (0.976 to 1.000) | 127 |
 
 - **Every answerable question that went unanswered was a search miss.** The assistant answered all 127 questions whose evidence it was given, and declined the 5 whose evidence the search had missed. Raising this score means better retrieval, not a better prompt.
-- **The two wrong calls on unanswerable questions are replies a person would accept.** Each gives a related fact and then says the handbook does not give the detail asked for. The score is 1 or 0 by a fixed rule, so it understates here.
-- **Speed is uneven on the free tier.** The median reply took 2.4 s, and 95% arrived within 10.1 s, just over the charter's 10 seconds. A third took more than 5 s.
+- **The two wrong calls on unanswerable questions both say that the detail asked for is missing.** Each gives a related fact first, and the fixed rule counts a reply with a citation as an answer. Read by eye, the score understates here. No person has checked that reading.
+- **Speed is uneven on the free tier.** The median reply took 2.4 s, and 95% arrived within 10.1 s. That is the model call alone, without the search, and it is just over the 10 seconds the charter allows for a complete answer. A third took more than 5 s.
 - **Not measured yet: whether an answer is true.** An answer can name the right passage and misstate it. That needs a judge, and is the next stage ([ADR 0014](docs/adr/0014-answer-evaluation-in-stages.md)).
 - **One run, one reply for each question.** The same question gets a different answer each time, so a second run would not give exactly these numbers.
 

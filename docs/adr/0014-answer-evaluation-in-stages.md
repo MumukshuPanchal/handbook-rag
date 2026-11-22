@@ -67,9 +67,9 @@ Four facts follow from this, and from what was seen while building the answering
 
 ## Consequences
 
-- A full evaluation takes most of a day's allowance: 165 requests to ask, then up to 165 for each judged criterion. Asking and one judged criterion fit in one day. The second criterion waits for the allowance to reset, at midnight Pacific time.
+- A full evaluation takes most of a day's allowance. On the first run that is 169 attempts to ask, then 129 requests to judge whether the answers are supported and 127 to judge whether they are correct: about 425 of the 500. Checking a judge against its labelled examples takes one more request for each example. So on a day when a judge is first checked, not everything fits, and what is left waits for the allowance to reset at midnight Pacific time.
 - The first numbers, from code alone, are available as soon as the questions have been asked.
-- A reply can be read again at any time: `answers.jsonl` holds every reply with the passages it cited, by chunk id. The passages themselves are not copied, so the file can be committed without redistributing the handbook ([ADR 0002](0002-handbook-corpus.md)). The replies are the model's own words, which may repeat a few of a passage's.
+- A reply can be read again at any time: `answers.jsonl` holds every reply with the passages it cited, by chunk id. The passages themselves are not copied. The replies are the model's own words, and one of them may repeat a sentence of a passage, which is the kind of short, attributed excerpt [ADR 0002](0002-handbook-corpus.md) allows.
 - The reply is kept as statements and citations, not as the text the model wrote. When an answer comes back without a citation, the saved record cannot show whether the model left the marker out or the parser lost it.
 - "Right call" is 1 or 0 by a fixed rule. A reply that gives a related fact and then says the handbook lacks the detail asked for counts as an answer, and so as a wrong call on an unanswerable question. The first run had two such replies.
 - Scores from one run do not show how much replies vary from run to run. The interval reported with each mean covers which questions were asked, not how the model would answer them a second time. This is a stated limit.

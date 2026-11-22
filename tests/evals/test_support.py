@@ -610,7 +610,13 @@ def test_the_figures_quoted_beside_a_score_can_be_saved_as_json(tmp_path: Path) 
 
     assert json.loads(json.dumps(headline)) == headline
     assert headline["statements"] == 2
-    assert headline["recall"] == {"mean": 1.0, "low": 1.0, "high": 1.0, "count": 1}
+    # One caught of one: the interval says how little that proves.
+    assert headline["recall"] == {
+        "mean": 1.0,
+        "low": pytest.approx(0.2065, abs=0.0005),
+        "high": 1.0,
+        "count": 1,
+    }
     assert headline["caught"] == {"number": [1, 1]}
     assert headline["kappa"] == 1.0
     assert headline["answers"] == 2

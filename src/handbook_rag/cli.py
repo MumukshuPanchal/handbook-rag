@@ -729,7 +729,10 @@ def _echo_judge_record(judge: Mapping[str, Any]) -> None:
     alarms = ""
     if precision is not None:
         wrong = precision["count"] - round(precision["mean"] * precision["count"])
-        alarms = f", and {wrong} of its {precision['count']} alarms were false"
+        alarms = (
+            f", and {wrong} of its {precision['count']} alarms "
+            f"{'was' if wrong == 1 else 'were'} false"
+        )
     typer.echo(f"  judge check  it {caught}{alarms} ({check['run']})")
 
 
@@ -1055,8 +1058,8 @@ def eval_support(
         judge=record,
     )
     typer.echo(
-        f"  judged       {len(judged)} of {len(cases)} answers, {run.reused} of them taken "
-        f"from an earlier check, {len(run.failures)} failed"
+        f"  judged       {len(judged)} of {len(cases)} answers, {run.reused} of them from "
+        f"verdicts saved earlier, {len(run.failures)} failed"
     )
     typer.echo(
         f"  requests     at most {run.attempts} now, {stage.attempts()} for this stage in all"

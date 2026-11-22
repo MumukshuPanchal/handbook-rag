@@ -12,14 +12,17 @@ the same one. Two numbers matter most, and both are about the verdict ``unsuppor
 
 The labelled examples hold real answers and copies of them with one planted fault. The
 planted faults are what makes recall measurable at all: real answers hold too few.
+
+Every share is reported with a Wilson interval, which stays honest when the judge agrees
+every time: 41 of 41 is not certainty.
 """
 
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from handbook_rag.evals.judge import VERDICTS, Verdict
-from handbook_rag.evals.metrics import Estimate, mean_with_interval
+from handbook_rag.evals.metrics import Estimate, share_with_interval
 
 REAL = "real"
 """The kind of a statement that is as the assistant wrote it, with no planted fault."""
@@ -116,13 +119,14 @@ def _is_bad(verdict: Verdict) -> bool:
     return verdict == "unsupported"
 
 
-def _share(flags: object) -> Estimate:
-    return mean_with_interval([float(flag) for flag in flags])  # type: ignore[attr-defined]
+def _share(flags: Iterable[bool]) -> Estimate:
+    values = [bool(flag) for flag in flags]
+    return share_with_interval(sum(values), len(values))
 
 
-def _share_or_none(flags: object) -> Estimate | None:
-    values = [float(flag) for flag in flags]  # type: ignore[attr-defined]
-    return mean_with_interval(values) if values else None
+def _share_or_none(flags: Iterable[bool]) -> Estimate | None:
+    values = [bool(flag) for flag in flags]
+    return share_with_interval(sum(values), len(values)) if values else None
 
 
 def _kappa(decisions: Sequence[tuple[bool, bool]]) -> float:

@@ -1485,7 +1485,8 @@ def test_eval_judge_checks_the_judge_against_labelled_answers(
     assert "at most 2 now, 2 for this check in all" in result.output
     assert "2 compared with their labels, 0 left out" in result.output
     assert "Same decision                1.000" in result.output
-    assert "Faults caught (recall)       1.000  (95% interval 1.000 to 1.000, n=1)" in result.output
+    # One fault caught of one. The interval shows how little a single case proves.
+    assert "Faults caught (recall)       1.000  (95% interval 0.207 to 1.000, n=1)" in result.output
     assert "Alarms that were right       1.000" in result.output
     assert "Kappa                        1.000" in result.output
     assert "Caught, number: 1 of 1" in result.output
@@ -1604,7 +1605,7 @@ def test_eval_support_judges_the_saved_answers_and_adds_the_score_to_the_run(
     assert judge.asked == ["q001"]
     assert judge.built_with == [{"attempts": 1}]
     assert "1 to read, 0 already judged, 1 to judge now" in result.output
-    assert "judged       1 of 1 answers, 0 of them taken from an earlier check" in result.output
+    assert "judged       1 of 1 answers, 0 of them from verdicts saved earlier" in result.output
     assert "Supported by its sources     1.000  (95% interval 1.000 to 1.000, n=1)" in result.output
     assert "Right call                   1.000" in result.output
     assert (
@@ -1657,7 +1658,7 @@ def test_eval_support_uses_a_check_again_and_quotes_its_agreement(
     # The check had read exactly this answer, so its verdict is used and no request is sent.
     assert len(judge.asked) == 2
     assert "1 to read, 1 already judged, 0 to judge now" in result.output
-    assert "judged       1 of 1 answers, 1 of them taken from an earlier check" in result.output
+    assert "judged       1 of 1 answers, 1 of them from verdicts saved earlier" in result.output
     assert "at most 0 now, 0 for this stage in all" in result.output
     assert (
         "judge check  it caught 1 of 1 statements labelled unsupported, and 0 of its 1 alarms "

@@ -13,6 +13,7 @@ from handbook_rag.evals.metrics import (
     paired_difference,
     recall_at_k,
     reciprocal_rank_at_k,
+    share_with_interval,
 )
 from handbook_rag.ingest.models import Chunk
 
@@ -211,3 +212,32 @@ def test_identical_systems_show_no_difference() -> None:
 def test_paired_comparison_needs_the_same_questions_on_both_sides() -> None:
     with pytest.raises(ValueError, match="same questions"):
         paired_difference([1.0, 0.0], [1.0])
+
+
+@pytest.mark.parametrize(
+    ("successes", "total", "low", "high"),
+    [
+        # Checked against the published formula by hand, and against the usual tables.
+        (41, 41, 0.9143, 1.0),
+        (0, 41, 0.0, 0.0857),
+        (41, 42, 0.8768, 0.9958),
+        (1, 1, 0.2065, 1.0),
+        (50, 100, 0.4038, 0.5962),
+    ],
+)
+def test_a_share_has_an_interval_that_stays_open_at_the_ends(
+    successes: int, total: int, low: float, high: float
+) -> None:
+    estimate = share_with_interval(successes, total)
+
+    assert estimate.mean == successes / total
+    assert estimate.count == total
+    assert estimate.low == pytest.approx(low, abs=0.0005)
+    assert estimate.high == pytest.approx(high, abs=0.0005)
+    assert 0.0 <= estimate.low <= estimate.mean <= estimate.high <= 1.0
+
+
+@pytest.mark.parametrize(("successes", "total"), [(0, 0), (1, 0), (-1, 5), (6, 5)])
+def test_a_share_needs_a_count_it_fits_in(successes: int, total: int) -> None:
+    with pytest.raises(ValueError, match="share"):
+        share_with_interval(successes, total)

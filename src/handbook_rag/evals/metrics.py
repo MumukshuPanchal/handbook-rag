@@ -117,6 +117,32 @@ def mean_with_interval(
     )
 
 
+def share_with_interval(successes: int, total: int) -> Estimate:
+    """A share of a count, with a 95% Wilson score interval.
+
+    This is for a plain share, such as 41 faults caught of 41. The bootstrap above gives
+    such a result an interval with no width, as if nothing were left in doubt, because
+    every resample of 41 successes is again 41 successes. The Wilson interval stays
+    honest at 0 and at 1: for 41 of 41 it runs from 0.914 to 1, which says that a judge
+    missing one fault in twelve could still have produced this result.
+    """
+    if total <= 0:
+        raise ValueError("A share needs a count to be a share of.")
+    if not 0 <= successes <= total:
+        raise ValueError("A share cannot be below nothing or above the whole.")
+    z = 1.959964  # the 97.5th percentile of the normal distribution
+    share = successes / total
+    centre = share + z * z / (2 * total)
+    spread = z * math.sqrt(share * (1 - share) / total + z * z / (4 * total * total))
+    scale = 1 + z * z / total
+    return Estimate(
+        mean=share,
+        low=max(0.0, (centre - spread) / scale),
+        high=min(1.0, (centre + spread) / scale),
+        count=total,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Comparison:
     """How one system's scores differ from another's on the same questions."""

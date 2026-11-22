@@ -140,3 +140,30 @@ def test_two_memory_stores_do_not_share_their_contents() -> None:
 
     assert first.existing_ids([chunk.chunk_id]) == {chunk.chunk_id}
     assert second.existing_ids([chunk.chunk_id]) == set()
+
+
+def test_a_service_can_have_its_store_without_asking_whether_it_is_there() -> None:
+    nothing_listening = Settings(qdrant_url="http://127.0.0.1:1")
+
+    with pytest.raises(VectorStoreError, match="Cannot reach Qdrant"):
+        wiring.make_store(nothing_listening)
+
+    store = wiring.make_store(nothing_listening, check=False, timeout=2)
+    assert store.collection == nothing_listening.collection_name
+
+
+def test_the_embedding_model_runs_on_the_device_in_the_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built: list[dict[str, object]] = []
+
+    def embedder(model: str, **options: object) -> FakeEmbedder:
+        built.append(options)
+        return FakeEmbedder()
+
+    monkeypatch.setattr(wiring, "SentenceTransformerEmbedder", embedder)
+
+    wiring.make_embedder(Settings())
+    wiring.make_embedder(Settings(embedding_device="cpu"))
+
+    assert [options["device"] for options in built] == [None, "cpu"]

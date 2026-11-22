@@ -10,16 +10,23 @@ parts; ``handbook-rag serve`` builds the real one.
 
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
 from contextlib import asynccontextmanager, suppress
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from handbook_rag import __version__, wiring
 from handbook_rag.config import Settings, get_settings
-from handbook_rag.index.store import ScoredChunk, VectorStore, VectorStoreError
+from handbook_rag.index.store import (
+    CollectionMissingError,
+    ScoredChunk,
+    VectorStore,
+    VectorStoreError,
+)
 from handbook_rag.retrieve.dense import Retriever
 from handbook_rag.tracing import configure_tracing, record_query, record_results, stage, trace_id
 
@@ -27,9 +34,19 @@ from handbook_rag.tracing import configure_tracing, record_query, record_results
 # the embedding model would silently ignore most of it.
 MAX_QUERY_CHARS = 500
 MAX_LIMIT = 20
-# Searched once when the application starts, so that no caller meets a cold model.
+# The largest request body that is read. A valid request is far smaller.
+MAX_BODY_BYTES = 8_192
+# How long one call to the vector store may take before the request gives up.
+STORE_TIMEOUT_SECONDS = 10.0
+# Searched once when the application starts, so that the models are loaded and have run.
 WARM_UP_QUERY = "warm up"
+# Where a caller finds the id of the request's trace, on success and on failure.
+TRACE_HEADER = "X-Trace-Id"
+
 UNAVAILABLE = "The search index is unavailable. Try again later."
+NOT_BUILT = "The index has not been built. Run `handbook-rag index`."
+EMPTY = "The index is empty. Run `handbook-rag index`."
+UNREACHABLE = "The vector store cannot be reached."
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +65,8 @@ class SearchRequest(BaseModel):
         default=None,
         ge=1,
         le=MAX_LIMIT,
+        # Strict: `true` and "3" are mistakes by the caller, not numbers.
+        strict=True,
         description="How many passages to return. Default: the service's search limit.",
     )
     section: str | None = Field(
@@ -92,7 +111,10 @@ class SearchResponse(BaseModel):
     reranked: bool
     took_ms: float = Field(description="Time spent searching, in milliseconds.")
     trace_id: str | None = Field(
-        description="The id of this request's trace, when tracing is on. Quote it in a bug report."
+        description=(
+            "The id of this request's trace, when tracing is on. Quote it in a bug report. "
+            f"It is also sent in the {TRACE_HEADER} header, on failures too."
+        )
     )
 
 
@@ -103,6 +125,15 @@ class Health(BaseModel):
     version: str
     chunks: int | None = Field(description="How many chunks the index holds, if it can be reached.")
     detail: str | None = None
+
+
+def _is_health_check(scope: MutableMapping[str, Any]) -> bool:
+    """Whether a request is a health probe, which is not worth a trace.
+
+    Something asks for /health every few seconds. Traced, those requests would bury the
+    ones made by people.
+    """
+    return scope.get("path") == "/health"
 
 
 def create_app(
@@ -117,21 +148,30 @@ def create_app(
     Tests pass a ``retriever`` and a ``store`` made of stand-in parts.
     """
     settings = settings or get_settings()
+    # A service embeds one question at a time. For that a CPU is as fast as a GPU, and
+    # steadier: measured on an Apple GPU, a question embedded after five idle seconds
+    # took about 700 ms instead of 26, while a CPU stayed at 30 to 50 ms.
+    serving = settings
+    if settings.embedding_device is None:
+        serving = settings.model_copy(update={"embedding_device": "cpu"})
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # Everything slow happens once, here: connecting to the vector store and loading
-        # the models. A request must never pay for start-up.
+        # Everything slow happens once, here: loading the models and running them for
+        # the first time. No request pays for start-up.
         provider = configure_tracing(settings)
-        app.state.store = store if store is not None else wiring.make_store(settings)
+        # The store is not asked whether it is there: the service starts without it,
+        # /health says what is wrong, and searches work as soon as it is back.
+        app.state.store = (
+            store
+            if store is not None
+            else wiring.make_store(serving, check=False, timeout=STORE_TIMEOUT_SECONDS)
+        )
         app.state.retriever = (
             retriever
             if retriever is not None
-            else wiring.make_retriever(settings, store=app.state.store)
+            else wiring.make_retriever(serving, store=app.state.store)
         )
-        # A model's first run is far slower than the rest: 1.7 s against 0.06 s when
-        # measured. That is paid here too. If the index is not built yet the service
-        # still starts, and /health says what is wrong.
         with suppress(VectorStoreError), stage("warm_up"):
             app.state.retriever.retrieve(WARM_UP_QUERY, limit=1)
         try:
@@ -145,37 +185,68 @@ def create_app(
         version=__version__,
         summary="Search a company handbook by meaning and by keyword.",
         lifespan=lifespan,
+        telemetry={
+            "exclude": _is_health_check,
+            # The framework's own log records of a rejected request include the
+            # caller's input, so they are switched off.
+            "logs": False,
+        },
     )
+
+    @app.middleware("http")
+    async def refuse_large_bodies(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """Turn away a request that announces a body far larger than any valid one."""
+        announced = request.headers.get("content-length", "")
+        if announced.isdigit() and int(announced) > MAX_BODY_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"The request body is larger than {MAX_BODY_BYTES} bytes."},
+            )
+        return await call_next(request)
+
+    @app.exception_handler(RequestValidationError)
+    async def explain_without_echoing(
+        _request: Request, error: RequestValidationError
+    ) -> JSONResponse:
+        """Say which field is wrong and why, without sending the caller's input back.
+
+        The default response repeats the rejected value, however large it is.
+        """
+        problems = [
+            {"type": problem["type"], "loc": problem["loc"], "msg": problem["msg"]}
+            for problem in error.errors()
+        ]
+        return JSONResponse(status_code=422, content={"detail": problems})
 
     @app.get("/health", responses={503: {"model": Health}})
     def health(response: Response) -> Health:
         """Say whether the service can do its job: is the index there, and does it hold anything?"""
+        problem: str | None = None
+        chunks: int | None = None
         try:
             chunks = app.state.store.count()
+        except CollectionMissingError:
+            problem = NOT_BUILT
         except Exception as error:
-            response.status_code = 503
-            return Health(
-                status="unavailable",
-                version=__version__,
-                chunks=None,
-                detail=f"The vector store cannot be queried: {type(error).__name__}",
-            )
+            # The cause can name internal addresses, so it goes to the log only.
+            logger.warning("health check failed: %s: %s", type(error).__name__, error)
+            problem = UNREACHABLE
         if chunks == 0:
+            problem = EMPTY
+        if problem is not None:
             response.status_code = 503
-            return Health(
-                status="unavailable",
-                version=__version__,
-                chunks=0,
-                detail="The index is empty. Run `handbook-rag index`.",
-            )
+            return Health(status="unavailable", version=__version__, chunks=chunks, detail=problem)
         return Health(status="ok", version=__version__, chunks=chunks)
 
     @app.post("/search", responses={503: {"description": "The vector store is unavailable."}})
-    def search(request: SearchRequest) -> SearchResponse:
+    def search(request: SearchRequest, response: Response) -> SearchResponse:
         """Return the passages of the handbook most relevant to a question, best first."""
         started = time.perf_counter()
         with stage("search", mode=settings.retrieval_mode) as span:
             traced = trace_id(span)
+            trace_headers = {TRACE_HEADER: traced} if traced is not None else None
             record_query(span, request.query)
             try:
                 results = app.state.retriever.retrieve(
@@ -186,11 +257,15 @@ def create_app(
             except VectorStoreError as error:
                 # A dependency is down: that is not the caller's fault (4xx) and not a
                 # bug here (500). 503 tells the caller that trying again later may work.
-                # The cause goes to the log and the trace, not to the caller: it can
-                # name internal addresses.
+                # The cause goes to the log, not to the caller: it can name internal
+                # addresses. The trace records the kind of error.
                 logger.warning("search failed, trace %s: %s", traced, error)
-                raise HTTPException(status_code=503, detail=UNAVAILABLE) from error
+                raise HTTPException(
+                    status_code=503, detail=UNAVAILABLE, headers=trace_headers
+                ) from error
             record_results(span, results)
+        if traced is not None:
+            response.headers[TRACE_HEADER] = traced
         return SearchResponse(
             results=[Passage.from_result(rank, result) for rank, result in enumerate(results, 1)],
             mode=settings.retrieval_mode,

@@ -138,11 +138,20 @@ class Settings(BaseSettings):
         ),
     )
 
+    embedding_device: str | None = Field(
+        default=None,
+        description=(
+            "Device the embedding model runs on, such as 'cpu', 'cuda' or 'mps'. Unset: a "
+            "GPU when there is one, which is what indexing wants. The HTTP API uses the "
+            "CPU unless this is set, because it embeds one question at a time."
+        ),
+    )
     api_host: str = Field(
         default="127.0.0.1",
         description=(
             "Address the HTTP API listens on. The default accepts connections from this "
-            "machine only; the API has no authentication. A container sets 0.0.0.0."
+            "machine only; the API has no authentication. Inside a container it has to "
+            "be 0.0.0.0."
         ),
     )
     api_port: int = Field(default=8000, gt=0, lt=65536, description="Port of the HTTP API.")

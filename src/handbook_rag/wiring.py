@@ -26,18 +26,29 @@ def make_embedder(settings: Settings) -> SentenceTransformerEmbedder:
         settings.embedding_model,
         query_prefix=settings.embedding_query_prefix,
         batch_size=settings.embedding_batch_size,
+        device=settings.embedding_device,
     )
 
 
-def make_store(settings: Settings) -> QdrantVectorStore:
-    """Connect to Qdrant, failing with a clear message if it is not running."""
-    client = QdrantClient(url=settings.qdrant_url, timeout=60)
-    try:
-        client.get_collections()
-    except Exception as error:
-        raise VectorStoreError(
-            f"Cannot reach Qdrant at {settings.qdrant_url}. Start it with `make qdrant`."
-        ) from error
+def make_store(
+    settings: Settings, *, check: bool = True, timeout: float = 60.0
+) -> QdrantVectorStore:
+    """Connect to Qdrant, failing with a clear message if it is not running.
+
+    A command wants to know at once that the store is missing, so by default it is
+    asked. A long-running service passes ``check=False``: it should start without the
+    store, report that in its health check, and work again when the store is back. It
+    also passes a shorter ``timeout``, so a store that hangs does not hold a request for
+    a minute.
+    """
+    client = QdrantClient(url=settings.qdrant_url, timeout=int(timeout))
+    if check:
+        try:
+            client.get_collections()
+        except Exception as error:
+            raise VectorStoreError(
+                f"Cannot reach Qdrant at {settings.qdrant_url}. Start it with `make qdrant`."
+            ) from error
     return QdrantVectorStore(client, settings.collection_name)
 
 

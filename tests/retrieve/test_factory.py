@@ -55,7 +55,7 @@ def test_hybrid_mode_loads_both(loaded: list[str]) -> None:
 
 def test_mode_defaults_to_the_setting(loaded: list[str]) -> None:
     assert isinstance(wiring.make_retriever(Settings(retrieval_mode="sparse")), SparseRetriever)
-    assert isinstance(wiring.make_retriever(Settings()), DenseRetriever)
+    assert isinstance(wiring.make_retriever(Settings()), HybridRetriever)
 
 
 def test_reranking_wraps_the_chosen_retriever_only_when_asked(loaded: list[str]) -> None:
@@ -69,7 +69,7 @@ def test_reranking_wraps_the_chosen_retriever_only_when_asked(loaded: list[str])
 
 def test_reranking_defaults_to_the_setting(loaded: list[str]) -> None:
     assert isinstance(wiring.make_retriever(Settings(rerank=True)), RerankingRetriever)
-    assert isinstance(wiring.make_retriever(Settings(rerank=True), rerank=False), DenseRetriever)
+    assert isinstance(wiring.make_retriever(Settings(rerank=True), rerank=False), HybridRetriever)
 
 
 def test_a_run_description_lists_only_what_the_configuration_uses() -> None:

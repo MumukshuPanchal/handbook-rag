@@ -30,6 +30,12 @@ from handbook_rag.wiring import RetrievalMode
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
+_RUN_DESCRIPTIONS = {
+    "dense": "Dense retrieval only.",
+    "sparse": "Keyword search only (BM25).",
+    "hybrid": "Dense and BM25 merged with reciprocal rank fusion.",
+}
+
 
 def _show_version(value: bool) -> None:
     if value:
@@ -230,8 +236,9 @@ def eval_retrieval(
         str, typer.Option(help="Name of this run: 'baseline', then 'v1', 'v2' and so on.")
     ] = "baseline",
     description: Annotated[
-        str, typer.Option(help="One line saying what this variant changes.")
-    ] = "Dense retrieval only.",
+        str | None,
+        typer.Option(help="One line saying what this variant is. Default: its retrieval mode."),
+    ] = None,
     output: Annotated[
         Path, typer.Option(help="Directory that holds one sub-directory per variant.")
     ] = Path("evals/runs/retrieval"),
@@ -249,6 +256,12 @@ def eval_retrieval(
 ) -> None:
     """Score retrieval on the golden set: is the right passage found, and how high?"""
     settings = get_settings()
+    chosen_mode = mode or settings.retrieval_mode
+    reranked = settings.rerank if rerank is None else rerank
+    if description is None:
+        description = _RUN_DESCRIPTIONS[chosen_mode]
+        if reranked:
+            description += " Then reranked by a cross-encoder."
     try:
         questions = load_golden_set(dataset)
         corpus = build_corpus(settings)
@@ -268,9 +281,8 @@ def eval_retrieval(
     run_dir = write_run(report, output, variant, description, config)
 
     typer.echo(f"Retrieval evaluation: {variant}")
-    reranked = settings.rerank if rerank is None else rerank
     typer.echo(
-        f"  mode        {mode or settings.retrieval_mode}"
+        f"  mode        {chosen_mode}"
         f"{', reranked with ' + settings.rerank_model if reranked else ''}"
     )
     typer.echo(f"  collection  {settings.collection_name}")

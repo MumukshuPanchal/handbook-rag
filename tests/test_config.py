@@ -71,3 +71,12 @@ def test_collection_name_changes_with_any_of_its_parts() -> None:
     assert Settings(embedding_model="BAAI/bge-base-en-v1.5").collection_name != default
     assert Settings(chunk_max_tokens=200).collection_name != default
     assert Settings(sparse_model="Qdrant/bm42").collection_name != default
+
+
+def test_search_is_hybrid_and_not_reranked_unless_configured() -> None:
+    from handbook_rag.config import Settings
+
+    settings = Settings()
+
+    assert settings.retrieval_mode == "hybrid"
+    assert settings.rerank is False

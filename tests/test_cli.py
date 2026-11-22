@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from qdrant_client import QdrantClient
@@ -451,3 +452,30 @@ def test_eval_table_prints_one_row_per_run(fake_pipeline: FakeEmbedder, tmp_path
     assert "no such metric" in unknown.output
     assert empty.exit_code == 1
     assert "no runs found" in empty.output
+
+
+def test_eval_retrieval_describes_a_run_by_its_mode_unless_told_otherwise(
+    fake_pipeline: FakeEmbedder, tmp_path: Path
+) -> None:
+    runner.invoke(app, ["index"])
+    dataset = tmp_path / "questions.jsonl"
+    dataset.write_text(golden_rows("sixteen weeks of paid leave"))
+    runs = tmp_path / "runs"
+    common = ["eval-retrieval", "--dataset", str(dataset), "--output", str(runs)]
+
+    default = runner.invoke(app, common)
+    runner.invoke(app, [*common, "--variant", "v1", "--mode", "sparse", "--rerank"])
+
+    def summary(variant: str) -> dict[str, Any]:
+        loaded: dict[str, Any] = json.loads((runs / variant / "summary.json").read_text())
+        return loaded
+
+    assert default.exit_code == 0, default.output
+    assert "mode        hybrid" in default.output
+    assert (
+        summary("baseline")["description"] == "Dense and BM25 merged with reciprocal rank fusion."
+    )
+    assert summary("baseline")["config"]["retrieval_mode"] == "hybrid"
+    assert summary("v1")["description"] == (
+        "Keyword search only (BM25). Then reranked by a cross-encoder."
+    )

@@ -42,8 +42,8 @@ index: ## Embed the chunks and store them in Qdrant
 search: ## Search the index, for example: make search q="how do I expense a laptop"
 	uv run handbook-rag search "$(q)"
 
-eval-retrieval: ## Score retrieval on the golden set
-	uv run handbook-rag eval-retrieval
+eval-retrieval: ## Score the default retrieval on the golden set, as the run named "current"
+	uv run handbook-rag eval-retrieval --variant current
 
 eval-compare: ## Compare two runs: make eval-compare base=baseline candidate=v1
 	uv run handbook-rag eval-compare $(base) $(candidate)

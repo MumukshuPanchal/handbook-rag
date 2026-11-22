@@ -53,6 +53,8 @@ The current set, its counts and its known limits are described in its [dataset c
 make eval-retrieval
 ```
 
+This scores the default configuration and writes it as the run named `current`, which is not committed.
+
 No language model is involved, so a run is free and gives the same result every time.
 
 Each way of retrieving is a variant of the same run, so they can be compared question by question:

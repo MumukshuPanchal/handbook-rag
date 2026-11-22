@@ -107,10 +107,10 @@ class Settings(BaseSettings):
     )
     search_limit: int = Field(default=5, gt=0, description="How many chunks a search returns.")
     retrieval_mode: Literal["dense", "sparse", "hybrid"] = Field(
-        default="dense",
+        default="hybrid",
         description=(
             "How chunks are retrieved: by meaning (dense), by keyword (sparse), or both "
-            "merged (hybrid)."
+            "merged (hybrid). Hybrid is the default because it measured best (ADR 0011)."
         ),
     )
     fusion_candidates: int = Field(

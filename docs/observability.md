@@ -82,7 +82,7 @@ One trace is one measurement, and on a busy laptop they vary: the search part of
 - `query.terms` is 0: the question contained only stop words, so keyword search had nothing to match on.
 - `fuse.in_both` is low: the two searches disagree, and each result rests on one of them. In the trace above they share 6 of their 30 candidates.
 
-**"It failed."** The failing span is marked as an error with the kind of exception, and so is every span around it. A search against a collection that was never built fails in `vector_store.query` with a `VectorStoreError`; the command line prints the message, "Collection ... does not exist yet".
+**"It failed."** The failing span is marked as an error with the kind of exception, and so is every span around it. A search against a collection that was never built fails in `vector_store.query` with a `CollectionMissingError`; the command line prints the message, "Collection ... does not exist yet". The span of a failed store call also records, in `error.type`, the kind of error the store's client raised underneath.
 
 ## What the first traces showed
 

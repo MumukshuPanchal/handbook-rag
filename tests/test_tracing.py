@@ -191,13 +191,15 @@ def test_a_failing_stage_is_marked_as_failed_and_so_is_every_stage_around_it(
 
     failed = named(spans, "vector_store.query")
     assert failed.status.status_code is StatusCode.ERROR
-    assert failed.status.description == "handbook_rag.index.store.VectorStoreError"
+    assert failed.status.description == "handbook_rag.index.store.CollectionMissingError"
     assert failed.kind is SpanKind.CLIENT, "a call to another system"
     (event,) = failed.events
     assert event.name == "exception"
     assert dict(event.attributes or {}) == {
-        "exception.type": "handbook_rag.index.store.VectorStoreError"
+        "exception.type": "handbook_rag.index.store.CollectionMissingError"
     }, "the kind of error only: no message and no stack trace"
+    # What went wrong underneath is kept as well, again by kind only.
+    assert (failed.attributes or {})["error.type"] == "builtins.ValueError"
     assert named(spans, "retrieve.dense").status.status_code is StatusCode.ERROR
     assert named(spans, "embed.query").status.status_code is not StatusCode.ERROR
 

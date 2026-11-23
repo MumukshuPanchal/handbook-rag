@@ -17,7 +17,6 @@ words, which repeat the value that was sent.
 """
 
 import logging
-import os
 import sys
 import threading
 import time
@@ -62,6 +61,12 @@ SERVER_NAME = "handbook-rag"
 TOOL_NAME = "search_handbook"
 # The thread that loads the models. Tests wait for it by this name.
 LOADER_THREAD = "handbook-rag-models"
+# The longest a call waits for the models. On the development laptop they loaded in 6.4
+# seconds, and in 47 the first time after an install; a download from the model hub can
+# take longer. A call that has waited this long is refused in fixed words, and the load
+# goes on, so a later call can find the models ready. Without a limit, a load that never
+# ends would hold every call, and the worker thread under it, for ever.
+MODELS_WAIT_SECONDS = 120.0
 
 # Said wherever a model reads the passages: in the tool's description and above the
 # passages themselves. A page can carry an instruction, and the adversarial tests found
@@ -104,8 +109,14 @@ SEARCH_TOOL = Tool(
     # The model that checks the arguments, so the schema and the check cannot drift apart.
     input_schema=SearchRequest.model_json_schema(),
     output_schema=SearchResult.model_json_schema(),
-    # It reads a fixed copy of the handbook on this machine, and changes nothing.
-    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    # Hints a client may show or act on. It changes nothing; it reads a fixed copy of the
+    # handbook in the project's own index. The protocol counts the destructive and the
+    # idempotent hint only for a tool that is not read-only, and their defaults are the
+    # opposite (destructive, not idempotent), so they are stated for a client that reads
+    # them anyway.
+    annotations=ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+    ),
 )
 
 # What a caller is told when its arguments break a limit. Fixed words that name the rule
@@ -115,6 +126,8 @@ LIMIT_REFUSED = f"limit must be a whole number from 1 to {MAX_LIMIT}, or left ou
 SECTION_REFUSED = "section must be the name of one handbook section, or left out."
 UNKNOWN_ARGUMENT = f"{TOOL_NAME} takes only query, limit and section."
 UNKNOWN_TOOL = f"This server has one tool, {TOOL_NAME}."
+# What a caller is told when the models are still loading after the longest wait.
+NOT_READY = "The search is not ready: its models are still loading. Try again in a minute."
 # What a caller is told about a fault in this server. The cause goes to the log.
 FAILED = "The search failed. The cause is in the server's log."
 _REFUSALS = {"query": QUERY_REFUSED, "limit": LIMIT_REFUSED, "section": SECTION_REFUSED}
@@ -122,44 +135,78 @@ _REFUSALS = {"query": QUERY_REFUSED, "limit": LIMIT_REFUSED, "section": SECTION_
 logger = logging.getLogger(__name__)
 
 
+class ModelsNotReady(Exception):
+    """The models are still loading after the longest a call waits for them."""
+
+
+class ModelsNotLoaded(Exception):
+    """The models could not be loaded. The thread that tried has logged why."""
+
+
 class Models:
     """The retriever and the models behind it, built once for the life of the server.
 
-    Building it loads the models, which takes seconds. So it starts in a thread of its own
-    as soon as the server starts, and a call that comes sooner waits for it. If building
-    fails, the next call tries again: a model that could not be read once is not lost
-    until the server is restarted.
+    Building it loads the models, which takes seconds. So it is built in a thread of its
+    own as soon as the server starts, and searched once there before anyone else may use
+    it. A call that comes sooner waits for that thread, for a limited time. If loading
+    fails, the next call starts it again: a model that could not be read once is not lost
+    until the server is restarted. Only that thread builds, so a load that never ends
+    holds no call longer than the wait.
     """
 
     def __init__(self, build: Callable[[], Retriever]) -> None:
         self._build = build
         self._lock = threading.Lock()
         self._retriever: Retriever | None = None
+        self._loader: threading.Thread | None = None
 
     def load_in_background(self) -> None:
-        # A daemon thread does not keep the process alive, so a client that hangs up while
-        # the models load does not leave the server running.
-        threading.Thread(target=self._load, name=LOADER_THREAD, daemon=True).start()
-
-    def get(self) -> Retriever:
-        """The retriever, built first if it has not been."""
+        """Start loading the models, unless they are loaded or being loaded."""
         with self._lock:
             if self._retriever is None:
-                self._retriever = self._build()
+                self._start_loading()
+
+    def get(self) -> Retriever:
+        """The retriever, once the models are loaded and have searched once.
+
+        Raises ``ModelsNotReady`` when they are still loading after the longest wait,
+        and ``ModelsNotLoaded`` when loading them failed again.
+        """
+        with self._lock:
+            if self._retriever is not None:
+                return self._retriever
+            loader = self._start_loading()
+        loader.join(MODELS_WAIT_SECONDS)
+        if self._retriever is not None:
             return self._retriever
+        if loader.is_alive():
+            raise ModelsNotReady
+        raise ModelsNotLoaded
+
+    def _start_loading(self) -> threading.Thread:
+        """The thread that loads the models, started unless one is at work. Hold the lock."""
+        if self._loader is None or not self._loader.is_alive():
+            # A daemon thread does not keep the process alive, so a client that hangs up
+            # while the models load does not leave the server running.
+            self._loader = threading.Thread(target=self._load, name=LOADER_THREAD, daemon=True)
+            self._loader.start()
+        return self._loader
 
     def _load(self) -> None:
         started = time.perf_counter()
         try:
-            retriever = self.get()
-            # Searched once, so that the first call does not meet a cold model. The store
-            # may be down; the first call will say so.
+            retriever = self._build()
+            # Searched once, so that the first call does not meet a cold model, and before
+            # any call may have the retriever, so that the two never search at once. The
+            # store may be down; the first call will say so.
             with suppress(VectorStoreError), stage("warm_up"):
                 retriever.retrieve(WARM_UP_QUERY, limit=1)
         except Exception:
-            # Nobody waits for this thread, so the cause is logged here. A call tries again.
+            # Nobody waits for this thread, so the cause is logged here. Nothing a caller
+            # sent is in it. A call starts the load again.
             logger.exception("the search could not be prepared")
             return
+        self._retriever = retriever
         logger.info("the models are loaded, after %.1f s", time.perf_counter() - started)
 
 
@@ -185,13 +232,18 @@ def create_server(
     models = Models(build)
 
     def search(arguments: dict[str, Any]) -> CallToolResult:
-        """Run one call of the tool. It blocks, so it runs in a worker thread."""
-        try:
-            request = SearchRequest.model_validate(arguments)
-        except ValidationError as error:
-            return _refused(_refusal(error))
+        """Run one call of the tool. It blocks, so it runs in a worker thread.
+
+        Whatever goes wrong in it, the caller gets fixed words and the log gets the cause.
+        An error that left this function would reach the caller with its own message,
+        because that is what the SDK sends for it.
+        """
         traced: str | None = None
         try:
+            try:
+                request = SearchRequest.model_validate(arguments)
+            except ValidationError as error:
+                return _refused(_refusal(error))
             # Outside the trace: loading the models is a cost of starting the server, not
             # of answering this question.
             ready = models.get()
@@ -207,29 +259,39 @@ def create_server(
                     section=request.section,
                 )
                 record_results(span, results)
+            response = SearchResult(
+                results=[Passage.from_result(rank, found) for rank, found in enumerate(results, 1)],
+                mode=settings.retrieval_mode,
+                reranked=settings.rerank,
+                took_ms=round((time.perf_counter() - started) * 1000, 1),
+                trace_id=traced,
+            )
+            # Both forms: a client that reads structured results gets the same object as
+            # POST /search returns, and one that only shows text gets text.
+            return CallToolResult(
+                content=[TextContent(text=_as_text(response))],
+                structured_content=response.model_dump(mode="json"),
+            )
+        except ModelsNotReady:
+            logger.warning(
+                "search refused: the models were still loading after %.0f s", MODELS_WAIT_SECONDS
+            )
+            return _refused(NOT_READY)
         except VectorStoreError as error:
             # The cause goes to the log, not to the caller: it can name internal
-            # addresses. The trace records the kind of error.
+            # addresses. The store writes these messages itself, and they name the store,
+            # never the question. The trace records the kind of error.
             logger.warning("search failed, trace %s: %s", traced, error)
             return _refused(NOT_BUILT if isinstance(error, CollectionMissingError) else UNAVAILABLE)
-        except Exception:
-            # A fault in this server. Raised further, the SDK would send its message to
-            # the caller, so it is logged here with its stack trace instead.
-            logger.exception("search failed, trace %s", traced)
+        except Exception as error:
+            # A fault in this server. Its message is not known in advance and could quote
+            # the question, so the log holds what a trace holds: the kind of error, and its
+            # message and stack trace only when content is switched on.
+            if settings.trace_content:
+                logger.exception("search failed, trace %s", traced)
+            else:
+                logger.error("search failed, trace %s: %s", traced, _kind_of(error))
             return _refused(FAILED)
-        response = SearchResult(
-            results=[Passage.from_result(rank, result) for rank, result in enumerate(results, 1)],
-            mode=settings.retrieval_mode,
-            reranked=settings.rerank,
-            took_ms=round((time.perf_counter() - started) * 1000, 1),
-            trace_id=traced,
-        )
-        # Both forms: a client that reads structured results gets the same object as
-        # POST /search returns, and one that only shows text gets text.
-        return CallToolResult(
-            content=[TextContent(text=_as_text(response))],
-            structured_content=response.model_dump(mode="json"),
-        )
 
     @asynccontextmanager
     async def lifespan(_server: Server[None]) -> AsyncIterator[None]:
@@ -270,24 +332,17 @@ def create_server(
     )
 
 
-def serve_stdio(settings: Settings | None = None) -> None:
-    """Serve the tool over standard input and output until the client closes its end.
+def serve_stdio(wire: TextIO, settings: Settings | None = None) -> None:
+    """Serve the tool until the client closes its end of standard input.
 
     On this transport standard output carries the protocol, and one line of anything else
-    there breaks the client's connection. So log records go to standard error, and so
-    does anything else written to standard output from the moment the server is built.
+    there breaks the client's connection. So the command has already given the protocol a
+    copy of standard output of its own, ``wire``, where the replies go, and pointed the
+    process's standard output at standard error. Log records go to standard error too.
     """
     settings = settings or get_settings()
     _log_to_standard_error(settings)
-    server = create_server(settings)
-    # The protocol gets a copy of standard output of its own, and from here until the
-    # process ends standard output is standard error: a stray print, a library that writes
-    # there, even text Python still holds in its buffer, all land in the log. The SDK's
-    # transport would divert standard output only while it serves, and point it back at
-    # the client when the client hangs up, while a thread may still be loading a model.
-    wire = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8")
-    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
-    anyio.run(_serve_over_stdio, server, wire)
+    anyio.run(_serve_over_stdio, create_server(settings), wire)
 
 
 async def _serve_over_stdio(server: Server[None], wire: TextIO) -> None:
@@ -332,11 +387,18 @@ def _refused(words: str) -> CallToolResult:
     return CallToolResult(content=[TextContent(text=words)], is_error=True)
 
 
+def _kind_of(error: BaseException) -> str:
+    """The kind of an error, as a trace records it when content is off."""
+    return f"{type(error).__module__}.{type(error).__qualname__}"
+
+
 def _as_text(response: SearchResponse) -> str:
     """The passages as text that a person or a model can read, best first.
 
-    Each line of a passage is quoted with "> ", so that nothing a page says can pass for
-    the start of another passage.
+    Every line of a passage begins with what this server writes: its rank before its
+    title and headings, ``address:``, ``score``, or ``>`` before each line of its text.
+    The title, each heading and the address are put on one line whatever they hold, so
+    nothing a page says can start a line, or pass for the start of another passage.
     """
     count = len(response.results)
     if count == 0:
@@ -346,7 +408,22 @@ def _as_text(response: SearchResponse) -> str:
         f"{MATERIAL_NOT_INSTRUCTIONS}"
     ]
     for passage in response.results:
-        where = " > ".join((passage.title, *passage.heading_path))
+        where = " > ".join(_one_line(part) for part in (passage.title, *passage.heading_path))
+        # Split as Python splits lines, which is at every kind of line break and
+        # separator, not only at "\n".
         quoted = "\n".join(f"> {line}".rstrip() for line in passage.text.splitlines())
-        parts.append(f"{passage.rank}. {where}\n{passage.url}\nscore {passage.score:.4f}\n{quoted}")
+        parts.append(
+            f"{passage.rank}. {where}\naddress: {_one_line(passage.url)}\n"
+            f"score {passage.score:.4f}\n{quoted}"
+        )
     return "\n\n".join(parts)
+
+
+def _one_line(text: str) -> str:
+    """The text on one line, with every run of white space made one space.
+
+    White space here includes every character at which Python splits lines: line feed,
+    carriage return, the vertical tab and form feed, the file, group and record
+    separators, the next-line character, and the Unicode line and paragraph separators.
+    """
+    return " ".join(text.split())

@@ -2,11 +2,13 @@
 
 import dataclasses
 import json
+import os
 import statistics
+import sys
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, TextIO
 
 import typer
 
@@ -345,10 +347,28 @@ def mcp_server() -> None:
     Protocol to it. Nothing but the protocol is written to standard output; the log goes
     to standard error.
     """
+    # First, before the server's module and the libraries it brings are imported, so
+    # that nothing they write on the way reaches the client.
+    wire = _keep_standard_output_for_the_protocol()
     # Imported here so that other commands do not load the protocol's SDK.
     from handbook_rag.mcp_server import serve_stdio
 
-    serve_stdio(get_settings())
+    serve_stdio(wire, get_settings())
+
+
+def _keep_standard_output_for_the_protocol() -> TextIO:
+    """Give the protocol a copy of standard output of its own, and send the rest elsewhere.
+
+    On an MCP server's standard output, one line that is not the protocol breaks the
+    client's connection. From this call until the process ends, standard output is
+    standard error: a stray print, a library that writes there, even text Python still
+    holds in its buffer, all land in the log. The SDK's transport would divert standard
+    output only while it serves, and point it back at the client when the client hangs
+    up, while a thread may still be loading a model. Returns the copy.
+    """
+    wire = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8")
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    return wire
 
 
 @app.command(name="eval-retrieval")

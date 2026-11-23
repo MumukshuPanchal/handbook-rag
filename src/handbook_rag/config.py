@@ -198,7 +198,8 @@ class Settings(BaseSettings):
         description=(
             "Whether traces include the text of questions and the message and stack "
             "trace of errors. Off by default: a trace then holds ids, scores, sizes and "
-            "timings, and an error by its kind only. Switch on for local debugging."
+            "timings, and an error by its kind only. The MCP server's log of a failed "
+            "search follows it too. Switch on for local debugging."
         ),
     )
     gemini_api_key: SecretStr | None = Field(

@@ -4,6 +4,10 @@ What each version of this project contains. The format follows [Keep a Changelog
 
 ## [Unreleased]
 
+### Added
+
+- A demo page at `/`, served by the API: a question box that shows the answer as the model writes it, then the answer with its sources, the model, the tokens, the timings and the trace id, and beside it what the search found. Three hand-written files with no build step. Everything from the API is shown as text, an address in an answer is never a link, and a strict content security policy is sent with each file. `HANDBOOK_RAG_API_DEMO=false` switches it off ([#19], [ADR 0016]).
+
 ### Changed
 
 - The repository is named `handbook-rag`, like the Python package and the command. It was `production-rag-pipeline`. GitHub redirects the old address, and the links in the documents use the new one ([#70]).
@@ -98,6 +102,7 @@ These are the [limitations in the README](README.md#limitations).
 [#8]: https://github.com/MumukshuPanchal/handbook-rag/issues/8
 [#17]: https://github.com/MumukshuPanchal/handbook-rag/issues/17
 [#18]: https://github.com/MumukshuPanchal/handbook-rag/issues/18
+[#19]: https://github.com/MumukshuPanchal/handbook-rag/issues/19
 [#21]: https://github.com/MumukshuPanchal/handbook-rag/issues/21
 [#23]: https://github.com/MumukshuPanchal/handbook-rag/pull/23
 [#25]: https://github.com/MumukshuPanchal/handbook-rag/pull/25
@@ -153,3 +158,4 @@ These are the [limitations in the README](README.md#limitations).
 [ADR 0013]: docs/adr/0013-gemini-free-tier-with-marker-citations.md
 [ADR 0014]: docs/adr/0014-answer-evaluation-in-stages.md
 [ADR 0015]: docs/adr/0015-answers-over-http.md
+[ADR 0016]: docs/adr/0016-a-demo-page-without-a-build-step.md

@@ -77,6 +77,7 @@ The first working version (the baseline) used dense search only and skipped step
 | Reranker | Re-score candidates against the question | sentence-transformers cross-encoder | [ADR 0005](adr/0005-local-embedding-and-reranking-models.md) |
 | Generator | Write a grounded, cited answer | Gemini through Google's API by default, or Claude through the Anthropic API | [ADR 0013](adr/0013-gemini-free-tier-with-marker-citations.md), [ADR 0006](adr/0006-claude-with-native-citations-for-generation.md), [ADR 0010](adr/0010-search-result-blocks-and-declining.md) |
 | API | HTTP interface: `POST /ask` (JSON or server-sent events), `POST /search` and `GET /health` | FastAPI | [ADR 0015](adr/0015-answers-over-http.md) |
+| Demo page | A page at `/` that asks `POST /ask`, shows the answer as it arrives with its sources, and what `POST /search` found beside it | Three hand-written files served by the API: HTML, JavaScript and CSS, with no framework and no build step | [ADR 0016](adr/0016-a-demo-page-without-a-build-step.md) |
 | Evaluation | Measure retrieval and answer quality | Our own harness | [ADR 0007](adr/0007-evaluation-strategy.md) |
 | Tracing | Record every stage of a request, when switched on | OpenTelemetry | [ADR 0008](adr/0008-opentelemetry-tracing.md) |
 
@@ -154,6 +155,8 @@ src/handbook_rag/
     generate/           prompt assembly, one generator per provider, citation mapping
     pipeline.py         the single entry point: question in, answer out
     api.py              the FastAPI application
+    demo.py             serves the demo page and its two files, with their security headers
+    static/             the demo page: HTML, JavaScript and CSS, written by hand
     streaming.py        an answer written in a worker thread, read as a stream of events
     tracing.py          tracing setup, and what each span records
     wiring.py           builds the parts from the settings
@@ -176,7 +179,8 @@ compose.yaml            API, Qdrant and trace backend
 - **No secrets in git.** Credentials live in the environment.
 - **Minimal data retention.** Questions and answers are not stored outside traces, and traces record metadata only unless content recording is switched on for local debugging.
 - **Fixed words for callers.** A failure is reported to a caller of the API in words chosen in advance. The error's own message, which can name files, settings and internal addresses, goes to the log with the trace ID.
-- **Not in scope for the first version.** User authentication, rate limiting for each caller and per-document permissions. The corpus is public, so no access control is needed to read it. The API caps how many answers it writes at once, which protects the model's allowance from a burst, not from one caller who keeps asking.
+- **The demo page shows what the API sends as text.** An answer is written by a model from pages anyone can edit, and the adversarial tests saw a planted link reach the answer. So the page's script builds each element and sets its text, and never reads text as HTML or code; an address in an answer is not a link, and the only links are the sources' pages, for `https://` and `http://` addresses. A strict content security policy, sent as a header, lets the page run only its own script and style and talk only to its own server, and forbids framing. A test reads the script for the calls it must not make. Details: [ADR 0016](adr/0016-a-demo-page-without-a-build-step.md).
+- **Not in scope for the first version.** User authentication, rate limiting for each caller and per-document permissions. The demo page adds none of them, so it is for the machine the service runs on. The corpus is public, so no access control is needed to read it. The API caps how many answers it writes at once, which protects the model's allowance from a burst, not from one caller who keeps asking.
 
 ## Deliberately left out
 

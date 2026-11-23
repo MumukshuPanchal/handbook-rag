@@ -96,6 +96,16 @@ curl -s -X POST localhost:8000/ask \
 
 The response, the streamed form and the errors are described under [HTTP API](#http-api).
 
+#### The demo page
+
+While the service runs, <http://127.0.0.1:8000/> is a page where you type a question and watch the answer arrive as the model writes it. Then it shows the answer with the numbers of its sources as buttons after the statements they support, each leading to its source, the sources with their pages and passages, the model, the tokens, the timings and the trace id. Beside it, folded away, are the passages the search found for the same question, to compare with the ones the answer cites. Three questions from the test set are there to click.
+
+![The demo page with a real answer: the question, the answer with numbered buttons after its statements, the three sources it cites, the facts of the request, and the five passages the search found](docs/images/demo-page.png)
+
+A real answer on 23 November 2026. That evening the free model was overloaded: the first text came after 39.9 seconds, where the median reply of the evaluation took 2.4. A few questions earlier a reply had broken off halfway with the provider's "high demand" error, and the page showed what had arrived and said so. The time limits and the fallback of [issue 42](https://github.com/MumukshuPanchal/handbook-rag/issues/42) are for evenings like this.
+
+The page is for this machine only: like the rest of the API it has no login, and every question asked on it spends the key's allowance. Everything in an answer is shown as plain text, so an address the model writes is not a link, because a handbook page can plant one ([adversarial tests](#adversarial-tests)). It is three hand-written files served by the API, with no build step and a strict content security policy ([ADR 0016](docs/adr/0016-a-demo-page-without-a-build-step.md)). `HANDBOOK_RAG_API_DEMO=false` switches it off.
+
 ### With Docker Compose
 
 `docker compose up` starts the API, the vector store and the trace backend. Only Docker is needed.
@@ -217,6 +227,7 @@ What this version does not do, or does not show. Each point is already stated in
 - **Answers that leave out a limit or an exception are not measured reliably.** The judge passed the three real ones, and counting them as faults would take "supported" from 0.984 to 0.961 ([issue 59](https://github.com/MumukshuPanchal/handbook-rag/issues/59)).
 - **One reply for each question, on a free tier with uneven speed.** The same question gets a different answer each time, so a second run would not give exactly these numbers. The free key allowed 15 requests a minute and 500 a day, which Google does not guarantee ([ADR 0014](docs/adr/0014-answer-evaluation-in-stages.md)). Its speed is uneven: the 95th percentile of the model call alone was 10.1 s, over the charter's 10 seconds before the search is added ([the run](evals/runs/answers/baseline)).
 - **No authentication and no rate limit for each caller.** Anyone who reaches the port can spend the key's allowance. The service listens on this machine only unless told otherwise, and it caps answers in flight, not callers ([ADR 0015](docs/adr/0015-answers-over-http.md)). A model call has no deadline for the whole answer and no fallback ([issue 42](https://github.com/MumukshuPanchal/handbook-rag/issues/42)).
+- **No automated test runs the demo page's script.** The project has no JavaScript toolchain. The tests check the page's files, their headers and the script's source, and how the page behaves in a browser is left to a check by hand ([ADR 0016](docs/adr/0016-a-demo-page-without-a-build-step.md)).
 - **One pinned snapshot of the handbook.** Everything is built and measured on the handbook at one commit ([ADR 0002](docs/adr/0002-handbook-corpus.md)). It does not follow the live handbook ([issue 21](https://github.com/MumukshuPanchal/handbook-rag/issues/21)), and text the handbook repeats is indexed as often as it appears ([issue 34](https://github.com/MumukshuPanchal/handbook-rag/issues/34)).
 - **The Claude path has never been run, and model tiers were not compared.** The Claude generator is unit-tested and has never met the Claude API, which needs a paid key. So the comparison of tiers on quality, speed and cost was not done ([issue 17](https://github.com/MumukshuPanchal/handbook-rag/issues/17)), and the answer model was chosen among free Gemini models from a handful of requests ([ADR 0013](docs/adr/0013-gemini-free-tier-with-marker-citations.md)).
 - **Checked on one laptop.** The real runs, the timings and the Docker checks were made on one development laptop, an 8-core Apple M1 Pro ([ADR 0005](docs/adr/0005-local-embedding-and-reranking-models.md)). CI runs the fast tests and the retrieval gate, and builds the image. The quickstart has not been followed on a clean machine, and a full indexing run inside a container has not been done.
@@ -300,6 +311,7 @@ The limits below are set in [`api.py`](src/handbook_rag/api.py) and [`config.py`
 | `POST /search` | `query` (1 to 500 characters), optional `limit` (1 to 20) and `section` |
 | `GET /health` | 200 with the number of chunks in the index, and whether answering is configured. 503 if the vector store cannot be reached, the index has not been built, or it is empty, and it says which |
 | `GET /docs` | Interactive documentation, generated from the code |
+| `GET /` | The [demo page](#the-demo-page), with its script and style under `/static/`. Not in the documentation. `HANDBOOK_RAG_API_DEMO=false` switches it off |
 
 - **Bad requests.** A request that breaks a limit gets a 422 that names the field, without repeating what was sent. A body over 8 KB gets a 413.
 - **Failures are a 503 in fixed words.** A vector store or answer model that is unavailable, the model's per-minute limit or daily allowance, answering that is not configured, or a service already writing as many answers as it can: each gets a 503 that says which. A per-minute limit and a full service add a `Retry-After` header when the wait is known. It is not 429, because the limits are the service's own with its model provider. The error's own message goes to the service's log, because it can name internal addresses.
@@ -327,6 +339,7 @@ The commands are in the [quickstart](#with-docker-compose). On the development l
 | Address | What is there |
 |---|---|
 | <http://localhost:8000/docs> | The API and its documentation |
+| <http://localhost:8000/> | The [demo page](#the-demo-page) |
 | <http://localhost:16686> | Traces of every request |
 | <http://localhost:6333/dashboard> | Qdrant's own dashboard |
 

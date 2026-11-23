@@ -2,15 +2,15 @@
 
 A knowledge assistant that answers questions from a company handbook, built the way a production team would build it: answers grounded in retrieved passages and cited, quality measured by an evaluation suite, and every request traced for latency and cost.
 
-**Status: the assistant answers real questions with citations, and its answers are measured: by code, and by a judge model that was itself checked first. Search is built, measured, served and traced.**
+**Status: the assistant answers real questions with citations, and its answers are measured: by code, and by two judges that were themselves checked first. Search is built, measured, served and traced.**
 
 - The handbook is indexed, and hybrid search is the default, chosen on a checked set of test questions.
 - It runs as a service: an HTTP API, and `docker compose up` for the whole system.
 - Every request is traced, stage by stage.
 - CI fails when retrieval breaks.
 - `ask` retrieves passages and has a language model write an answer that cites them, or says the handbook does not cover the question. It runs on Gemini with a free API key, and ran for real on 22 November 2026.
-- All 165 test questions were put to it on 22 November 2026. It made the right call, to answer or to decline, on 0.958 of them, and 0.984 of its answers were fully backed by the passages they cite.
-- Not done yet: answers are not compared with the reference answers, `ask` is a command and not an HTTP endpoint, and the model call is not traced.
+- All 165 test questions were put to it on 22 November 2026. It made the right call, to answer or to decline, on 0.958 of them. Of its answers, 0.984 were fully backed by the passages they cite, and 0.984 agreed with the reference answer.
+- Not done yet: `ask` is a command and not an HTTP endpoint, the model call is not traced, and no person has checked the labels the judges were tested against.
 
 This README is updated as each milestone lands.
 
@@ -52,12 +52,14 @@ Retrieval on 132 test questions over 38,881 chunks of the handbook. These are th
 
 ### Answer scores
 
-All 165 test questions, answered by `gemini-3.5-flash-lite` from the five passages hybrid search found, on 22 November 2026. The second score comes from a judge model, and the others are computed by code from the saved replies. The run is [`evals/runs/answers/baseline`](evals/runs/answers/baseline), and [the evaluation guide](docs/evaluation.md#answer-metrics) says what each score means.
+All 165 test questions, answered by `gemini-3.5-flash-lite` from the five passages hybrid search found, on 22 November 2026. The second, third and fourth scores come from two judge models, and the others are computed by code from the saved replies. The run is [`evals/runs/answers/baseline`](evals/runs/answers/baseline), and [the evaluation guide](docs/evaluation.md#answer-metrics) says what each score means.
 
 | Score | Result (95% interval) | Questions |
 |---|---|---|
 | Right call: answered what the handbook answers, declined what it does not | 0.958 (0.927 to 0.988) | 165 |
 | Supported by its sources: no statement goes beyond the passage it cites | 0.984 (0.961 to 1.000) | 129 |
+| Correct by the reference: the answer agrees with the reference answer | 0.984 (0.961 to 1.000) | 127 |
+| Gets a correct answer: of the questions the handbook answers, those answered correctly | 0.947 (0.902 to 0.985) | 132 |
 | Answers when it should | 0.962 (0.924 to 0.992) | 132 |
 | Declines when it should | 0.939 (0.848 to 1.000) | 33 |
 | Every statement cited | 0.977 (0.953 to 1.000) | 129 |
@@ -68,7 +70,9 @@ All 165 test questions, answered by `gemini-3.5-flash-lite` from the five passag
 - **Speed is uneven on the free tier.** The median reply took 2.4 s, and 95% arrived within 10.1 s. That is the model call alone, without the search, and it is just over the 10 seconds the charter allows for a complete answer. A third took more than 5 s.
 - **The judge was checked before its score was used.** It was given [169 labelled answers](evals/judge/README.md), 40 of them with one planted fault. It caught all 41 statements labelled unsupported (95% interval 0.914 to 1.000) and raised one false alarm in 42. The judge is the answer model itself, because no other free model allows enough requests, and the labels were made by models of another family, not by a person ([ADR 0014](docs/adr/0014-answer-evaluation-in-stages.md)).
 - **Where the judge is weak: limits that an answer leaves out.** Three real answers drop a limit or an exception that their passage states. Readers split on them, and the judge passed all three. If they count as faults, the score is 0.961.
-- **Not measured yet: whether an answer is correct.** That compares each answer with the reference answer, and needs a second judged score.
+- **A second judge compares each answer with the reference answer.** It was checked on [167 labelled answers](evals/judge/README.md#the-second-set-answers-against-their-reference-answers), 40 of them with a planted fault: it caught 39 of the 40 (95% interval 0.871 to 0.996) and raised 2 false alarms in 41. It then called 125 of the 127 answers correct, and the two it faulted are those false alarms: answers that leave out a next step the question did not ask for.
+- **Seven of the 132 answerable questions did not get a correct answer.** Five are search misses, where the assistant declined, and two are the judge's doubtful `partial`. When the search finds the passage, the assistant answers, and answers correctly.
+- **"Correct" means "agrees with the reference answer".** Most reference answers were written by a model from the same passage the assistant later quotes, so this score says the assistant reports what it reads. It says less about hard questions.
 - **One run, one reply for each question.** The same question gets a different answer each time, so a second run would not give exactly these numbers.
 
 **How far to trust these numbers.** The test questions were made by one model session and checked by another, over several rounds. No person has verified them one by one, and most were written by a model that could see the passage. The [dataset card](evals/golden/README.md) says how the set was made, what the checks found, and what its limits are.
@@ -168,6 +172,8 @@ make eval-retrieval  # score the default search, as a scratch run named "current
 make eval-answers    # answer every test question and score what code can check: 165 real requests
 make eval-judge      # check the judge against labelled answers: 169 real requests
 make eval-support    # judge the saved answers: is each statement backed by the passage it cites?
+make eval-judge-correct  # check the second judge against its labelled answers: 167 real requests
+make eval-correct    # judge the saved answers: does each one agree with the reference answer?
 make eval-table      # print a results table with one row per run on disk
 make eval-gate       # the retrieval check CI runs, on a slice of the handbook
 ```

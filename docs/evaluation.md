@@ -144,7 +144,9 @@ It puts every golden question through the same entry point that `ask` uses, save
 | Score | Taken over | What it says |
 |---|---|---|
 | Right call | every question | The assistant answered a question the handbook answers, or declined one it does not |
-| Supported by its sources | answers | No statement in the answer is unsupported by the passage it cites. This one comes from the judge, described [below](#the-judged-score-supported-by-its-sources) |
+| Supported by its sources | answers | No statement in the answer is unsupported by the passage it cites. This one comes from a judge, described [below](#the-judged-score-supported-by-its-sources) |
+| Correct by the reference | answers to answerable questions | The answer agrees with the reference answer. From a second judge, described [below](#the-second-judged-score-correct-by-the-reference) |
+| Gets a correct answer | answerable questions | The asker got a correct answer: the question was answered, and the second judge called the answer correct. A reply that declined counts as none. It is given only once that judge has ruled on every answer |
 | Answers when it should | answerable questions | The same score, for the questions that have an answer |
 | Declines when it should | unanswerable questions | The same score, for the questions that have none |
 | Evidence among the passages | answerable questions | A passage the model was given covers the known evidence. This is the search's Hit@5 for the run |
@@ -206,7 +208,7 @@ Against the targets in the [charter](charter.md):
 | At most 0.05 of answerable questions declined | 0.038 (5 of 132) | Met. All five are search misses |
 | 95% of answers complete within 10 seconds | 10.1 s for the model call | Just missed, on the free tier |
 | At least 0.90 of answers supported by their sources | 0.984 (127 of 129) | Met, by a judge that was checked first. See [the judged score](#the-judged-score-supported-by-its-sources) |
-| At least 0.80 of answers correct | not measured yet | It needs a second judged criterion |
+| At least 0.80 of answers correct | 0.984 (125 of 127) | Met, by a second judge that was checked first. See [the second judged score](#the-second-judged-score-correct-by-the-reference) |
 
 **How far to trust these numbers.** Each question was asked once, and the same question gets a different answer each time, so a second run would not give exactly these numbers. The intervals cover which questions were asked, not how the model would answer them again. The questions were made and checked by model sessions and have not been verified by a person. The scores in this table come from code, and none of them says that an answer is true to its passage: that is the judged score, below.
 
@@ -294,6 +296,74 @@ Scoring cost no request: the check had already read these 129 answers, and a ver
 | An answer the judge could not rule on has no verdict | It is counted neither as supported nor as unsupported |
 | A statement labelled `unclear` is left out of every agreement figure | No verdict is forced where careful readers split |
 
+## The second judged score: correct by the reference
+
+An answer can be true to its passages and still not answer the question: it can answer another one, or give half of what was asked. Every question the handbook answers has a reference answer in the golden set, so a second judge compares the two.
+
+```bash
+uv run handbook-rag eval-judge --criterion correct --variant baseline
+uv run handbook-rag eval-correct --variant baseline --checked evals/runs/judge-correct/baseline
+```
+
+As with the first judge, the first command checks the judge and the second scores a run's saved answers. Neither asks a question again. `make eval-judge-correct` and `make eval-correct` do the same for the scratch run.
+
+### What this judge decides
+
+The judge is given the question, the reference answer and the assistant's answer. It does not see the passages or the citations. It gives one verdict on the answer as a whole, with its reason first:
+
+| Verdict | Meaning |
+|---|---|
+| `correct` | The answer gives what the question asks for, as the reference answer gives it, and nothing in it contradicts the reference answer |
+| `partial` | What it says is right, but part of what the question asks for is missing: some of the items, one of two conditions |
+| `incorrect` | Another fact, the opposite, a rule for other people, an answer to another question, or no answer at all |
+
+Only `correct` counts. Two rules decide most cases: **the question decides what matters**, so an answer need not repeat background, a reason or a next step that was not asked for; and **more detail is fine** unless it contradicts the reference answer.
+
+The judge's instructions are [the rubric](../evals/judge/correct/rubric.md), word for word: the file is written out from the code, and a test compares the two. The first judge was found to have been told two rules fewer than the readers who labelled its test answers, and this is how the second one avoids that. The rubric was also fixed before the first label was made.
+
+### Checking this judge
+
+The judge was given [167 labelled answers](../evals/judge/README.md#the-second-set-answers-against-their-reference-answers): the 127 answers of the first run that have a reference answer, which three readers all called correct, and 40 copies with one planted fault, five of each of eight kinds. The check, `baseline`, on 23 November 2026, with `gemini-3.5-flash-lite` as the judge:
+
+| | Result (95% interval) | Out of |
+|---|---|---|
+| Answers that are not correct, caught (recall) | 0.975 (0.871 to 0.996) | 40 answers |
+| Alarms that were right (precision) | 0.951 (0.839 to 0.987) | 41 alarms |
+| Same decision as the label, correct or not | 0.982 (0.949 to 0.994) | 167 answers |
+| Agreement beyond chance (Cohen's kappa) | 0.951 | |
+
+- **39 of the 40 planted faults were caught**: all five of a changed number, a changed name, a reversed answer, another scope, an added contradiction, an answer to another question and a reply that gives no answer. All 35 answers labelled `incorrect` were judged `incorrect`.
+- **The one it missed is an omission.** A list of six countries had one removed, and the judge wrote that the answer "lists all the correct countries". It caught the other four omissions.
+- **Both false alarms are about omissions too, in the other direction.** The judge called two real answers `partial` for leaving out a next step that the question did not ask for. One was asked which macro to reply with, gave it, and left out that the ticket is then set to On-Hold. The readers called both correct, by the rule that the question decides what matters. A stricter reader could side with the judge.
+- **So omissions are where this judge is least reliable**, in both directions: 4 of 5 caught, and 2 of 127 complete answers called partial. On a plainly wrong fact it did not err once.
+- **It took 167 requests for 167 answers**, with no failure. A request sends about 900 tokens.
+
+How far this goes:
+
+- **39 of 40 is a small sample.** The interval reaches down to 0.871.
+- **The planted faults are plain by design**, and the three readers agreed on every one of the 167 answers. That shows the cases are easy for readers of that kind. A wrong answer as subtle as a real slip is not in the set.
+- **The real answers held no fault** for the judge to find, by the readers' labels.
+- **The judge is the answer model**, and no person has checked a label.
+
+### The scores
+
+| Score | Result (95% interval) | Out of |
+|---|---|---|
+| Correct by the reference | 0.984 (0.961 to 1.000) | 127 answers |
+| Gets a correct answer | 0.947 (0.902 to 0.985) | 132 questions |
+
+- **125 of the 127 answers were judged correct, 2 partial and none incorrect.** The two are the false alarms described above, because the answers of this run are the real answers of the labelled set. By the readers' labels all 127 are correct. So the score lies between 0.984 and 1.000, depending on whether an answer has to repeat a next step that was not asked for.
+- **"Gets a correct answer" is the score for the whole pipeline.** Of the 132 questions the handbook answers, 125 got an answer that the judge called correct. Of the 7 that did not, 5 are the questions whose evidence the search missed, where the assistant declined, and 2 are the judge's `partial`. By the readers' labels it is 127 of 132, or 0.962, which is the search's Hit@5 once more: when the search finds the passage, the assistant answers, and answers correctly.
+- **The charter asks for at least 0.80 of answers correct**, and that is met.
+- **By where a question came from**: all 10 questions written without sight of the handbook got a correct answer. Of the 122 written from a passage, 115 did.
+
+What "correct" does and does not mean here:
+
+- **It means "agrees with the reference answer".** Most reference answers were written by a model from the very passage the assistant later quotes, so agreement is likely once the passage is found. A high score here says the assistant reports what it reads. It says less about hard questions.
+- **A wrong reference answer would pass on a wrong answer that repeats it.** The reference answers were checked by model sessions, not by a person.
+- **It does not say that the answer is backed by its passages.** That is the first judge's score. An answer can be correct and add a detail no passage supports.
+- **Scoring cost no request.** The check had already read these 127 answers.
+
 ## What a run writes
 
 Each kept run is a variant: `baseline` first, then `v1`, `v2` and so on. (`current` is the scratch run.) A variant directory under `evals/runs/retrieval/` contains:
@@ -316,10 +386,11 @@ An answer run under `evals/runs/answers/` has the same files, with two differenc
 | `run.json` | The settings the run was started with, and how many requests it has sent |
 | `support.jsonl`, `support.json` | The judge's verdict on every statement of every answer, with its reasons, and the judge that made them |
 | `support_check.json` | The agreement with labelled answers that was measured for that judge |
+| `correct.jsonl`, `correct.json`, `correct_check.json` | The same three for the second judge: its verdict on every answer that has a reference answer |
 
 There is no `retrieved.jsonl`: `answers.jsonl` already lists the passages.
 
-A judge check under `evals/runs/judge/` holds `judgements.jsonl` (every verdict and reason), `disagreements.jsonl` (each statement the judge decided otherwise than its label), `summary.json` (the agreement figures) and `run.json`.
+A check of the first judge under `evals/runs/judge/`, or of the second under `evals/runs/judge-correct/`, holds `judgements.jsonl` (every verdict and reason), `disagreements.jsonl` (each statement the judge decided otherwise than its label), `summary.json` (the agreement figures) and `run.json`.
 
 ## Checks the harness itself must pass
 

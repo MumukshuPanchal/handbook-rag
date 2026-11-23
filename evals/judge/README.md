@@ -114,6 +114,8 @@ The readers decided by [the rubric](correct/rubric.md). That file is, word for w
 - **No real fault at all.** The readers found every real answer correct. How a judge does on wrong answers that arise naturally cannot be told from this set.
 - **"Correct" means "agrees with the reference answer".** Most reference answers were written by a model from the same passage the assistant later quotes, which makes agreement likely once the passage is found. And if a reference answer is wrong, an answer that repeats it counts as correct.
 - **Where the rubric leaves room**, by the readers' own notes: an answer that adds a condition or a step the reference does not mention; a reference that gives a general instruction beside the one the question asks about; a role named loosely ("Executive Sponsor" for "E-Group Sponsor"). The eight borderline cases are of these kinds.
+- **The kinds are the first reader's own names** for what it changed. A separate review judged three of the five `scope` faults to be faults of another kind (another action, an added item, a wider offering). The verdicts stand, and the counts by kind are approximate.
+- **One planted omission is itself doubtful.** Its reference answer introduces its list as "examples", so an answer with one example fewer could be called correct. All three readers, and the judge, called it partial.
 - **The real answers come from one run of one model.**
 
 ## Licence and attribution

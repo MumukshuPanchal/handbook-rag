@@ -96,3 +96,27 @@ Two weaknesses were found, and neither is fixed:
 - **The judge can lose count in a long answer.** In one answer of nine statements its reasons slipped by one from the fourth statement on, and the last statement was never judged. Asking the judge to repeat the first words of each statement, and refusing a reply where they do not match, would catch this.
 
 And one fault of our own was found in review, after the check had been run: two rules of the rubric were missing from the judge's instructions. They were never in the committed file; by the author's account they were cut by mistake while the instructions were being written. The check measured the judge without them, and it agreed on 258 of 259 statements with the labels, which the readers made from the rubric, most of them from an earlier wording of it. The instructions are left as they were checked, the difference is stated wherever the two are described, and a test now compares them rule by rule. Both this and the lost count are in [issue 58](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/58); the dropped limits are in [issue 59](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/59).
+
+## Update, 2026-11-23: the second judged score, correct by the reference
+
+The last stage of decision 1 was built the next day. The numbers are in the [evaluation guide](../evaluation.md#the-second-judged-score-correct-by-the-reference), and the labelled answers are described in [their card](../../evals/judge/README.md#the-second-set-answers-against-their-reference-answers).
+
+- **The check.** The judge caught 39 of 40 planted faults and raised 2 false alarms in 41, on 167 labelled answers.
+- **The scores.** 0.984 of the 127 answers that have a reference answer agree with it, and 0.947 of the 132 answerable questions got a correct answer.
+
+What was decided on the way:
+
+1. **Three verdicts, of which one counts.** `partial` is kept apart from `incorrect`, because an answer that gives half of what was asked is another fault than a wrong one, and is fixed in another place. Only `correct` counts for the score.
+2. **One score for the whole pipeline.** "Gets a correct answer" is taken over every question the handbook answers, and counts a reply that declined as no correct answer. It joins the search, the decision to answer and the answer itself, and it is the number to watch when any of them changes. It is given only once the judge has ruled on every answer, because a half-judged run would count all the replies that declined and only some of the answers.
+3. **The judge's instructions are its rubric, word for word.** The rubric file is written out from the instructions in the code, and a test compares the two. This is the answer to what was found for the first judge, whose instructions lacked two rules of its rubric.
+4. **The rubric was fixed before the first label was made**, and not changed afterwards, although the readers' notes showed where it leaves room. For the first judge the rubric was reworded while the labels were made, and 253 of its 264 labels are from an earlier wording. Here every label is from the same words. The places where the rubric leaves room are listed in the card, to be settled before the next check.
+5. **One flow for every judged criterion.** What the two criteria share (the run of the judge, saved verdicts and their reuse, the check, the record beside a score) is one piece of code, and what sets a criterion apart is described in one place: its verdicts, which of them count against an answer, what the judge reads, its instructions and its files. A third criterion would be one more such description.
+
+What it cost: 167 requests to check the judge, 3 for a trial, and none to score the run.
+
+What remains weak, beside what the first update lists:
+
+- **Omissions.** The judge missed one planted omission in five, and called two complete answers partial for leaving out a step that was not asked for. Nothing here measures how it does on omissions that are less plain.
+- **The labelled set has no real fault and no subtle one.** Three readers agreed on all 167 answers, so the check measures the judge on plain cases only.
+- **The reference answers come from the passages.** Most were written by a model that was shown the passage the assistant later finds, so this score moves with the search and says little about questions that need more than reading one passage back.
+- **A person's check** of a sample of both judges' labels is what [issue 8](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/8) still asks for.

@@ -41,6 +41,8 @@ Use the GitLab handbook: the `content/handbook/` directory of <https://gitlab.co
 - Pages about individual team members (personal "README" pages) are left out of the index.
 - The README names the source and its licence, and states that this project is not affiliated with or endorsed by GitLab.
 
+> **Note, 2026-11-23.** The snapshot is still downloaded and not stored, but some handbook text is stored after all: short quotes in the test questions (`evals/golden/`) and the labelled answers (`evals/judge/`), and what the assistant's saved replies repeat (`evals/runs/`), mostly a sentence or two and in one case five whole passages, which the model copied out in the adversarial run `evals/runs/adversarial/baseline`. Those files carry the handbook's licence, CC BY-SA 4.0, and credit GitLab.
+
 ## Alternatives considered
 
 - **PostHog handbook.** The cleanest terms: an MIT grant for the content, written in the `LICENSE` file. It is about a tenth of the size, which would make retrieval too easy to show the effect of later improvements.

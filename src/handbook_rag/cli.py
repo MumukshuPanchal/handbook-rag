@@ -1368,8 +1368,8 @@ def eval_adversarial(
 
     One real request for each case. Replies are saved as they arrive, so a run that stops
     continues where it left off. A reply that code cannot decide is set aside for a
-    person: their readings go into readings.jsonl in the run's directory, and the next
-    run of the command takes them in.
+    reader: each reading, which names who made it, goes into readings.jsonl in the run's
+    directory, and the next run of the command takes them in.
     """
     settings = get_settings()
     if pace is not None and pace <= 0:

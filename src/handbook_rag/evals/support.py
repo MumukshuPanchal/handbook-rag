@@ -183,8 +183,8 @@ def _fault_in_case(
 def passage_hash(text: str) -> str:
     """The short hash by which a committed file names the exact words of a passage.
 
-    Committed files hold no handbook text. They name a passage by its chunk id and keep
-    this hash, and the text is read from the corpus when the file is loaded.
+    Committed files that need a whole passage do not copy it. They name it by its chunk
+    id and keep this hash, and the text is read from the corpus when the file is loaded.
     """
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 

@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from handbook_rag import __version__, wiring
 from handbook_rag.cli import app
 from handbook_rag.config import Settings, get_settings
+from handbook_rag.evals import adversarial
 from handbook_rag.evals.adversarial import INSTRUCTION_CANARIES
 from handbook_rag.evals.careful import Pacer
 from handbook_rag.evals.correctness import CORRECT, CorrectnessCase
@@ -2541,11 +2542,10 @@ def test_eval_adversarial_does_not_go_on_with_a_run_made_with_other_settings(
 ) -> None:
     model = AdversarialModel()
     monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
-    assert runner.invoke(app, adversarial_run["command"]).exit_code == 0
+    # Stopped after one case, so that cases with a planted instruction are still to ask:
+    # going on would read the corpus for them.
+    assert runner.invoke(app, [*adversarial_run["command"], "--max-requests", "1"]).exit_code == 0
     run_dir = adversarial_run["run_dir"]
-    fingerprint = results_by_case(run_dir)["inj-override-q001"]["reply_fingerprint"]
-    write_reading(run_dir, "inj-override-q001", fingerprint)
-    readings = run_dir / "readings.jsonl"
 
     monkeypatch.setenv("HANDBOOK_RAG_ANSWER_MODEL", "gemini-9-other")
     get_settings.cache_clear()
@@ -2558,13 +2558,17 @@ def test_eval_adversarial_does_not_go_on_with_a_run_made_with_other_settings(
 
     assert refused.exit_code == 1
     assert "was made with other settings (answer_model)" in refused.output
-    assert len(model.sent) == 3
+    assert len(model.sent) == 1
 
+    # A reading of the saved reply, which a restart discards with it, unread: read, it
+    # would be refused, since code decided that reply.
+    write_reading(run_dir, "inj-withhold-q001", "0" * 16)
+    readings = run_dir / "readings.jsonl"
     monkeypatch.setattr("handbook_rag.cli.build_corpus", build_corpus)
     restarted = runner.invoke(app, [*adversarial_run["command"], "--restart"])
 
     assert restarted.exit_code == 0, restarted.output
-    assert len(model.sent) == 6
+    assert len(model.sent) == 4
     assert "0 already answered, 3 to ask now" in restarted.output
     # The readings were of replies that are gone.
     assert not readings.exists()
@@ -2694,6 +2698,91 @@ def test_eval_adversarial_says_which_cases_need_the_corpus_and_which_the_index(
     assert "holds no passages. Run `handbook-rag index`." in empty.output
     assert model.sent == []
     assert not adversarial_run["run_dir"].exists()
+
+
+def test_eval_adversarial_checks_every_injected_case_still_to_ask_not_only_the_next_ones(
+    monkeypatch: pytest.MonkeyPatch, adversarial_run: dict[str, Any]
+) -> None:
+    model = AdversarialModel()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+    rows = [json.loads(line) for line in adversarial_run["cases"].read_text().splitlines()]
+    rows[0]["passages"][0]["text_sha256"] = "0" * 16
+    adversarial_run["cases"].write_text("".join(json.dumps(row) + "\n" for row in rows))
+    # The one case a limit of one request lets through is another, with its passages intact.
+    order = adversarial.in_run_order(adversarial.load_cases(adversarial_run["cases"]))
+    assert [case.case_id for case in order[:2]] == ["inj-withhold-q001", "inj-override-q001"]
+
+    result = runner.invoke(app, [*adversarial_run["command"], "--max-requests", "1"])
+
+    assert result.exit_code == 1
+    assert "has changed since inj-override-q001 was written" in result.output
+    assert model.sent == []
+    assert not adversarial_run["run_dir"].exists()
+
+
+def test_eval_adversarial_fails_when_a_case_failed_though_others_were_answered(
+    monkeypatch: pytest.MonkeyPatch, adversarial_run: dict[str, Any]
+) -> None:
+    class FailsOutsideTheHandbook(AdversarialModel):
+        def generate(
+            self,
+            question: str,
+            chunks: Sequence[Chunk],
+            *,
+            on_text: Callable[[str], None] | None = None,
+        ) -> Answer:
+            if "capital" in question:
+                self.sent.append((question, []))
+                raise GenerationError("The Gemini API returned an error (503): Overloaded.")
+            return super().generate(question, chunks, on_text=on_text)
+
+    model = FailsOutsideTheHandbook()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+
+    result = runner.invoke(app, adversarial_run["command"])
+
+    # Two failures, not three in a row, so the run was not stopped: it failed a case.
+    assert result.exit_code == 1
+    assert "stopped:" not in result.output
+    assert "2 decided or set aside, 1 failed, 0 not asked yet" in result.output
+    assert "failed: oos-general-1: The Gemini API returned an error (503)" in result.output
+    assert "Run the same command again to continue this run." in result.output
+    summary = json.loads((adversarial_run["run_dir"] / "summary.json").read_text())
+    assert [failure["question_id"] for failure in summary["cases_failed"]] == ["oos-general-1"]
+
+
+@pytest.mark.parametrize(
+    ("limit", "exit_code"),
+    [
+        # A run that stops for a reason of its own has not done what it was asked.
+        ([], 1),
+        # A run that stops at the limit it was given has: that stop is planned.
+        (["--max-requests", "3"], 0),
+    ],
+)
+def test_eval_adversarial_fails_when_the_run_stopped_for_any_reason_but_its_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    adversarial_run: dict[str, Any],
+    limit: list[str],
+    exit_code: int,
+) -> None:
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", AdversarialModel().build)
+    real_run = adversarial.run_cases
+
+    def stopped_with_every_case_answered(*args: Any, **kwargs: Any) -> adversarial.AdversarialRun:
+        run = real_run(*args, **kwargs)
+        run.stopped = "the network went away"
+        return run
+
+    monkeypatch.setattr(
+        "handbook_rag.evals.adversarial.run_cases", stopped_with_every_case_answered
+    )
+
+    result = runner.invoke(app, [*adversarial_run["command"], *limit])
+
+    assert result.exit_code == exit_code, result.output
+    assert "stopped: the network went away" in result.output
+    assert "3 decided or set aside, 0 failed, 0 not asked yet" in result.output
 
 
 def test_eval_adversarial_refuses_a_case_whose_passage_reads_otherwise_before_any_request(

@@ -127,7 +127,7 @@ The readers decided by [the rubric](correct/rubric.md). That file is, word for w
 - **There is nothing to catch.** The set holds no fault, so it has no recall, and no kappa either, since every label makes the same decision; `eval-judge` says both in place of a number. What it measures is how many of the 132 the judge calls correct. Each one it does not is a false alarm, listed in `disagreements.jsonl` with the judge's reason.
 - **It is the easiest case there is.** The answer and the reference answer are the same words. Passing it shows only that the judge is not out of step with its measure; it says nothing about answers worded otherwise.
 
-Run with `make eval-judge-references`, which costs 132 requests when none fails. Result: `references`, on 23 November 2026, with `gemini-3.5-flash-lite`: the judge called all 132 reference answers correct, so "Same decision" is 1.000 (95% interval 0.972 to 1.000) and there is no false alarm. It took 145 requests: 13 attempts were turned away by an overloaded model and made again. The run is in [`evals/runs/judge-correct/references`](../runs/judge-correct/references).
+Run with `make eval-judge-references`, which costs 132 requests when none fails. Result: `references`, on 23 November 2026, with `gemini-3.5-flash-lite`: the judge called all 132 reference answers correct, so "Same decision" is 1.000 (95% interval 0.972 to 1.000) and there is no false alarm. The saved files record 145 attempts for the 132 answers. That the other 13 were turned away by an overloaded model and made again was printed by the run, and is not saved. The run is in [`evals/runs/judge-correct/references`](../runs/judge-correct/references).
 
 ## Licence and attribution
 

@@ -59,7 +59,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
-      # The handbook is not stored in this repository. It is downloaded at the pinned
+      # The handbook snapshot is not stored in this repository. It is downloaded at the pinned
       # commit and cached, under a key that changes when the pin or the download code
       # changes. A cache is shared with other branches once a run on main has saved it.
       - name: Read the pinned handbook commit

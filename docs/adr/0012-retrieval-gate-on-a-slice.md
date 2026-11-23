@@ -14,6 +14,8 @@ This record settles how point 7 of ADR 0007, the regression gate, is built. That
 
 Two more constraints shaped the design. The handbook text is not stored in this repository ([ADR 0002](0002-handbook-corpus.md)), so a test corpus cannot simply be committed. And a check that fails for reasons unrelated to the change gets ignored, so the gate has to give the same result every time.
 
+> **Note, 2026-11-23.** Some handbook text is stored after all, as the note in ADR 0002 says: short quotes in the test questions and labelled answers, and what saved replies repeat, in one case five whole passages. Those files carry the handbook's licence and credit. The snapshot itself is still not stored, and nothing the gate could index is, so the constraint above still holds.
+
 ## Decision
 
 A second CI job, the retrieval gate, runs `handbook-rag eval-gate` on every pull request and on every push to `main`.

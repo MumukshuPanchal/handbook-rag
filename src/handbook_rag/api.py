@@ -482,12 +482,8 @@ def create_app(
     Tests pass a ``retriever``, a ``store`` and a ``generator`` made of stand-in parts.
     """
     settings = settings or get_settings()
-    # A service embeds one question at a time. For that a CPU is as fast as a GPU, and
-    # steadier: measured on an Apple GPU, a question embedded after five idle seconds
-    # took about 700 ms instead of 26, while a CPU stayed at 30 to 50 ms.
-    serving = settings
-    if settings.embedding_device is None:
-        serving = settings.model_copy(update={"embedding_device": "cpu"})
+    # A service embeds one question at a time, which a CPU does as fast as a GPU.
+    serving = wiring.settings_for_serving(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

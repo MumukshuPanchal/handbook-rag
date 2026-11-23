@@ -52,6 +52,18 @@ def make_embedder(settings: Settings) -> SentenceTransformerEmbedder:
     )
 
 
+def settings_for_serving(settings: Settings) -> Settings:
+    """The settings for a service that searches for one question at a time.
+
+    For that a CPU is as fast as a GPU, and steadier: measured on an Apple GPU, a question
+    embedded after five idle seconds took about 700 ms instead of 26, while a CPU stayed
+    at 30 to 50 ms. So a service embeds on the CPU unless the settings name a device.
+    """
+    if settings.embedding_device is not None:
+        return settings
+    return settings.model_copy(update={"embedding_device": "cpu"})
+
+
 def make_store(
     settings: Settings, *, check: bool = True, timeout: float = 60.0
 ) -> QdrantVectorStore:

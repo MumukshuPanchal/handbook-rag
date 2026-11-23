@@ -147,8 +147,8 @@ class Settings(BaseSettings):
         default=None,
         description=(
             "Device the embedding model runs on, such as 'cpu', 'cuda' or 'mps'. Unset: a "
-            "GPU when there is one, which is what indexing wants. The HTTP API uses the "
-            "CPU unless this is set, because it embeds one question at a time."
+            "GPU when there is one, which is what indexing wants. The HTTP API and the MCP "
+            "server use the CPU unless this is set, because they embed one question at a time."
         ),
     )
     api_host: str = Field(

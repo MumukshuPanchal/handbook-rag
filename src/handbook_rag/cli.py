@@ -337,6 +337,20 @@ def serve(
     )
 
 
+@app.command(name="mcp")
+def mcp_server() -> None:
+    """Offer handbook search to AI assistants: an MCP server on standard input and output.
+
+    An assistant or a coding tool starts this command itself, and speaks the Model Context
+    Protocol to it. Nothing but the protocol is written to standard output; the log goes
+    to standard error.
+    """
+    # Imported here so that other commands do not load the protocol's SDK.
+    from handbook_rag.mcp_server import serve_stdio
+
+    serve_stdio(get_settings())
+
+
 @app.command(name="eval-retrieval")
 def eval_retrieval(
     dataset: Annotated[

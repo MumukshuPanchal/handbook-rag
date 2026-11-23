@@ -152,3 +152,17 @@ def test_a_rest_is_a_sleep_of_the_given_length() -> None:
     Pacer(10, sleep=slept.append).rest(30)
 
     assert slept == [30]
+
+
+def test_a_pacer_takes_the_real_sleep_when_it_is_made_so_a_test_can_replace_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # With `sleep=time.sleep` in the signature, the function was fixed when the module
+    # was imported. Replacing `time.sleep` later did nothing, and every command test that
+    # ran an evaluation really waited between its requests: minutes for the whole suite.
+    slept: list[float] = []
+    monkeypatch.setattr("handbook_rag.evals.careful.time.sleep", slept.append)
+
+    Pacer(10).rest(30)
+
+    assert slept == [30]

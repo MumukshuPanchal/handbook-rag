@@ -19,14 +19,17 @@ class Pacer:
         self,
         per_minute: float,
         *,
-        clock: Callable[[], float] = time.monotonic,
-        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] | None = None,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
         if per_minute <= 0:
             raise ValueError("A pace needs a positive number of requests per minute.")
         self._gap = 60.0 / per_minute
-        self._clock = clock
-        self._sleep = sleep
+        # Looked up here, when a pacer is made, and not in the signature above. A default
+        # in a signature is fixed when the module is first imported, so a test that
+        # replaces `time.sleep` afterwards would be ignored, and would really wait.
+        self._clock = clock if clock is not None else time.monotonic
+        self._sleep = sleep if sleep is not None else time.sleep
         self._last: float | None = None
 
     def wait(self) -> None:

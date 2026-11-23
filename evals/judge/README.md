@@ -91,7 +91,7 @@ The rubric changed while the labels were made. The first reader's notes showed w
 | `no_answer` | The answer was replaced by a reply that gives none of what was asked: "the handbook does not say", "it depends", a referral | `incorrect` |
 | `omission` | Part of what the question asks for was removed, and what remains is right | `partial` |
 
-Two of these, `other_question` and `no_answer`, are known negatives that [issue 8](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/8) asks for: a confident answer to another question, and "I don't know". The third it names, an empty answer, never reaches the judge: code counts an empty reply, and the fixed sentence the assistant declines with, as declining.
+Two of these, `other_question` and `no_answer`, are known negatives that [issue 8](https://github.com/MumukshuPanchal/handbook-rag/issues/8) asks for: a confident answer to another question, and "I don't know". The third it names, an empty answer, never reaches the judge: code counts an empty reply, and the fixed sentence the assistant declines with, as declining.
 
 ### How it was made
 
@@ -120,7 +120,7 @@ The readers decided by [the rubric](correct/rubric.md). That file is, word for w
 
 ### A control: the reference answers themselves
 
-[`correct/references.jsonl`](correct/references.jsonl) holds 132 answers, one for each answerable question of the golden set, in the format of `correct/cases.jsonl`. Each is of the kind `reference`: its answer is the question's reference answer, word for word, and it is labelled `correct`. [Issue 8](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/8) asks that reference answers pass, and this is that check. A judge that does not call the reference answer correct is out of step with the very measure it applies.
+[`correct/references.jsonl`](correct/references.jsonl) holds 132 answers, one for each answerable question of the golden set, in the format of `correct/cases.jsonl`. Each is of the kind `reference`: its answer is the question's reference answer, word for word, and it is labelled `correct`. [Issue 8](https://github.com/MumukshuPanchal/handbook-rag/issues/8) asks that reference answers pass, and this is that check. A judge that does not call the reference answer correct is out of step with the very measure it applies.
 
 - **No reader labelled them.** The label follows from what "correct" means here: agreeing with the reference answer. So no case records readers.
 - **The file cannot drift from the golden set.** The loader refuses a `reference` case whose answer is not its reference answer word for word, or whose label is not `correct`. A test makes the 132 cases again from `evals/golden/questions.jsonl` and compares them with the file.

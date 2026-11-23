@@ -4,6 +4,10 @@ What each version of this project contains. The format follows [Keep a Changelog
 
 ## [Unreleased]
 
+### Changed
+
+- The repository is named `handbook-rag`, like the Python package and the command. It was `production-rag-pipeline`. GitHub redirects the old address, and the links in the documents use the new one ([#70]).
+
 ### Fixed
 
 - The documents said that measuring the answers again after a change to the instructions costs more than a day of the free allowance. It is about 460 requests of the 500 a day, and more than a day only when attempts have to be repeated ([#69]).
@@ -89,50 +93,51 @@ These are the [limitations in the README](README.md#limitations).
 - The Claude path has never been run, and model tiers were not compared ([#17]).
 - Checked on one laptop: the quickstart has not been followed on a clean machine, and a full indexing run inside a container has not been done.
 
-[Unreleased]: https://github.com/MumukshuPanchal/production-rag-pipeline/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/MumukshuPanchal/production-rag-pipeline/releases/tag/v1.0.0
-[#8]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/8
-[#17]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/17
-[#18]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/18
-[#21]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/21
-[#23]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/23
-[#25]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/25
-[#26]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/26
-[#27]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/27
-[#28]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/28
-[#29]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/29
-[#30]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/30
-[#31]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/31
-[#32]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/32
-[#33]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/33
-[#34]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/34
-[#37]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/37
-[#35]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/35
-[#36]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/36
-[#38]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/38
-[#39]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/39
-[#40]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/40
-[#41]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/41
-[#42]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/42
-[#43]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/43
-[#44]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/44
-[#45]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/45
-[#48]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/48
-[#49]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/49
-[#50]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/50
-[#54]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/54
-[#55]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/55
-[#56]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/56
-[#57]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/57
-[#58]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/58
-[#59]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/59
-[#62]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/62
-[#63]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/63
-[#64]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/64
-[#65]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/65
-[#66]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/66
-[#67]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/67
-[#69]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/69
+[Unreleased]: https://github.com/MumukshuPanchal/handbook-rag/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/MumukshuPanchal/handbook-rag/releases/tag/v1.0.0
+[#8]: https://github.com/MumukshuPanchal/handbook-rag/issues/8
+[#17]: https://github.com/MumukshuPanchal/handbook-rag/issues/17
+[#18]: https://github.com/MumukshuPanchal/handbook-rag/issues/18
+[#21]: https://github.com/MumukshuPanchal/handbook-rag/issues/21
+[#23]: https://github.com/MumukshuPanchal/handbook-rag/pull/23
+[#25]: https://github.com/MumukshuPanchal/handbook-rag/pull/25
+[#26]: https://github.com/MumukshuPanchal/handbook-rag/pull/26
+[#27]: https://github.com/MumukshuPanchal/handbook-rag/pull/27
+[#28]: https://github.com/MumukshuPanchal/handbook-rag/pull/28
+[#29]: https://github.com/MumukshuPanchal/handbook-rag/pull/29
+[#30]: https://github.com/MumukshuPanchal/handbook-rag/pull/30
+[#31]: https://github.com/MumukshuPanchal/handbook-rag/pull/31
+[#32]: https://github.com/MumukshuPanchal/handbook-rag/pull/32
+[#33]: https://github.com/MumukshuPanchal/handbook-rag/pull/33
+[#34]: https://github.com/MumukshuPanchal/handbook-rag/issues/34
+[#37]: https://github.com/MumukshuPanchal/handbook-rag/issues/37
+[#35]: https://github.com/MumukshuPanchal/handbook-rag/pull/35
+[#36]: https://github.com/MumukshuPanchal/handbook-rag/pull/36
+[#38]: https://github.com/MumukshuPanchal/handbook-rag/pull/38
+[#39]: https://github.com/MumukshuPanchal/handbook-rag/pull/39
+[#40]: https://github.com/MumukshuPanchal/handbook-rag/pull/40
+[#41]: https://github.com/MumukshuPanchal/handbook-rag/pull/41
+[#42]: https://github.com/MumukshuPanchal/handbook-rag/issues/42
+[#43]: https://github.com/MumukshuPanchal/handbook-rag/issues/43
+[#44]: https://github.com/MumukshuPanchal/handbook-rag/pull/44
+[#45]: https://github.com/MumukshuPanchal/handbook-rag/pull/45
+[#48]: https://github.com/MumukshuPanchal/handbook-rag/pull/48
+[#49]: https://github.com/MumukshuPanchal/handbook-rag/pull/49
+[#50]: https://github.com/MumukshuPanchal/handbook-rag/pull/50
+[#54]: https://github.com/MumukshuPanchal/handbook-rag/pull/54
+[#55]: https://github.com/MumukshuPanchal/handbook-rag/pull/55
+[#56]: https://github.com/MumukshuPanchal/handbook-rag/pull/56
+[#57]: https://github.com/MumukshuPanchal/handbook-rag/pull/57
+[#58]: https://github.com/MumukshuPanchal/handbook-rag/issues/58
+[#59]: https://github.com/MumukshuPanchal/handbook-rag/issues/59
+[#62]: https://github.com/MumukshuPanchal/handbook-rag/pull/62
+[#63]: https://github.com/MumukshuPanchal/handbook-rag/pull/63
+[#64]: https://github.com/MumukshuPanchal/handbook-rag/pull/64
+[#65]: https://github.com/MumukshuPanchal/handbook-rag/pull/65
+[#66]: https://github.com/MumukshuPanchal/handbook-rag/issues/66
+[#67]: https://github.com/MumukshuPanchal/handbook-rag/pull/67
+[#69]: https://github.com/MumukshuPanchal/handbook-rag/pull/69
+[#70]: https://github.com/MumukshuPanchal/handbook-rag/pull/70
 [ADR 0001]: docs/adr/0001-record-architecture-decisions.md
 [ADR 0002]: docs/adr/0002-handbook-corpus.md
 [ADR 0003]: docs/adr/0003-own-pipeline-code-instead-of-a-framework.md

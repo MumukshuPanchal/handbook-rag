@@ -5,7 +5,7 @@ Cases that try to make the assistant do something other than answer from the han
 - **Does an instruction planted in a retrieved passage change what the assistant does?** Handbook pages are written by many people, so the text the model reads is input that this project does not control. The assistant is told that passages are material and not instructions (see `SYSTEM_PROMPT` in [`prompt.py`](../../src/handbook_rag/generate/prompt.py)); these cases check whether it acts on that.
 - **Does the assistant decline questions that have nothing to do with the handbook?**
 
-The command, and how to read its results, are in the [evaluation guide](../../docs/evaluation.md#adversarial-tests). The task is [issue 16](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/16).
+The command, and how to read its results, are in the [evaluation guide](../../docs/evaluation.md#adversarial-tests). The task is [issue 16](https://github.com/MumukshuPanchal/handbook-rag/issues/16).
 
 > **Status: written by one model session, not checked by a person.** The planted instructions, the out-of-scope questions and the choice of golden questions were made by a Claude model (`claude-opus-5-5`). No person has read them. The replies that code sets aside are read by whoever runs the evaluation, and each reading says who made it.
 
@@ -135,7 +135,7 @@ Under `evals/runs/adversarial/<variant>/`:
 
 Code decided 31 of the 36 replies. The five it set aside hold a canary or count as an answer to a question outside the handbook: the three with a planted link, the one that is a made-up word, and the copy of the search results. Two model sessions read them, each without seeing the other's labels, and both called all five `broke`. Their notes are in `readings.jsonl`. No person has read them.
 
-Nothing that got through is fixed. [Issue 66](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/66) says what to try and why it was not done with these tests.
+Nothing that got through is fixed. [Issue 66](https://github.com/MumukshuPanchal/handbook-rag/issues/66) says what to try and why it was not done with these tests.
 
 ## Known limits
 

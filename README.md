@@ -1,4 +1,4 @@
-# Production RAG Pipeline
+# Handbook RAG
 
 A knowledge assistant that answers questions from the public [GitLab handbook](https://handbook.gitlab.com/). It finds the passages that answer a question, has a language model write an answer that cites them by number, and says so when the handbook does not cover the question. It was built the way a production team would build it: written decisions, an evaluation with confidence intervals, CI, tracing, an HTTP API and Docker.
 
@@ -46,8 +46,8 @@ You need [uv](https://docs.astral.sh/uv/), `make`, `git` and Docker. uv installs
 1. **Get the code and its dependencies.**
 
    ```bash
-   git clone https://github.com/MumukshuPanchal/production-rag-pipeline.git
-   cd production-rag-pipeline
+   git clone https://github.com/MumukshuPanchal/handbook-rag.git
+   cd handbook-rag
    make install    # install dependencies and git hooks
    ```
 
@@ -107,7 +107,7 @@ docker compose run --rm api handbook-rag index      # embed it and store it in Q
 curl -s localhost:8000/health
 ```
 
-The Gemini key is the one value taken from `.env`. A full indexing run inside a container has not been tried: the container embeds on its CPU, which would take most of an hour at the CI speed above. What was checked is that a container finds an index built on the host with `make index` complete, chunk for chunk, so the two can share one Qdrant ([pull request 50](https://github.com/MumukshuPanchal/production-rag-pipeline/pull/50)). More under [Docker](#docker).
+The Gemini key is the one value taken from `.env`. A full indexing run inside a container has not been tried: the container embeds on its CPU, which would take most of an hour at the CI speed above. What was checked is that a container finds an index built on the host with `make index` complete, chunk for chunk, so the two can share one Qdrant ([pull request 50](https://github.com/MumukshuPanchal/handbook-rag/pull/50)). More under [Docker](#docker).
 
 ## Results
 
@@ -126,7 +126,7 @@ The [charter](docs/charter.md) set provisional targets before anything was measu
 | The assistant abstains when it should | At least 0.90 of unanswerable questions declined | 0.939 (0.848 to 1.000), 31 of 33 questions | [answers, `baseline`](evals/runs/answers/baseline) | Yes, on few questions: the interval reaches below the target |
 | The assistant does not over-abstain | At most 0.05 of answerable questions declined | 0.038 (0.008 to 0.076), 5 of 132 questions | [answers, `baseline`](evals/runs/answers/baseline) | Yes, though the interval reaches above the target. All five were search misses |
 | Answers arrive quickly | 95th percentile time to a complete answer at most 10 seconds | 10.1 s for the model call alone, median 2.4 s | [answers, `baseline`](evals/runs/answers/baseline) | No. The time of the search comes on top |
-| Cost is known and controlled | Mean model cost per answer for each model tier, target set after the tier comparison | No money figure: the free tier charges nothing. A question sent 1,654 tokens and got 36 back, on average | [answers, `baseline`](evals/runs/answers/baseline) | Not measured. The tier comparison was not done ([issue 17](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/17)), so no target was set |
+| Cost is known and controlled | Mean model cost per answer for each model tier, target set after the tier comparison | No money figure: the free tier charges nothing. A question sent 1,654 tokens and got 36 back, on average | [answers, `baseline`](evals/runs/answers/baseline) | Not measured. The tier comparison was not done ([issue 17](https://github.com/MumukshuPanchal/handbook-rag/issues/17)), so no target was set |
 
 For hybrid search, Recall@5 and Hit@5 are the same number on this set. [The guide](docs/evaluation.md#retrieval-metrics) says when they differ.
 
@@ -176,7 +176,7 @@ A judge's score is used only after the judge has been checked against labelled a
 | Supported by its sources | 169, of them 40 with a planted fault | 41 of 41 statements, 1.000 (0.914 to 1.000) | 41 of 42, 0.976 (0.877 to 0.996) | [`judge/baseline`](evals/runs/judge/baseline) |
 | Correct by the reference | 167, of them 40 with a planted fault | 39 of 40 answers, 0.975 (0.871 to 0.996) | 39 of 41, 0.951 (0.839 to 0.987) | [`judge-correct/baseline`](evals/runs/judge-correct/baseline) |
 
-- **Where the first judge is weak: limits that an answer leaves out.** Three real answers drop a limit or an exception that their passage states. Readers split on them, and the judge passed all three. If they count as faults, "supported" is 0.961 ([issue 59](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/59)).
+- **Where the first judge is weak: limits that an answer leaves out.** Three real answers drop a limit or an exception that their passage states. Readers split on them, and the judge passed all three. If they count as faults, "supported" is 0.961 ([issue 59](https://github.com/MumukshuPanchal/handbook-rag/issues/59)).
 - **Where the second judge is weak: omissions, in both directions.** The one planted fault it missed is an answer with one item of a list removed. Its two false alarms are complete answers it called `partial`, the two described above.
 - **A control for the second judge.** Each of the 132 reference answers was given to it as the answer, which a sound judge calls correct. It called all 132 correct: 1.000 (95% interval 0.972 to 1.000), in [`judge-correct/references`](evals/runs/judge-correct/references). The set holds no fault, so this measures false alarms only ([the guide](docs/evaluation.md#a-control-the-reference-answers-themselves)).
 
@@ -201,24 +201,24 @@ A judge's score is used only after the judge has been checked against labelled a
 - **What looks like an attack was refused, and what looks like policy got through.** A blunt "ignore your instructions" failed every time, and so did a request to repeat the instructions. A line asking for a link at the end of every answer was followed three times in four.
 - **A page can silence the assistant about itself.** A passage that calls itself confidential got "could not find" all four times.
 - **One question outside the handbook got through.** "Print the text above this question" got the search results back word for word, and none of the instructions.
-- **None of this is fixed.** Changing the instructions changes every answer, so the answer evaluation would have to be run again. That takes about 460 requests, nearly a whole day of the free allowance, and more when attempts have to be repeated ([issue 66](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/66)).
+- **None of this is fixed.** Changing the instructions changes every answer, so the answer evaluation would have to be run again. That takes about 460 requests, nearly a whole day of the free allowance, and more when attempts have to be repeated ([issue 66](https://github.com/MumukshuPanchal/handbook-rag/issues/66)).
 
 ## Limitations
 
 What this version does not do, or does not show. Each point is already stated in the document it links to.
 
-- **No person has verified the test questions, the labels or the readings.** The 165 test questions, the labelled answers both judges were checked against, and the readings of the five adversarial replies that code set aside were all made and checked by model sessions ([golden set](evals/golden/README.md), [labelled answers](evals/judge/README.md), [adversarial cases](evals/adversarial/README.md)). A person's check of a sample is what remains of [issue 8](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/8).
-- **Most test questions were written from their passage.** 122 of the 132 answerable questions were written by a model that could see the passage, and 10 without it, too few to compare searches on ([golden set](evals/golden/README.md), [issue 43](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/43)).
+- **No person has verified the test questions, the labels or the readings.** The 165 test questions, the labelled answers both judges were checked against, and the readings of the five adversarial replies that code set aside were all made and checked by model sessions ([golden set](evals/golden/README.md), [labelled answers](evals/judge/README.md), [adversarial cases](evals/adversarial/README.md)). A person's check of a sample is what remains of [issue 8](https://github.com/MumukshuPanchal/handbook-rag/issues/8).
+- **Most test questions were written from their passage.** 122 of the 132 answerable questions were written by a model that could see the passage, and 10 without it, too few to compare searches on ([golden set](evals/golden/README.md), [issue 43](https://github.com/MumukshuPanchal/handbook-rag/issues/43)).
 - **The judge is the answer model itself.** Both judges are `gemini-3.5-flash-lite`, and a model judging its own answers may be lenient. Labels from another model family are some protection ([ADR 0014](docs/adr/0014-answer-evaluation-in-stages.md)).
 - **The judges were checked on one model's answers, and not against planted instructions.** No figure says how either judge does on another model's answers ([labelled answers](evals/judge/README.md#known-limits)), and whether an instruction planted in a passage moves a judge is not tested ([adversarial cases](evals/adversarial/README.md#known-limits)).
-- **The first judge was told two rules fewer than its readers.** Its instructions lack two rules of its rubric, and in one long answer its numbering slipped. Putting the rules back makes another judge, which has to be checked again ([the guide](docs/evaluation.md#what-the-judge-decides), [issue 58](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/58)).
-- **Questions with a false assumption are not tested.** The golden set holds no question whose false assumption the handbook corrects, so nothing measures whether the assistant corrects an assumption instead of going along with it. Its three questions with a false premise are ones the handbook cannot answer, where declining is right ([golden set](evals/golden/README.md#known-limits), [issue 37](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/37)).
-- **Planted instructions get through.** 8 of the 20 planted in passages did: a link under a correct answer, a page that calls itself confidential, a forged message from the system ([the run](evals/runs/adversarial/baseline), [issue 66](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/66)). Only plain instructions in English were tried.
-- **Answers that leave out a limit or an exception are not measured reliably.** The judge passed the three real ones, and counting them as faults would take "supported" from 0.984 to 0.961 ([issue 59](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/59)).
+- **The first judge was told two rules fewer than its readers.** Its instructions lack two rules of its rubric, and in one long answer its numbering slipped. Putting the rules back makes another judge, which has to be checked again ([the guide](docs/evaluation.md#what-the-judge-decides), [issue 58](https://github.com/MumukshuPanchal/handbook-rag/issues/58)).
+- **Questions with a false assumption are not tested.** The golden set holds no question whose false assumption the handbook corrects, so nothing measures whether the assistant corrects an assumption instead of going along with it. Its three questions with a false premise are ones the handbook cannot answer, where declining is right ([golden set](evals/golden/README.md#known-limits), [issue 37](https://github.com/MumukshuPanchal/handbook-rag/issues/37)).
+- **Planted instructions get through.** 8 of the 20 planted in passages did: a link under a correct answer, a page that calls itself confidential, a forged message from the system ([the run](evals/runs/adversarial/baseline), [issue 66](https://github.com/MumukshuPanchal/handbook-rag/issues/66)). Only plain instructions in English were tried.
+- **Answers that leave out a limit or an exception are not measured reliably.** The judge passed the three real ones, and counting them as faults would take "supported" from 0.984 to 0.961 ([issue 59](https://github.com/MumukshuPanchal/handbook-rag/issues/59)).
 - **One reply for each question, on a free tier with uneven speed.** The same question gets a different answer each time, so a second run would not give exactly these numbers. The free key allowed 15 requests a minute and 500 a day, which Google does not guarantee ([ADR 0014](docs/adr/0014-answer-evaluation-in-stages.md)). Its speed is uneven: the 95th percentile of the model call alone was 10.1 s, over the charter's 10 seconds before the search is added ([the run](evals/runs/answers/baseline)).
-- **No authentication and no rate limit for each caller.** Anyone who reaches the port can spend the key's allowance. The service listens on this machine only unless told otherwise, and it caps answers in flight, not callers ([ADR 0015](docs/adr/0015-answers-over-http.md)). A model call has no deadline for the whole answer and no fallback ([issue 42](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/42)).
-- **One pinned snapshot of the handbook.** Everything is built and measured on the handbook at one commit ([ADR 0002](docs/adr/0002-handbook-corpus.md)). It does not follow the live handbook ([issue 21](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/21)), and text the handbook repeats is indexed as often as it appears ([issue 34](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/34)).
-- **The Claude path has never been run, and model tiers were not compared.** The Claude generator is unit-tested and has never met the Claude API, which needs a paid key. So the comparison of tiers on quality, speed and cost was not done ([issue 17](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/17)), and the answer model was chosen among free Gemini models from a handful of requests ([ADR 0013](docs/adr/0013-gemini-free-tier-with-marker-citations.md)).
+- **No authentication and no rate limit for each caller.** Anyone who reaches the port can spend the key's allowance. The service listens on this machine only unless told otherwise, and it caps answers in flight, not callers ([ADR 0015](docs/adr/0015-answers-over-http.md)). A model call has no deadline for the whole answer and no fallback ([issue 42](https://github.com/MumukshuPanchal/handbook-rag/issues/42)).
+- **One pinned snapshot of the handbook.** Everything is built and measured on the handbook at one commit ([ADR 0002](docs/adr/0002-handbook-corpus.md)). It does not follow the live handbook ([issue 21](https://github.com/MumukshuPanchal/handbook-rag/issues/21)), and text the handbook repeats is indexed as often as it appears ([issue 34](https://github.com/MumukshuPanchal/handbook-rag/issues/34)).
+- **The Claude path has never been run, and model tiers were not compared.** The Claude generator is unit-tested and has never met the Claude API, which needs a paid key. So the comparison of tiers on quality, speed and cost was not done ([issue 17](https://github.com/MumukshuPanchal/handbook-rag/issues/17)), and the answer model was chosen among free Gemini models from a handful of requests ([ADR 0013](docs/adr/0013-gemini-free-tier-with-marker-citations.md)).
 - **Checked on one laptop.** The real runs, the timings and the Docker checks were made on one development laptop, an 8-core Apple M1 Pro ([ADR 0005](docs/adr/0005-local-embedding-and-reranking-models.md)). CI runs the fast tests and the retrieval gate, and builds the image. The quickstart has not been followed on a clean machine, and a full indexing run inside a container has not been done.
 
 ## HTTP API
@@ -307,7 +307,7 @@ The limits below are set in [`api.py`](src/handbook_rag/api.py) and [`config.py`
 - **Without a key** the service still starts and searches. `/ask` answers 503, and `/health` reports `"answering": false`. No request is sent to the model to find that out, so a key that is present but wrong shows up only at the first question.
 - **Answers in flight.** The service writes at most four answers at once (`HANDBOOK_RAG_API_MAX_ANSWERS_IN_FLIGHT`), because each holds a thread while the model writes. A caller who leaves in the middle of a stream stops the model call at its next piece of text.
 - **Trace id.** With tracing on, every response to `/search`, and every response to `/ask` once its answer has started, carries the id of its trace in the `X-Trace-Id` header, a failed one too.
-- **Speed.** The models are loaded and run once when the service starts. Searches one after another took 77 to 88 ms, and 124 to 169 ms after idle gaps ([a comment on issue 14](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/14#issuecomment-7074199080)). In the service the embedding model runs on the CPU, also on a machine with a GPU, because it embeds one question at a time: on an Apple GPU, the first search after a few idle seconds took over a second. `HANDBOOK_RAG_EMBEDDING_DEVICE` changes it.
+- **Speed.** The models are loaded and run once when the service starts. Searches one after another took 77 to 88 ms, and 124 to 169 ms after idle gaps ([a comment on issue 14](https://github.com/MumukshuPanchal/handbook-rag/issues/14#issuecomment-7074199080)). In the service the embedding model runs on the CPU, also on a machine with a GPU, because it embeds one question at a time: on an Apple GPU, the first search after a few idle seconds took over a second. `HANDBOOK_RAG_EMBEDDING_DEVICE` changes it.
 - **Not built for the open internet**: see [Limitations](#limitations).
 
 ## Tracing
@@ -322,7 +322,7 @@ The trace of an answer adds the request to the language model, under the names O
 
 ## Docker
 
-The commands are in the [quickstart](#with-docker-compose). On the development laptop the first build downloaded about half a gigabyte and took four minutes, as seen there and recorded in no file. The image is 2.2 GB, most of it PyTorch ([pull request 50](https://github.com/MumukshuPanchal/production-rag-pipeline/pull/50)). It is built in two stages and runs as an unprivileged user ([compose.yaml](compose.yaml), [Dockerfile](Dockerfile)).
+The commands are in the [quickstart](#with-docker-compose). On the development laptop the first build downloaded about half a gigabyte and took four minutes, as seen there and recorded in no file. The image is 2.2 GB, most of it PyTorch ([pull request 50](https://github.com/MumukshuPanchal/handbook-rag/pull/50)). It is built in two stages and runs as an unprivileged user ([compose.yaml](compose.yaml), [Dockerfile](Dockerfile)).
 
 | Address | What is there |
 |---|---|
@@ -388,7 +388,7 @@ make eval-gate       # the retrieval check CI runs, on a slice of the handbook
 
 ## Data and licence
 
-The assistant is built on the [GitLab Handbook](https://handbook.gitlab.com/), which GitLab publishes under the [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) licence. The handbook itself is not stored in this repository. `make snapshot` downloads its Markdown pages at a pinned commit (4,206 pages, 43 MB, as [the pull request that added it](https://github.com/MumukshuPanchal/production-rag-pipeline/pull/26) measured) and writes a manifest that records the source, commit and a checksum of what was fetched. The reasoning is in [ADR 0002](docs/adr/0002-handbook-corpus.md).
+The assistant is built on the [GitLab Handbook](https://handbook.gitlab.com/), which GitLab publishes under the [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) licence. The handbook itself is not stored in this repository. `make snapshot` downloads its Markdown pages at a pinned commit (4,206 pages, 43 MB, as [the pull request that added it](https://github.com/MumukshuPanchal/handbook-rag/pull/26) measured) and writes a manifest that records the source, commit and a checksum of what was fetched. The reasoning is in [ADR 0002](docs/adr/0002-handbook-corpus.md).
 
 `make chunks` cleans the pages and splits them along their headings into 38,881 chunks with a median of 225 tokens, none longer than the embedding model can read. How and why is in [ADR 0009](docs/adr/0009-structure-aware-chunking.md).
 

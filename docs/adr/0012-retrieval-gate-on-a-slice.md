@@ -38,7 +38,7 @@ A slice is easier to search than the whole handbook, so the gate's scores are no
 | Dense only | 0.939 | 0.775 | fails on both | 0.856 |
 | Keyword only | 0.962 | 0.877 | fails on Hit@5 | 0.932 |
 
-So the gate fails when either half of hybrid search is lost. The hybrid and the dense-only rows were each measured both on a laptop and in CI, with the same result. For dense only, the CI run is [pull request 46](https://github.com/MumukshuPanchal/production-rag-pipeline/pull/46): the gate job was made to search by meaning alone, the unit tests passed, and the gate failed. The keyword-only row was measured on a laptop.
+So the gate fails when either half of hybrid search is lost. The hybrid and the dense-only rows were each measured both on a laptop and in CI, with the same result. For dense only, the CI run is [pull request 46](https://github.com/MumukshuPanchal/handbook-rag/pull/46): the gate job was made to search by meaning alone, the unit tests passed, and the gate failed. The keyword-only row was measured on a laptop.
 
 It does not detect small changes. The Hit@5 minimum allows three misses in 132 questions. Hybrid search has one, so a change that costs one or two more questions passes. Keyword search alone has five, which is two too many. Deciding whether a change is an improvement still needs the full evaluation and a paired comparison ([evaluation guide](../evaluation.md)).
 

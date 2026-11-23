@@ -44,7 +44,7 @@ Five facts shaped how `POST /ask` works:
 
 - **Authentication.** Anyone who can reach the port can spend the key's allowance. The service listens on this machine only unless `HANDBOOK_RAG_API_HOST` says otherwise.
 - **A rate limit for each caller.** The cap limits answers in flight, not how many one caller sends.
-- **The timeouts and the fallback of [issue 42](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/42).** A model call is bounded only by the client's time limits for each phase of a request and its attempts, not by a deadline for the whole answer, and nothing falls back to another model when one is overloaded.
+- **The timeouts and the fallback of [issue 42](https://github.com/MumukshuPanchal/handbook-rag/issues/42).** A model call is bounded only by the client's time limits for each phase of a request and its attempts, not by a deadline for the whole answer, and nothing falls back to another model when one is overloaded.
 - **A caller of the JSON form who goes away is not noticed.** The model finishes that answer. Only a stream stops early.
 - **Nothing is sent while the model thinks.** Until the first event the caller has no status line, and a stream sends no keep-alive comments. A proxy with a short idle time limit could cut off a long wait.
 

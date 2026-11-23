@@ -22,7 +22,7 @@ from handbook_rag.evals.compare import compare_runs
 
 ROOT = Path(__file__).parents[1]
 RUNS = ROOT / "evals" / "runs"
-REPOSITORY = "https://github.com/MumukshuPanchal/production-rag-pipeline"
+REPOSITORY = "https://github.com/MumukshuPanchal/handbook-rag"
 
 # The issues and pull requests of the repository at version 1.0.0, as `gh issue list` and
 # `gh pr list` gave them. A test cannot ask GitHub, so a link may name only these. GitHub

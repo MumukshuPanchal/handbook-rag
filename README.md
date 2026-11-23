@@ -52,7 +52,7 @@ Retrieval on 132 test questions over 38,881 chunks of the handbook. These are th
 
 ### Answer scores
 
-All 165 test questions, answered by `gemini-3.5-flash-lite` from the five passages hybrid search found, on 22 November 2026. The second, third and fourth scores come from two judge models, and the others are computed by code from the saved replies. The run is [`evals/runs/answers/baseline`](evals/runs/answers/baseline), and [the evaluation guide](docs/evaluation.md#answer-metrics) says what each score means.
+All 165 test questions, answered by `gemini-3.5-flash-lite` from the five passages hybrid search found, on 22 November 2026. The second, third and fourth scores come from two judges, which are one model under two sets of instructions: the model that wrote the answers. The others are computed by code from the saved replies. The run is [`evals/runs/answers/baseline`](evals/runs/answers/baseline), and [the evaluation guide](docs/evaluation.md#answer-metrics) says what each score means.
 
 | Score | Result (95% interval) | Questions |
 |---|---|---|

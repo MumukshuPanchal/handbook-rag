@@ -4,7 +4,7 @@ Work is grouped into milestones. Each milestone ends with something that runs an
 
 ## Milestones
 
-| Milestone | Outcome | Done when | State on 22 November 2026 |
+| Milestone | Outcome | Done when | State on 23 November 2026 |
 |---|---|---|---|
 | **M0 Foundations** | A repository others can build on | Charter, architecture and decision records are reviewed. Lint, tests and CI pass on the project skeleton. | Done |
 | **M1 Baseline pipeline** | A question gets a cited answer end to end, using the simplest approach that works | The handbook snapshot is indexed by a repeatable command. `ask` returns an answer with citations, or abstains. | Done: `ask` answers real questions with citations, or declines, using Gemini (ADR 0013). The Claude generator is written and has not been run against its API |

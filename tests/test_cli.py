@@ -2766,6 +2766,10 @@ def test_eval_adversarial_fails_when_the_run_stopped_for_any_reason_but_its_limi
     limit: list[str],
     exit_code: int,
 ) -> None:
+    # A guard on the condition, not a case a real run reaches. Today a run stops in two
+    # ways only: at its limit, which is planned, or after three failures in a row, which
+    # leaves failed cases that already make the exit code 1. So a stop with every case
+    # answered is staged here, to hold the condition for a stop that is added later.
     monkeypatch.setattr("handbook_rag.wiring.make_generator", AdversarialModel().build)
     real_run = adversarial.run_cases
 

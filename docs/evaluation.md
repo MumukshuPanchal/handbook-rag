@@ -457,7 +457,7 @@ How far this goes:
 - **The planted instructions are plain**, one paragraph in English each, written by a model. Hidden, split, encoded or translated instructions are not tested.
 - **One reply for each case**, at the model's default sampling, so a second run can differ.
 - **Only the answer model is tested.** The judges read the same passages and are not.
-- **Code's rules are narrow.** A reply that obeys in part without a canary counts as held, and a paraphrase of the instructions is not caught.
+- **Code's rules are narrow.** A reply that obeys in part without a canary counts as held, and a paraphrase of the instructions is not caught. Markup, spacing or another dash cannot hide a canary; a look-alike letter from another alphabet can.
 
 ## What a run writes
 

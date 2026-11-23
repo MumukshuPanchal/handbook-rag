@@ -117,9 +117,9 @@ flowchart LR
 ```
 
 - **Golden set.** Questions with a reference answer and the handbook passage that supports it. It includes questions the handbook cannot answer, to test that the assistant abstains.
-- **Retrieval metrics.** Recall@k (was the right passage in the top k?), MRR (how high was it ranked?) and nDCG@k (ranking quality over the top k).
-- **Answer metrics.** A judge model checks each answer against separate criteria: supported by the cited passages, consistent with the reference answer, and correct to answer or abstain. The judge is validated against human labels before its scores are used.
-- **System metrics.** Latency per stage, tokens and cost per answer, taken from API responses and traces.
+- **Retrieval metrics.** Hit@k (was a right passage among the top k?), Recall@k (what share of the evidence was among them, which differs from Hit@k only when a question needs more than one passage), MRR (how high was the first right passage ranked?) and nDCG@k (ranking quality over the top k).
+- **Answer metrics.** Code decides what it can from each saved reply: whether the assistant was right to answer or to decline, whether the evidence was among its passages, and whether every statement cites one. Two judges decide what code cannot: whether each statement is supported by the passage it cites, and whether the answer agrees with the reference answer. Both are the answer model under other instructions. Each was checked against labelled answers before its score was used, and those labels were made by model sessions of another model family, not by a person ([ADR 0014](adr/0014-answer-evaluation-in-stages.md)).
+- **System metrics.** Latency per stage and the tokens of each answer, taken from API responses and traces. Cost in money is worked out only for Claude models, from a price table; the Gemini free tier charges nothing, so the runs so far record tokens and no cost.
 - **Bookkeeping.** Every run stores per-question results and traces. Harness failures such as timeouts are recorded separately from wrong answers.
 - **Regression gate.** CI indexes a fixed slice of the handbook with the real models, scores the default retriever on it, and fails if a score is below its recorded minimum ([ADR 0012](adr/0012-retrieval-gate-on-a-slice.md)).
 
@@ -142,7 +142,7 @@ Details and reasoning: [ADR 0008](adr/0008-opentelemetry-tracing.md).
 - A model API key is read from the environment or the `.env` file and handed to its client directly. It is never exported into the process environment, and nothing in the repository contains a secret.
 - In Docker Compose, the API container gets the Gemini key from the project's `.env` file and nothing else from it: Compose fills in `${GEMINI_API_KEY}` in `compose.yaml` when it starts the container. The key is not written into that file or the image, but `docker compose config` prints it in clear text.
 
-## Repository layout (planned)
+## Repository layout
 
 ```
 src/handbook_rag/
@@ -152,11 +152,15 @@ src/handbook_rag/
     retrieve/           dense, sparse, fusion, rerank
     generate/           prompt assembly, one generator per provider, citation mapping
     pipeline.py         the single entry point: question in, answer out
-    api/                FastAPI application
-    observability/      tracing setup
-evals/                  golden set, runner, metrics, judge
+    api.py              the FastAPI application
+    streaming.py        an answer written in a worker thread, read as a stream of events
+    tracing.py          tracing setup, and what each span records
+    wiring.py           builds the parts from the settings
+    cli.py              the handbook-rag command
+    evals/              metrics, runs, the two judges, adversarial tests
+evals/                  golden set, labelled answers, adversarial cases, saved runs
 tests/                  unit and integration tests
-docs/                   charter, architecture, roadmap, decision records
+docs/                   charter, architecture, roadmap, decision records, guides
 compose.yaml            API, Qdrant and trace backend
 ```
 
@@ -193,8 +197,9 @@ compose.yaml            API, Qdrant and trace backend
 | Reciprocal rank fusion | A way to merge ranked lists using only each item's rank, so scores on different scales need no calibration |
 | Cross-encoder | A model that reads a question and a passage together and scores the match; more accurate than comparing embeddings, but slower |
 | Grounded | Every claim in the answer is supported by the retrieved passages |
-| Golden set | A fixed, reviewed set of test questions with known good answers |
-| Recall@k | Share of questions for which a relevant passage appears in the top k results |
+| Golden set | A fixed set of test questions with known good answers, each checked before use. Here the checks were made by model sessions, and not yet by a person |
+| Hit@k | Share of questions for which a relevant passage appears in the top k results |
+| Recall@k | Share of a question's evidence that appears in the top k results. Equal to Hit@k when every question has one piece of evidence |
 | MRR | Mean reciprocal rank: average of 1 / rank of the first relevant result |
 | nDCG@k | A ranking score that rewards relevant results more the higher they appear |
 | Trace, span | A trace is the record of one request; a span is one timed step inside it |

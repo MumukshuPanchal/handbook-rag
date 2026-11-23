@@ -31,7 +31,7 @@ ADR 0006 named the method for a provider like this: number the passages and have
 - **No follow-up requests.** The SDK can send a request again by itself when a reply stops at the API's size limit or the stream drops. That is switched off, because the free tier has a small daily allowance.
 - **A rate limit is reported, not retried.** A request that fails because Google's servers are busy or failing, or because the connection fails before the reply starts, is sent up to three times. Those attempts are the only way a question costs more than one request. A rate limit on the free tier lasts a minute or a day, so the request is not repeated. The message says which limit it was when the API reports that, and that the limit belongs to the Google project, not to the key.
 - **The Claude generator stays**, behind the same interface. It has still not been run against the Claude API, and the README says so.
-- **Two tests send real requests** (`make test-live`). They need a key, so they never run in CI.
+- **Two tests send real requests** (`make test-live`). They need a key, so they never run in CI. (Note, 2026-11-23: there are three now. The third asks one question through `POST /ask` as a stream, [ADR 0015](0015-answers-over-http.md).)
 
 ## What was measured
 

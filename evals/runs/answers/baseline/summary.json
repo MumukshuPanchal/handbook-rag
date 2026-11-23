@@ -34,6 +34,18 @@
       "high": 1.0,
       "count": 129
     },
+    "correct": {
+      "mean": 0.984251968503937,
+      "low": 0.9606299212598425,
+      "high": 1.0,
+      "count": 127
+    },
+    "answered_correctly": {
+      "mean": 0.946969696969697,
+      "low": 0.9015151515151515,
+      "high": 0.9848484848484849,
+      "count": 132
+    },
     "answered": {
       "mean": 0.9621212121212122,
       "low": 0.9242424242424242,
@@ -80,6 +92,18 @@
           "high": 1.0,
           "count": 10
         },
+        "correct": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0,
+          "count": 10
+        },
+        "answered_correctly": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0,
+          "count": 10
+        },
         "answered": {
           "mean": 1.0,
           "low": 1.0,
@@ -117,6 +141,18 @@
           "low": 0.957983193277311,
           "high": 1.0,
           "count": 119
+        },
+        "correct": {
+          "mean": 0.9829059829059829,
+          "low": 0.9572649572649573,
+          "high": 1.0,
+          "count": 117
+        },
+        "answered_correctly": {
+          "mean": 0.9426229508196722,
+          "low": 0.9016393442622951,
+          "high": 0.9836065573770492,
+          "count": 122
         },
         "answered": {
           "mean": 0.9590163934426229,
@@ -220,6 +256,18 @@
           "high": 1.0,
           "count": 127
         },
+        "correct": {
+          "mean": 0.984251968503937,
+          "low": 0.9606299212598425,
+          "high": 1.0,
+          "count": 127
+        },
+        "answered_correctly": {
+          "mean": 0.984251968503937,
+          "low": 0.9606299212598425,
+          "high": 1.0,
+          "count": 127
+        },
         "answered": {
           "mean": 1.0,
           "low": 1.0,
@@ -247,6 +295,12 @@
       },
       "not given": {
         "right_call": {
+          "mean": 0.0,
+          "low": 0.0,
+          "high": 0.0,
+          "count": 5
+        },
+        "answered_correctly": {
           "mean": 0.0,
           "low": 0.0,
           "high": 0.0,
@@ -402,6 +456,129 @@
             "low": 0.9609701228883477,
             "high": 0.9939781606446402,
             "count": 259
+          }
+        }
+      }
+    },
+    "correct": {
+      "config": {
+        "judge_model": "gemini-3.5-flash-lite",
+        "judge_max_tokens": 2000,
+        "judge_instructions": "8e5cb3fe001720d7",
+        "judge_request": "2c1d89b574507235"
+      },
+      "attempts": 0,
+      "answers_judged": 127,
+      "verdicts": {
+        "correct": 125,
+        "partial": 2,
+        "incorrect": 0
+      },
+      "input_tokens": 115319,
+      "output_tokens": 5588,
+      "median_seconds": 1.1865,
+      "check": {
+        "run": "evals/runs/judge-correct/baseline",
+        "answers": {
+          "labelled": 167,
+          "judged": 167
+        },
+        "agreement": {
+          "statements": 167,
+          "same_decision": {
+            "mean": 0.9820359281437125,
+            "low": 0.9485221046167669,
+            "high": 0.9938720955630966,
+            "count": 167
+          },
+          "recall": {
+            "mean": 0.975,
+            "low": 0.8711863091181637,
+            "high": 0.9955731685462956,
+            "count": 40
+          },
+          "precision": {
+            "mean": 0.9512195121951219,
+            "low": 0.838610210059637,
+            "high": 0.9865190547563483,
+            "count": 41
+          },
+          "kappa": 0.9511,
+          "caught": {
+            "contradiction": [
+              5,
+              5
+            ],
+            "name": [
+              5,
+              5
+            ],
+            "negation": [
+              5,
+              5
+            ],
+            "no_answer": [
+              5,
+              5
+            ],
+            "number": [
+              5,
+              5
+            ],
+            "omission": [
+              4,
+              5
+            ],
+            "other_question": [
+              5,
+              5
+            ],
+            "scope": [
+              5,
+              5
+            ]
+          },
+          "matrix": {
+            "correct": {
+              "correct": 125,
+              "partial": 2,
+              "incorrect": 0
+            },
+            "partial": {
+              "correct": 1,
+              "partial": 4,
+              "incorrect": 0
+            },
+            "incorrect": {
+              "correct": 0,
+              "partial": 0,
+              "incorrect": 35
+            }
+          },
+          "answers": 167,
+          "same_answer": {
+            "mean": 0.9820359281437125,
+            "low": 0.9485221046167669,
+            "high": 0.9938720955630966,
+            "count": 167
+          },
+          "answer_recall": {
+            "mean": 0.975,
+            "low": 0.8711863091181637,
+            "high": 0.9955731685462956,
+            "count": 40
+          },
+          "answer_precision": {
+            "mean": 0.9512195121951219,
+            "low": 0.838610210059637,
+            "high": 0.9865190547563483,
+            "count": 41
+          },
+          "same_verdict": {
+            "mean": 0.9820359281437125,
+            "low": 0.9485221046167669,
+            "high": 0.9938720955630966,
+            "count": 167
           }
         }
       }

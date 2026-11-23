@@ -1,0 +1,116 @@
+{
+  "description": "gemini-3.5-flash-lite judging the labelled answers in evals/judge/correct/cases.jsonl.",
+  "criterion": "correct",
+  "config": {
+    "judge_model": "gemini-3.5-flash-lite",
+    "judge_max_tokens": 2000,
+    "judge_instructions": "8e5cb3fe001720d7",
+    "judge_request": "2c1d89b574507235"
+  },
+  "answers_labelled": 167,
+  "answers_judged": 167,
+  "answers_failed": 0,
+  "attempts": 167,
+  "left_out_as_unclear": 0,
+  "agreement": {
+    "statements": 167,
+    "same_decision": {
+      "mean": 0.9820359281437125,
+      "low": 0.9485221046167669,
+      "high": 0.9938720955630966,
+      "count": 167
+    },
+    "recall": {
+      "mean": 0.975,
+      "low": 0.8711863091181637,
+      "high": 0.9955731685462956,
+      "count": 40
+    },
+    "precision": {
+      "mean": 0.9512195121951219,
+      "low": 0.838610210059637,
+      "high": 0.9865190547563483,
+      "count": 41
+    },
+    "kappa": 0.9511,
+    "caught": {
+      "contradiction": [
+        5,
+        5
+      ],
+      "name": [
+        5,
+        5
+      ],
+      "negation": [
+        5,
+        5
+      ],
+      "no_answer": [
+        5,
+        5
+      ],
+      "number": [
+        5,
+        5
+      ],
+      "omission": [
+        4,
+        5
+      ],
+      "other_question": [
+        5,
+        5
+      ],
+      "scope": [
+        5,
+        5
+      ]
+    },
+    "matrix": {
+      "correct": {
+        "correct": 125,
+        "partial": 2,
+        "incorrect": 0
+      },
+      "partial": {
+        "correct": 1,
+        "partial": 4,
+        "incorrect": 0
+      },
+      "incorrect": {
+        "correct": 0,
+        "partial": 0,
+        "incorrect": 35
+      }
+    },
+    "answers": 167,
+    "same_answer": {
+      "mean": 0.9820359281437125,
+      "low": 0.9485221046167669,
+      "high": 0.9938720955630966,
+      "count": 167
+    },
+    "answer_recall": {
+      "mean": 0.975,
+      "low": 0.8711863091181637,
+      "high": 0.9955731685462956,
+      "count": 40
+    },
+    "answer_precision": {
+      "mean": 0.9512195121951219,
+      "low": 0.838610210059637,
+      "high": 0.9865190547563483,
+      "count": 41
+    },
+    "same_verdict": {
+      "mean": 0.9820359281437125,
+      "low": 0.9485221046167669,
+      "high": 0.9938720955630966,
+      "count": 167
+    }
+  },
+  "input_tokens": 151110,
+  "output_tokens": 7423,
+  "median_seconds": 1.1612753751687706
+}

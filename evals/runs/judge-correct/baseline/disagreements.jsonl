@@ -1,0 +1,3 @@
+{"case": "q062", "statement": 1, "kind": "real", "expected": "correct", "judged": "partial", "reason": "The assistant's answer leaves out the instruction to remove the delegate after returning to work."}
+{"case": "q124", "statement": 1, "kind": "real", "expected": "correct", "judged": "partial", "reason": "The assistant mentions the correct macro but leaves out the instruction to set the ticket to On-Hold."}
+{"case": "q051-v1", "statement": 1, "kind": "omission", "expected": "partial", "judged": "correct", "reason": "The assistant's answer lists all the correct countries and the Rest of World page as specified in the reference answer."}

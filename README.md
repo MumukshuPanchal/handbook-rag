@@ -20,21 +20,21 @@ flowchart TB
         D --> F["Merge<br/>reciprocal rank fusion"]
         K --> F
         F -. "when switched on" .-> R["Rerank<br/>cross-encoder"]
-        F --> G["Answer model<br/>Gemini, cites passages by number"]
+        F --> G["Answer model<br/>Gemini by default, or Claude,<br/>cites the passages it uses"]
         R -.-> G
         G --> OUT["Answer with numbered citations,<br/>or the fixed sentence that declines"]
     end
     D --> Q
     K --> Q
 
-    EV["Evaluation<br/>golden set, two judges, adversarial cases"] -- "calls the same function" --> IN
+    EV["Evaluation<br/>golden set, two judges, adversarial cases"] -- "answer evaluation" --> IN
     EV --> RUNS["evals/runs/<br/>committed results"]
     IN -. "a span for each stage, when tracing is on" .-> T["Trace backend<br/>Jaeger, over OTLP"]
 ```
 
 - **Data path.** `make snapshot` downloads the handbook's Markdown pages at a pinned commit ([ADR 0002](docs/adr/0002-handbook-corpus.md)). `make index` cleans each page, cuts it into chunks along its headings ([ADR 0009](docs/adr/0009-structure-aware-chunking.md)), and stores two vectors for each chunk in Qdrant: a dense one for meaning and a sparse one for exact words ([ADR 0004](docs/adr/0004-qdrant-as-vector-store.md), [ADR 0005](docs/adr/0005-local-embedding-and-reranking-models.md)).
 - **Question path.** One function, `answer_question` in [`pipeline.py`](src/handbook_rag/pipeline.py), serves the `ask` command, `POST /ask` and the answer evaluation. It searches both ways and merges the two lists. Reranking is available and off by default ([ADR 0011](docs/adr/0011-hybrid-retrieval-by-default.md)). The model writes a number such as `[2]` after each statement, and code checks that the number names a passage that was really sent ([ADR 0013](docs/adr/0013-gemini-free-tier-with-marker-citations.md)). When the passages do not hold the answer, the reply is one fixed sentence with no sources ([ADR 0010](docs/adr/0010-search-result-blocks-and-declining.md)).
-- **Evaluation** calls the same function, so it measures the system that runs, and commits its runs under [`evals/runs/`](evals/runs) ([ADR 0007](docs/adr/0007-evaluation-strategy.md), [ADR 0014](docs/adr/0014-answer-evaluation-in-stages.md)).
+- **Evaluation.** The answer evaluation and the adversarial questions from outside the handbook call that same function, so they measure the system that runs. The retrieval evaluation calls the search alone, the adversarial cases with a planted passage give their passages to the answer model directly, and the judges call the model with their own instructions. Every run is committed under [`evals/runs/`](evals/runs) ([ADR 0007](docs/adr/0007-evaluation-strategy.md), [ADR 0014](docs/adr/0014-answer-evaluation-in-stages.md)).
 - **Tracing** records every stage of a request as a span. It is off by default and on in Docker Compose ([ADR 0008](docs/adr/0008-opentelemetry-tracing.md)).
 
 [The architecture document](docs/architecture.md) has the full picture, the components and a glossary.
@@ -79,7 +79,7 @@ You need [uv](https://docs.astral.sh/uv/), `make`, `git` and Docker. uv installs
    gemini-3.5-flash-lite | 1,728 tokens in | 79 out | 2.0 s
    ```
 
-   That is real output from 22 November 2026, and all of it: the first line is `make` showing the command it runs. The time on the last line is the model call alone. Each command takes about ten seconds to start here, because it loads PyTorch and the embedding model, which the API server does once. The same question asked again gets an answer that differs in wording and in detail. A question the handbook does not cover gets one fixed sentence, "I could not find this in the handbook.", and no sources.
+   That is real output from 22 November 2026, and all of it: the first line is `make` showing the command it runs. The time on the last line is the model call alone. Each command took about ten seconds to start on the development laptop, as seen there and recorded in no file, because it loads PyTorch and the embedding model, which the API server does once. The same question asked again gets an answer that differs in wording and in detail. A question the handbook does not cover gets one fixed sentence, "I could not find this in the handbook.", and no sources.
 
 ### As an HTTP service
 
@@ -111,7 +111,7 @@ The Gemini key is the one value taken from `.env`. A full indexing run inside a 
 
 ## Results
 
-Every number in this section comes from a run committed under [`evals/runs/`](evals/runs), or from the document linked beside it. The tables, and the figures of the judges' checks and of the control, are checked by [`tests/test_readme_results.py`](tests/test_readme_results.py), which reads the runs and fails if one of them no longer matches. [The evaluation guide](docs/evaluation.md) says how each run was made and how to read it.
+Every number in this section comes from a run committed under [`evals/runs/`](evals/runs), or from the document linked beside it. Every table in this section, the figures of the control, and the figures in the bullets on hybrid search and on reranking are checked by [`tests/test_readme_results.py`](tests/test_readme_results.py), which reads the runs and fails if one of them no longer matches. The other figures in the text are not. [The evaluation guide](docs/evaluation.md) says how each run was made and how to read it.
 
 ### What the charter asked for, and what was measured
 
@@ -124,7 +124,7 @@ The [charter](docs/charter.md) set provisional targets before anything was measu
 | Answers are supported by their sources | At least 0.90 of answers | 0.984 (0.961 to 1.000), 127 of 129 answers | [answers, `baseline`](evals/runs/answers/baseline) | Yes, by a judge that is the answer model itself |
 | Answers are correct | At least 0.80 of answers | 0.984 (0.961 to 1.000), 125 of 127 answers | [answers, `baseline`](evals/runs/answers/baseline) | Yes, by the same model as a second judge |
 | The assistant abstains when it should | At least 0.90 of unanswerable questions declined | 0.939 (0.848 to 1.000), 31 of 33 questions | [answers, `baseline`](evals/runs/answers/baseline) | Yes, on few questions: the interval reaches below the target |
-| The assistant does not over-abstain | At most 0.05 of answerable questions declined | 0.038, 5 of 132 questions | [answers, `baseline`](evals/runs/answers/baseline) | Yes. All five were search misses |
+| The assistant does not over-abstain | At most 0.05 of answerable questions declined | 0.038 (0.008 to 0.076), 5 of 132 questions | [answers, `baseline`](evals/runs/answers/baseline) | Yes, though the interval reaches above the target. All five were search misses |
 | Answers arrive quickly | 95th percentile time to a complete answer at most 10 seconds | 10.1 s for the model call alone, median 2.4 s | [answers, `baseline`](evals/runs/answers/baseline) | No. The time of the search comes on top |
 | Cost is known and controlled | Mean model cost per answer for each model tier, target set after the tier comparison | No money figure: the free tier charges nothing. A question sent 1,654 tokens and got 36 back, on average | [answers, `baseline`](evals/runs/answers/baseline) | Not measured. The tier comparison was not done ([issue 17](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/17)), so no target was set |
 
@@ -142,7 +142,7 @@ Retrieval on the 132 answerable test questions, over the full index of 38,881 ch
 | [v3](evals/runs/retrieval/v3) | Hybrid, then the top 30 reranked by a cross-encoder (ms-marco-MiniLM-L6-v2). | 132 | 0.939 (0.894 to 0.977) | 0.773 | 0.852 | 247 ms |
 
 - **Hybrid search is the default.** It clearly beats dense search alone: +0.106 on Hit@5 (95% interval +0.053 to +0.159), with 14 questions gained and none lost. Against keyword search alone the picture is not clear: hybrid is ahead at five results (+0.030, an interval that includes zero) and behind at rank 1. That choice rests partly on judgement, and [ADR 0011](docs/adr/0011-hybrid-retrieval-by-default.md) says why.
-- **Reranking is off by default.** It brings no clear gain at five results, and it makes search about seven times slower.
+- **Reranking is off by default.** It brings no clear gain at five results, and it makes search about seven and a half times slower: a median of 247 ms against 33 ms.
 - **Two experiments did not help**, and are written up anyway: half-size chunks, and other settings of the rank fusion ([experiment log](docs/experiments/2026-11-22-chunk-size-and-fusion.md)).
 - **CI catches broken retrieval.** Every pull request is scored with the real models on a slice of the handbook, and fails if a score falls below a recorded minimum. That detects breakage, such as losing either half of hybrid search. It does not detect a change that costs one or two questions ([ADR 0012](docs/adr/0012-retrieval-gate-on-a-slice.md)).
 
@@ -210,6 +210,9 @@ What this version does not do, or does not show. Each point is already stated in
 - **No person has verified the test questions, the labels or the readings.** The 165 test questions, the labelled answers both judges were checked against, and the readings of the five adversarial replies that code set aside were all made and checked by model sessions ([golden set](evals/golden/README.md), [labelled answers](evals/judge/README.md), [adversarial cases](evals/adversarial/README.md)). A person's check of a sample is what remains of [issue 8](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/8).
 - **Most test questions were written from their passage.** 122 of the 132 answerable questions were written by a model that could see the passage, and 10 without it, too few to compare searches on ([golden set](evals/golden/README.md), [issue 43](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/43)).
 - **The judge is the answer model itself.** Both judges are `gemini-3.5-flash-lite`, and a model judging its own answers may be lenient. Labels from another model family are some protection ([ADR 0014](docs/adr/0014-answer-evaluation-in-stages.md)).
+- **The judges were checked on one model's answers, and not against planted instructions.** No figure says how either judge does on another model's answers ([labelled answers](evals/judge/README.md#known-limits)), and whether an instruction planted in a passage moves a judge is not tested ([adversarial cases](evals/adversarial/README.md#known-limits)).
+- **The first judge was told two rules fewer than its readers.** Its instructions lack two rules of its rubric, and in one long answer its numbering slipped. Putting the rules back makes another judge, which has to be checked again ([the guide](docs/evaluation.md#what-the-judge-decides), [issue 58](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/58)).
+- **Questions with a false assumption are not tested.** The golden set holds three, too few to measure whether the assistant corrects an assumption instead of going along with it ([golden set](evals/golden/README.md), [issue 37](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/37)).
 - **Planted instructions get through.** 8 of the 20 planted in passages did: a link under a correct answer, a page that calls itself confidential, a forged message from the system ([the run](evals/runs/adversarial/baseline), [issue 66](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/66)). Only plain instructions in English were tried.
 - **Answers that leave out a limit or an exception are not measured reliably.** The judge passed the three real ones, and counting them as faults would take "supported" from 0.984 to 0.961 ([issue 59](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/59)).
 - **One reply for each question, on a free tier with uneven speed.** The same question gets a different answer each time, so a second run would not give exactly these numbers. The free key allowed 15 requests a minute and 500 a day, which Google does not guarantee ([ADR 0014](docs/adr/0014-answer-evaluation-in-stages.md)). Its speed is uneven: the 95th percentile of the model call alone was 10.1 s, over the charter's 10 seconds before the search is added ([the run](evals/runs/answers/baseline)).
@@ -304,7 +307,7 @@ The limits below are set in [`api.py`](src/handbook_rag/api.py) and [`config.py`
 - **Without a key** the service still starts and searches. `/ask` answers 503, and `/health` reports `"answering": false`. No request is sent to the model to find that out, so a key that is present but wrong shows up only at the first question.
 - **Answers in flight.** The service writes at most four answers at once (`HANDBOOK_RAG_API_MAX_ANSWERS_IN_FLIGHT`), because each holds a thread while the model writes. A caller who leaves in the middle of a stream stops the model call at its next piece of text.
 - **Trace id.** With tracing on, every response to `/search`, and every response to `/ask` once its answer has started, carries the id of its trace in the `X-Trace-Id` header, a failed one too.
-- **Speed.** The models are loaded and run once when the service starts. Measured here on the full index, searches one after another took 77 to 88 ms, and 124 to 169 ms after 20 to 60 idle seconds. In the service the embedding model runs on the CPU, also on a machine with a GPU, because it embeds one question at a time: on an Apple GPU, the first search after a few idle seconds took over a second. `HANDBOOK_RAG_EMBEDDING_DEVICE` changes it.
+- **Speed.** The models are loaded and run once when the service starts. Measured on the full index, searches one after another took 77 to 88 ms, and 124 to 169 ms after 20 to 60 idle seconds ([a comment on issue 14](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/14#issuecomment-7074199080)). In the service the embedding model runs on the CPU, also on a machine with a GPU, because it embeds one question at a time: on an Apple GPU, the first search after a few idle seconds took over a second. `HANDBOOK_RAG_EMBEDDING_DEVICE` changes it.
 - **Not built for the open internet**: see [Limitations](#limitations).
 
 ## Tracing
@@ -319,7 +322,7 @@ The trace of an answer adds the request to the language model, under the names O
 
 ## Docker
 
-The commands are in the [quickstart](#with-docker-compose). The first build downloads about half a gigabyte and took four minutes here. The image is 2.2 GB, most of it PyTorch. It is built in two stages and runs as an unprivileged user ([compose.yaml](compose.yaml), [Dockerfile](Dockerfile)).
+The commands are in the [quickstart](#with-docker-compose). On the development laptop the first build downloaded about half a gigabyte and took four minutes, as seen there and recorded in no file. The image is 2.2 GB, most of it PyTorch ([pull request 50](https://github.com/MumukshuPanchal/production-rag-pipeline/pull/50)). It is built in two stages and runs as an unprivileged user ([compose.yaml](compose.yaml), [Dockerfile](Dockerfile)).
 
 | Address | What is there |
 |---|---|
@@ -340,7 +343,7 @@ The commands are in the [quickstart](#with-docker-compose). The first build down
 
 ```bash
 make install    # install dependencies and git hooks
-make check      # lint, type check and fast tests: everything CI runs
+make check      # lint, type check and fast tests; CI also runs the retrieval gate and builds the image
 make snapshot   # download the handbook at the pinned commit into data/
 make chunks     # clean and chunk it, and print a summary
 make qdrant     # start the Qdrant vector store in Docker

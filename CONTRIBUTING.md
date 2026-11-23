@@ -6,7 +6,7 @@ You need [uv](https://docs.astral.sh/uv/) and `make`. uv installs the right Pyth
 
 ```bash
 make install   # install dependencies and git hooks
-make check     # lint, type check and fast tests: everything CI runs
+make check     # lint, type check and fast tests; CI also runs the retrieval gate and builds the image
 ```
 
 Run `make` on its own to list every command.

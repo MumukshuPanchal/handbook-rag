@@ -28,7 +28,7 @@ test-slow: ## Run the tests that download a model
 test-live: ## Send three real requests to the answer model, one through the API (needs its key in .env)
 	uv run pytest -m live
 
-check: lint typecheck test ## Run everything CI runs
+check: lint typecheck test ## Run the lint, type check and fast tests that CI runs (CI also runs the retrieval gate and builds the image)
 
 snapshot: ## Download the handbook at the pinned commit into data/
 	uv run handbook-rag snapshot

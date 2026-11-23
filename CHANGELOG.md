@@ -37,10 +37,9 @@ The first version: an assistant that answers questions from the GitLab handbook 
 - A retrieval gate in CI, on a slice of the handbook with the real models ([#45], [ADR 0012]).
 - Answer evaluation in stages, within a daily allowance of requests, with the scores that code can compute ([#56], [ADR 0014]).
 - A judge for whether each statement is backed by the passage it cites, checked on 169 labelled answers before its score was used ([#57]).
-- A second judge for whether an answer agrees with its reference answer, checked on 167 labelled answers ([#62], [#63]).
+- A second judge for whether an answer agrees with its reference answer, checked on 167 labelled answers ([#62]).
 - A control for the second judge: each reference answer given to it as the answer ([#67]).
 - Adversarial tests: 36 cases that plant an instruction in a passage or ask a question outside the handbook ([#67]).
-- Evaluation tests that no longer really wait between requests ([#65]).
 
 #### Serving
 
@@ -57,9 +56,14 @@ The first version: an assistant that answers questions from the GitLab handbook 
 #### Engineering
 
 - The package, settings from the environment, lint, type checks, tests and CI on every pull request ([#23]).
-- Decision records reviewed and accepted, among them a pipeline written in the project's own code instead of a framework, and merges by fast-forward ([#25], [ADR 0001], [ADR 0003]).
+- Decision records reviewed and accepted, among them a pipeline written in the project's own code instead of a framework ([#25], [ADR 0001], [ADR 0003]).
+- Pull requests merged by fast-forward, so every commit lands on `main` unchanged ([#25]).
 - The container image built in CI on every pull request, and checked to run as a user other than root ([#50]).
 - The README rewritten with results and limitations, a test that holds its results to the committed runs, and this changelog ([#18]).
+
+### Fixed
+
+- The evaluation tests no longer really wait between requests, which had made the fast suite take minutes ([#65]).
 
 ### Known gaps
 
@@ -67,7 +71,10 @@ These are the [limitations in the README](README.md#limitations).
 
 - No person has verified the test questions, the labels the judges were checked against, or the readings of the adversarial replies ([#8]).
 - Most test questions were written by a model that could see the passage; too few were written without it ([#43]).
-- Both judges are the answer model itself.
+- Both judges are the answer model itself ([#63]).
+- The judges were checked on one model's answers only, and whether a planted instruction moves a judge is not tested.
+- The first judge's instructions lack two rules of its rubric, and its numbering slipped in one long answer ([#58]).
+- Questions with a false assumption are too few to test whether the assistant corrects the assumption ([#37]).
 - Planted instructions got through in 8 of the 20 cases that plant one, and nothing is fixed yet ([#66]).
 - Answers that leave out a limit or an exception are not measured reliably ([#59]).
 - One reply for each question, on a free tier whose speed is uneven: the time to a complete answer is over the charter's target.
@@ -92,6 +99,7 @@ These are the [limitations in the README](README.md#limitations).
 [#32]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/32
 [#33]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/33
 [#34]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/34
+[#37]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/37
 [#35]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/35
 [#36]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/36
 [#38]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/38
@@ -109,6 +117,7 @@ These are the [limitations in the README](README.md#limitations).
 [#55]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/55
 [#56]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/56
 [#57]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/57
+[#58]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/58
 [#59]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/59
 [#62]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/62
 [#63]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/63

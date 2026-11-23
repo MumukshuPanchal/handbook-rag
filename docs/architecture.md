@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the system we are building and how its parts fit together. The reasons behind each major choice are in the [decision records](adr/). The goals and success metrics are in the [project charter](charter.md).
+This document describes the system as it is at version 1.0.0 and how its parts fit together. The reasons behind each major choice are in the [decision records](adr/). The goals and success metrics are in the [project charter](charter.md).
 
 ## Overview
 
@@ -15,9 +15,9 @@ Two further parts keep the system honest: an **evaluation harness** that measure
 
 1. **Measure first.** A change to any stage must show up in the evaluation. A baseline is measured before anything is optimised.
 2. **Replaceable stages.** Each stage sits behind a small interface, so one can change without the others noticing.
-3. **One code path.** The evaluation and the API call the same pipeline function. We never measure a copy of the system.
+3. **One code path.** The answer evaluation and the API call the same pipeline function. We never measure a copy of the system.
 4. **Reproducible.** The handbook is pinned to a commit, chunk IDs are deterministic, dependencies are locked.
-5. **Observable by default.** Every request produces a trace. Debugging starts from data.
+5. **Observable.** With tracing switched on, every request produces a trace. It is off by default and on in Docker Compose. Debugging starts from data.
 
 ## Indexing path
 
@@ -43,8 +43,9 @@ flowchart LR
     API --> R2["Sparse search<br/>(BM25)"]
     R1 --> F["Fuse<br/>reciprocal rank fusion"]
     R2 --> F
-    F --> RR["Rerank<br/>cross-encoder"]
-    RR --> G["Generate<br/>Gemini or Claude, with citations"]
+    F -. "when switched on" .-> RR["Rerank<br/>cross-encoder"]
+    F --> G["Generate<br/>Gemini or Claude, with citations"]
+    RR -.-> G
     G --> API
     R1 <--> Q[("Qdrant")]
     R2 <--> Q
@@ -54,13 +55,13 @@ flowchart LR
 1. **Validate** the question (non-empty, within a length limit).
 2. **Retrieve candidates** twice: by meaning (dense) and by exact terms (sparse).
 3. **Fuse** the two ranked lists into one with reciprocal rank fusion.
-4. **Rerank** the fused candidates with a cross-encoder, which reads the question and each chunk together and scores how well they match. Keep the top few.
+4. **Rerank**, when reranking is switched on; it is off by default. A cross-encoder reads the question and each fused candidate together and scores how well they match. Without reranking, the top few of the fused list are kept; with it, the top few after reranking.
 5. **Generate** an answer. The kept chunks are sent to a language model as search results. The instructions tell the model to answer only from them, to say which search result supports each statement, and to reply with one fixed sentence when they do not contain the answer. The model's name selects the provider:
    - **Gemini, the default.** The passages are numbered, the model writes the numbers as markers such as `[2]`, and our code turns the markers into citations. Details: [ADR 0013](adr/0013-gemini-free-tier-with-marker-citations.md).
    - **Claude.** The API's built-in citations return the quoted words with each statement. Details: [ADR 0010](adr/0010-search-result-blocks-and-declining.md). This generator has not been run against the Claude API yet.
 6. **Return** the answer, its citations (page, section, URL and the passage's text; the words a Claude citation quotes are kept in the pipeline's answer but not returned yet), whether the assistant answered or abstained, and a trace ID. `POST /ask` returns them as one JSON object, or, when the request asks for a stream, sends the text as server-sent events while the model writes and the same object at the end. Details: [ADR 0015](adr/0015-answers-over-http.md).
 
-Steps 2 to 6 are one function, `answer_question` in `pipeline.py`, which the command line, the API and the evaluation all call. It also opens the spans of the answer, so every caller leaves the same trace. The API runs it in a worker thread for each answer, because the generators block while the model writes, and a setting caps how many run at once.
+Steps 2 to 6 are one function, `answer_question` in `pipeline.py`, which the command line, the API and the answer evaluation all call. It also opens the spans of the answer, so every caller leaves the same trace. The API runs it in a worker thread for each answer, because the generators block while the model writes, and a setting caps how many run at once.
 
 The first working version (the baseline) used dense search only and skipped steps 3 and 4. Hybrid search is now the default, and reranking is available but switched off. Both decisions, with the measurements and the judgement behind them, are in [ADR 0011](adr/0011-hybrid-retrieval-by-default.md).
 
@@ -108,7 +109,7 @@ Deterministic IDs make indexing idempotent. Character offsets let the evaluation
 ```mermaid
 flowchart LR
     GS["Golden set<br/>questions, references, evidence"] --> RUN["Evaluation runner"]
-    RUN --> PIPE["Pipeline entry point<br/>(same as the API)"]
+    RUN --> PIPE["The search alone, or the whole pipeline<br/>(the same code as the API)"]
     PIPE --> RES["Per-question results<br/>and traces"]
     RES --> M1["Retrieval metrics<br/>(computed in code)"]
     RES --> M2["Answer metrics<br/>(model judge)"]
@@ -127,7 +128,7 @@ Details and reasoning: [ADR 0007](adr/0007-evaluation-strategy.md).
 
 ## Observability
 
-Each request produces one trace with a span per stage: dense search, sparse search, fusion, rerank, generate. Spans record what is needed to explain an answer: which chunks were retrieved with which scores, which model was called, how many tokens were used, and whether the assistant abstained.
+With tracing switched on, each request produces one trace with a span per stage: dense search, sparse search, fusion, rerank when it is on, generate. Tracing is off by default (`HANDBOOK_RAG_TRACING`) and on in Docker Compose. Spans record what is needed to explain an answer: which chunks were retrieved with which scores, which model was called, how many tokens were used, and whether the assistant abstained.
 
 Spans are exported over OTLP to a local trace backend, and to any other OTLP-compatible backend by changing configuration.
 
@@ -166,7 +167,7 @@ compose.yaml            API, Qdrant and trace backend
 
 ## Deployment view
 
-`docker compose up` starts three containers: the API, Qdrant, and the trace backend. Indexing is a one-off command run against the same Qdrant instance. Embedding and reranking models run inside the API process: on CPU in the container, and on a GPU when one is available. The image is built in two stages and runs as an unprivileged user; the handbook snapshot and the model files live in volumes, so they are downloaded once.
+`docker compose up` starts three containers: the API, Qdrant, and the trace backend. Indexing is a one-off command run against the same Qdrant instance. Embedding and reranking models run inside the API process, and in the container on the CPU. Outside a container the API still runs the embedding model on the CPU, because it embeds one question at a time, unless `HANDBOOK_RAG_EMBEDDING_DEVICE` names another device; the reranker, loaded only when reranking is on, uses a GPU when there is one. The image is built in two stages and runs as an unprivileged user; the handbook snapshot and the model files live in volumes, so they are downloaded once.
 
 ## Security and safety
 

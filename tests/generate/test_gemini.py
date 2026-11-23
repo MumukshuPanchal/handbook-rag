@@ -408,6 +408,7 @@ def test_no_chunks_means_no_model_call_and_no_answer() -> None:
     assert received == [NOT_FOUND_MESSAGE]
     assert answer.stop_reason == "no_context"
     assert answer.model == MODEL
+    assert answer.requests == 0
 
 
 @pytest.mark.parametrize(
@@ -521,8 +522,28 @@ def test_no_chunks_means_no_model_call_and_no_answer() -> None:
             None,
         ),
         (
+            # A request the API refuses as it was sent is refused again: not worth repeating.
             api_error(400, "INVALID_ARGUMENT", message="Request contains an invalid argument."),
             r"returned an error \(400\): Request contains an invalid argument.",
+            "configuration",
+            None,
+        ),
+        (
+            api_error(400, "FAILED_PRECONDITION", message="User location is not supported."),
+            r"returned an error \(400\): User location is not supported.",
+            "configuration",
+            None,
+        ),
+        (
+            api_error(499, "CANCELLED", message="The operation was cancelled."),
+            r"returned an error \(499\)",
+            "configuration",
+            None,
+        ),
+        (
+            # The server gave up waiting for the request, which a new one may fix.
+            api_error(408, "DEADLINE_EXCEEDED", message="Request timeout."),
+            r"returned an error \(408\)",
             "unavailable",
             None,
         ),
@@ -533,12 +554,33 @@ def test_no_chunks_means_no_model_call_and_no_answer() -> None:
             None,
         ),
         (
+            api_error(500, "INTERNAL", message="An internal error has occurred."),
+            r"returned an error \(500\)",
+            "unavailable",
+            None,
+        ),
+        (
+            api_error(504, "DEADLINE_EXCEEDED", message="Deadline expired before operation."),
+            r"returned an error \(504\): Deadline expired before operation.",
+            "timeout",
+            None,
+        ),
+        (
             httpx2.ConnectError("Connection refused"),
             "Could not reach the Gemini API",
             "unavailable",
             None,
         ),
-        (httpx2.ReadTimeout("timed out"), "Could not reach the Gemini API", "unavailable", None),
+        (httpx2.ReadTimeout("timed out"), "did not answer in time", "timeout", None),
+        (httpx2.ConnectTimeout("timed out"), "did not answer in time", "timeout", None),
+        (httpx.ReadTimeout("timed out"), "did not answer in time", "timeout", None),
+        (httpx.PoolTimeout("timed out"), "did not answer in time", "timeout", None),
+        (
+            httpx2.RemoteProtocolError("peer closed"),
+            "Could not reach the Gemini API",
+            "unavailable",
+            None,
+        ),
         (
             httpx.ConnectError("Connection refused"),
             "Could not reach the Gemini API",
@@ -610,6 +652,18 @@ def test_a_failure_after_part_of_the_answer_arrived_is_still_an_error() -> None:
 
     with pytest.raises(GenerationError, match="Could not reach the Gemini API"):
         generator_for(client).generate("q", [LEAVE], on_text=received.append)
+    assert "".join(received).startswith("Sixteen weeks.")
+
+
+def test_a_silence_after_part_of_the_answer_arrived_is_a_timeout() -> None:
+    client = FakeClient(
+        [piece("Sixteen weeks [1]. And then")], error=httpx2.ReadTimeout("timed out")
+    )
+    received: list[str] = []
+
+    with pytest.raises(GenerationError, match="did not answer in time") as raised:
+        generator_for(client).generate("q", [LEAVE], on_text=received.append)
+    assert raised.value.reason == "timeout"
     assert "".join(received).startswith("Sixteen weeks.")
 
 

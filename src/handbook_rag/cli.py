@@ -1797,10 +1797,16 @@ def ask(
     """Answer a question from the handbook, with the passages that support the answer."""
     settings = get_settings()
     traced: str | None = None
+    wrote = False
 
     def note_trace(found: str) -> None:
         nonlocal traced
         traced = found
+
+    def write(text: str) -> None:
+        nonlocal wrote
+        wrote = True
+        typer.echo(text, nl=False)
 
     # Leaving the session sends the trace, also when the answer fails.
     with tracing_session(settings):
@@ -1815,11 +1821,16 @@ def ask(
                 generator=generator,
                 limit=settings.answer_context_chunks,
                 section=section,
-                on_text=lambda text: typer.echo(text, nl=False),
+                on_text=write,
                 on_trace=note_trace,
             )
         except (VectorStoreError, GenerationError) as error:
+            if wrote:
+                # The reply broke off. The error starts on a line of its own.
+                typer.echo("")
             typer.echo(f"error: {error}", err=True)
+            if isinstance(error, GenerationError):
+                _show_what_was_found(error)
             if traced is not None:
                 typer.echo(f"trace {traced}", err=True)
             raise typer.Exit(code=1) from error
@@ -1843,6 +1854,11 @@ def ask(
     ]
     if cost is not None:
         details.insert(3, f"${cost:.5f}")
+    if answer.requests > 1:
+        # Failed requests were sent first. Each one counts against the key's allowance.
+        details.append(f"{answer.requests} requests")
+    if answer.fallback:
+        details.append("written by the fallback model")
     if answer.stop_reason == "max_tokens":
         details.append("cut off at the token limit")
     elif answer.stop_reason == "refusal":
@@ -1853,3 +1869,22 @@ def ask(
     if traced is not None:
         # The id to look this answer up by in the trace backend.
         typer.echo(f"trace {traced}")
+
+
+def _show_what_was_found(error: GenerationError) -> None:
+    """Say what else failed, then show the passages the search found.
+
+    No answer was written, but the search did its job, and its passages may be all the
+    person asking needs. They are the ones the model would have answered from.
+    """
+    if error.before_fallback is not None:
+        typer.echo(
+            f"error: before the fallback model, the answer model failed: {error.before_fallback}",
+            err=True,
+        )
+    if not error.retrieved:
+        return
+    typer.echo("\nNo answer was written. The search found these passages:")
+    for result in error.retrieved:
+        typer.echo(f"  {result.chunk.context_header}")
+        typer.echo(f"      {result.chunk.url}")

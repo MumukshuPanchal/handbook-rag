@@ -50,9 +50,16 @@ class Answer:
     stop_reason: str
     usage: TokenUsage = TokenUsage()
     seconds: float = 0.0
+    """How long the request that wrote the reply took. Failed requests before it are not
+    counted in."""
     seconds_to_first_text: float | None = None
     retrieved: tuple[ScoredChunk, ...] = field(default=())
     """The chunks the model was given, in ranked order."""
+    requests: int = 1
+    """How many requests to a model the answer took, failed ones included. 0 when the
+    assistant declined without asking a model, because nothing was found."""
+    fallback: bool = False
+    """Whether the fallback model wrote the reply, because the answer model had given up."""
 
     @property
     def text(self) -> str:

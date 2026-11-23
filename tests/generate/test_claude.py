@@ -271,11 +271,18 @@ def test_no_chunks_means_no_model_call_and_no_answer() -> None:
     assert answer.text == NOT_FOUND_MESSAGE
     assert received == [NOT_FOUND_MESSAGE]
     assert answer.usage.input_tokens == 0
+    assert answer.requests == 0
 
 
 def rate_limited(headers: dict[str, str] | None = None) -> anthropic.RateLimitError:
     response = httpx2.Response(429, headers=headers, request=REQUEST)
     return anthropic.RateLimitError("slow down", response=response, body=None)
+
+
+def status_error(code: int, message: str) -> anthropic.APIStatusError:
+    return anthropic.APIStatusError(
+        message, response=httpx2.Response(code, request=REQUEST), body=None
+    )
 
 
 @pytest.mark.parametrize(
@@ -312,16 +319,29 @@ def rate_limited(headers: dict[str, str] | None = None) -> anthropic.RateLimitEr
         (rate_limited({"retry-after": "nan"}), "rate limit", "rate_limit", None),
         (rate_limited({"retry-after": "inf"}), "rate limit", "rate_limit", None),
         (
-            # The code cannot tell a used-up balance from other rejected requests.
+            # The code cannot tell a used-up balance from other rejected requests. Either
+            # way the same request would be rejected again.
             anthropic.BadRequestError(
                 "Your credit balance is too low to access the Anthropic API.",
                 response=httpx2.Response(400, request=REQUEST),
                 body=None,
             ),
             "credit balance is too low",
+            "configuration",
+            None,
+        ),
+        (status_error(413, "request_too_large"), r"error \(413\)", "configuration", None),
+        # What the SDK would send again by itself: worth another attempt.
+        (status_error(408, "request_timeout"), r"error \(408\)", "unavailable", None),
+        (status_error(409, "conflict"), r"error \(409\)", "unavailable", None),
+        (status_error(500, "api_error"), r"error \(500\)", "unavailable", None),
+        (
+            status_error(529, "overloaded_error"),
+            r"error \(529\): overloaded_error",
             "unavailable",
             None,
         ),
+        (anthropic.APITimeoutError(request=REQUEST), "did not answer in time", "timeout", None),
         (
             anthropic.NotFoundError(
                 "model not found", response=httpx2.Response(404, request=REQUEST), body=None
@@ -348,6 +368,46 @@ def test_api_failures_become_clear_errors(
         generator.generate("q", [LEAVE])
     assert raised.value.reason == reason
     assert raised.value.retry_after == retry_after
+
+
+class BreakingStream(FakeStream):
+    """A stream that sends its first piece of text, then fails the way the SDK lets it."""
+
+    def __init__(self, final: Message, error: BaseException) -> None:
+        super().__init__(final)
+        self._error = error
+
+    @property
+    def text_stream(self) -> Iterator[str]:
+        yield "New parents get"
+        raise self._error
+
+
+@pytest.mark.parametrize(
+    ("error", "expected", "reason"),
+    [
+        (httpx2.ReadTimeout("timed out"), "did not answer in time", "timeout"),
+        (
+            httpx2.RemoteProtocolError("peer closed connection"),
+            "connection to the Claude API broke",
+            "unavailable",
+        ),
+        (httpx2.ReadError("connection reset"), "connection to the Claude API broke", "unavailable"),
+    ],
+)
+def test_a_connection_that_fails_in_the_middle_of_the_stream_is_a_clear_error(
+    error: BaseException, expected: str, reason: FailureReason, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Once the stream is open, the SDK passes the HTTP library's own error on unchanged.
+    generator, messages = generator_for(CITED_ANSWER)
+    monkeypatch.setattr(messages, "stream", lambda **_request: BreakingStream(CITED_ANSWER, error))
+    received: list[str] = []
+
+    with pytest.raises(GenerationError, match=expected) as raised:
+        generator.generate("q", [LEAVE], on_text=received.append)
+    assert raised.value.reason == reason
+    assert raised.value.__cause__ is error
+    assert received == ["New parents get"]
 
 
 def test_the_generator_names_the_model_it_asks_for() -> None:

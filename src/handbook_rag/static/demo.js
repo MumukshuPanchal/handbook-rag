@@ -157,11 +157,30 @@ function answerFacts(answer) {
   const firstText = answer.first_text_ms === null ? "no text came" : seconds(answer.first_text_ms);
   return [
     ["Model", shown(answer.model)],
+    ...attemptFacts(answer),
     ["Tokens", tokens],
     ["First text after", firstText],
     ["Whole answer after", seconds(answer.took_ms)],
     ["Why the model stopped", shown(answer.stop_reason)],
   ];
+}
+
+// What the answer took, as pairs of a label and a value, when that is worth showing:
+// more than one request to the model, or a reply by the fallback model
+// (docs/adr/0018-time-limits-retries-and-a-fallback.md). Most answers take one request
+// to the answer model, and then there is nothing to add. A service older than the two
+// fields, requests and fallback, sends neither, so isAnswer does not ask for them: a
+// field that is missing, or not of its type, counts as not sent.
+function attemptFacts(answer) {
+  const requests = Number.isInteger(answer.requests) ? answer.requests : null;
+  const fallback = answer.fallback === true;
+  if (!fallback && (requests === null || requests <= 1)) {
+    return [];
+  }
+  const facts = requests === null ? [] : [["Requests to the model", String(requests)]];
+  const by = fallback ? "the fallback model, after the answer model gave up" : "the answer model";
+  facts.push(["Written by", by]);
+  return facts;
 }
 
 function seconds(milliseconds) {

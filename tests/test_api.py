@@ -33,6 +33,7 @@ from handbook_rag.api import (
     MAX_QUERY_CHARS,
     MODEL_QUOTA,
     MODEL_RATE_LIMITED,
+    MODEL_TIMED_OUT,
     MODEL_UNAVAILABLE,
     NOT_BUILT,
     NOT_CONFIGURED,
@@ -46,9 +47,10 @@ from handbook_rag.api import (
 )
 from handbook_rag.cli import app as cli
 from handbook_rag.config import Settings
-from handbook_rag.generate.base import GenerationError
+from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
+from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import (
     QdrantVectorStore,
@@ -574,7 +576,7 @@ class Writing(StandInModel):
 
 
 def answering(
-    model: Writing | None,
+    model: Generator | None,
     settings: Settings | None = None,
     *,
     retriever: Retriever | None = None,
@@ -662,6 +664,8 @@ def test_ask_numbers_the_sources_in_the_order_the_answer_first_cites_them() -> N
         "model": "stand-in-model-002",
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 1200, "output_tokens": 40},
+        "requests": 1,
+        "fallback": False,
         "took_ms": 2000.0,
         "first_text_ms": 1000.0,
         "trace_id": None,
@@ -771,7 +775,7 @@ def test_a_stream_sends_each_piece_as_it_is_written_then_the_answer_byte_for_byt
             '"heading_path":["Parental leave"],'
             '"text":"New parents get sixteen weeks of paid leave."}],'
             '"model":"stand-in-model-002","stop_reason":"end_turn",'
-            '"usage":{"input_tokens":1200,"output_tokens":40},'
+            '"usage":{"input_tokens":1200,"output_tokens":40},"requests":1,"fallback":false,'
             '"took_ms":2000.0,"first_text_ms":1000.0,"trace_id":null}\n\n'
         ).encode()
     )
@@ -865,6 +869,8 @@ def test_a_model_that_fails_before_any_text_is_a_503_that_keeps_the_cause_to_the
         (GenerationError("x", reason="quota", retry_after=36.0), MODEL_QUOTA, None),
         (GenerationError("x", reason="configuration"), MODEL_UNAVAILABLE, None),
         (GenerationError("x", reason="unavailable"), MODEL_UNAVAILABLE, None),
+        (GenerationError("x", reason="timeout"), MODEL_TIMED_OUT, None),
+        (GenerationError("x", reason="timeout", retry_after=5.0), MODEL_TIMED_OUT, None),
     ],
 )
 def test_the_models_limits_are_a_503_that_says_which_limit_and_when_to_come_back(
@@ -957,6 +963,104 @@ def test_health_says_answering_is_on_when_a_model_is_configured_without_asking_i
 
     assert given["answering"] is True
     assert from_settings["answering"] is True, "built from the key, with no request"
+
+
+def test_a_fallback_model_without_its_key_is_found_when_the_service_starts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = Settings(
+        gemini_api_key=SecretStr("a-key-that-is-never-sent"),
+        answer_fallback_model="claude-haiku-5-5",
+    )
+    with TestClient(answering(None, settings)) as client:
+        health = client.get("/health").json()
+        ask = client.post("/ask", json={"query": QUESTION})
+
+    assert health["answering"] is False
+    assert (ask.status_code, ask.json()) == (503, {"detail": NOT_CONFIGURED})
+    assert "The fallback model claude-haiku-5-5 needs ANTHROPIC_API_KEY" in caplog.text
+
+
+def with_fallback(answer_model: Writing, fallback: Writing) -> RetryingGenerator:
+    """The two stand-in models in the wrapper the service uses, with no real pauses."""
+    return RetryingGenerator(
+        answer_model,
+        attempts=3,
+        deadline_seconds=30.0,
+        fallback=lambda: fallback,
+        sleep=lambda _seconds: None,
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_the_answer_says_how_many_requests_it_took_and_that_the_fallback_wrote_it(
+    stream: bool,
+) -> None:
+    used_up = GenerationError("Today's limit is used up.", reason="quota")
+    generator = with_fallback(Writing(fail_before=used_up), Writing(("Sixteen weeks.", (0,))))
+    with TestClient(answering(generator)) as client:
+        response = client.post("/ask", json={"query": QUESTION, "stream": stream})
+
+    body = json.loads(answer_event(response.content)) if stream else response.json()
+    assert response.status_code == 200
+    assert (body["requests"], body["fallback"]) == (2, True)
+    assert body["answer"] == "Sixteen weeks.[1]"
+
+
+def test_an_answer_that_was_tried_again_counts_every_request_and_no_fallback() -> None:
+    busy = GenerationError("The model is overloaded.")
+    model = Writing(("Sixteen weeks.", (0,)))
+    flaky = [busy, busy]
+
+    class Busy(Writing):
+        def generate(
+            self,
+            question: str,
+            chunks: Sequence[Chunk],
+            *,
+            on_text: Callable[[str], None] | None = None,
+        ) -> Answer:
+            if flaky:
+                raise flaky.pop()
+            return super().generate(question, chunks, on_text=on_text)
+
+    generator = with_fallback(Busy(("Sixteen weeks.", (0,))), model)
+    with TestClient(answering(generator)) as client:
+        body = client.post("/ask", json={"query": QUESTION}).json()
+
+    assert (body["requests"], body["fallback"]) == (3, False)
+    assert model.asked == [], "the fallback was not needed"
+
+
+def test_when_the_fallback_fails_too_the_log_says_why_the_answer_model_gave_up(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    used_up = GenerationError("Today's limit for gemini-3.5-flash-lite is used up.", reason="quota")
+    down = GenerationError("The Claude API returned an error (529): Overloaded")
+    generator = with_fallback(Writing(fail_before=used_up), Writing(fail_before=down))
+    with TestClient(answering(generator)) as client:
+        response = client.post("/ask", json={"query": QUESTION})
+
+    # The caller hears about the fallback's failure, the latest news.
+    assert (response.status_code, response.json()) == (503, {"detail": MODEL_UNAVAILABLE})
+    assert "used up" not in response.text
+    assert (
+        "The Claude API returned an error (529): Overloaded (before the fallback, the answer "
+        "model failed: Today's limit for gemini-3.5-flash-lite is used up.)"
+    ) in caplog.text
+
+
+def test_a_model_that_did_not_answer_in_time_has_a_503_of_its_own() -> None:
+    silent = GenerationError("The Gemini API did not answer in time.", reason="timeout")
+    with TestClient(answering(Writing(fail_before=silent))) as client:
+        response = client.post("/ask", json={"query": QUESTION})
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "The answer model did not answer in time. Try again later."
+    }
+    assert MODEL_TIMED_OUT != MODEL_UNAVAILABLE
+    assert "Retry-After" not in response.headers
 
 
 def test_a_question_beyond_the_answers_in_flight_is_turned_away_until_one_ends() -> None:
@@ -1217,6 +1321,8 @@ def test_the_api_documents_both_forms_of_an_answer_and_why_it_may_be_refused(
         "model",
         "stop_reason",
         "usage",
+        "requests",
+        "fallback",
         "took_ms",
         "first_text_ms",
         "trace_id",

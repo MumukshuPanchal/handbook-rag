@@ -6,6 +6,8 @@ nowhere else.
 """
 
 import hashlib
+from collections.abc import Callable
+from functools import partial
 from typing import Any, Literal
 
 import anthropic
@@ -20,6 +22,7 @@ from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
 from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT
 from handbook_rag.generate.prompt import SYSTEM_PROMPT
+from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.embedder import Embedder, SentenceTransformerEmbedder
 from handbook_rag.index.sparse import Bm25Encoder, SparseEncoder
 from handbook_rag.index.store import QdrantVectorStore, VectorStore, VectorStoreError
@@ -30,17 +33,24 @@ from handbook_rag.retrieve.sparse import SparseRetriever
 
 RetrievalMode = Literal["dense", "sparse", "hybrid"]
 
-# How long the client waits in each phase of a request to an answer model: for the
-# connection, and for each next part of the reply.
-MODEL_TIMEOUT_SECONDS = 60.0
-# How often a request to Gemini is sent at most, and which replies are worth another
-# attempt: the server was busy or failed. A connection that fails or times out before
-# the reply starts counts as an attempt too. Each attempt can take longer than one time
-# limit, and the SDK pauses between attempts, so the worst case is a few minutes.
-# A rate limit (429) is not retried. On a free key it means waiting a minute or a day,
-# which trying again a second later cannot fix.
+# How long the client of an evaluation waits in each phase of a request to a model: for
+# the connection, and for each next part of the reply. An evaluation keeps the limit its
+# saved runs were made with, so that a slow reply is measured, not cut off. An answer
+# asked for on the command line or over HTTP has HANDBOOK_RAG_ANSWER_TIMEOUT_SECONDS.
+EVALUATION_TIMEOUT_SECONDS = 60.0
+# How often a judge's request to Gemini is sent at most, and which replies are worth
+# another attempt: the server was busy or failed. A connection that fails or times out
+# before the reply starts counts as an attempt too. Each attempt can take longer than
+# one time limit, and the SDK pauses between attempts, so the worst case is a few
+# minutes. A rate limit (429) is not retried. On a free key it means waiting a minute or
+# a day, which trying again a second later cannot fix.
 GEMINI_ATTEMPTS = 3
 GEMINI_RETRY_STATUS_CODES = [408, 500, 502, 503, 504]
+# How often the answer model may be asked for one answer, the first time included. The
+# same three attempts that the SDKs made by themselves before (ADR 0018). With the four
+# answers the service writes at once, that is at most twelve requests to the answer
+# model, under the fifteen a minute that a free Gemini key allowed.
+ANSWER_ATTEMPTS = 3
 
 
 def make_embedder(settings: Settings) -> SentenceTransformerEmbedder:
@@ -181,15 +191,49 @@ def make_generator(settings: Settings, *, attempts: int | None = None) -> Genera
     A key is passed to its client explicitly. It is never exported into the process
     environment, where other tools could pick it up.
 
-    ``attempts`` is how often one request may be sent, the first time included. Left
-    out, a failed request is tried again a few times. An evaluation passes 1: it then
-    knows how many requests it has sent, and it tries a failed question again itself.
+    ``attempts`` is how often the answer model may be asked for one answer, the first
+    time included. Left out, it is :data:`ANSWER_ATTEMPTS`. The model's own generator is
+    then wrapped in a :class:`RetryingGenerator`, which asks again when that may help,
+    within the deadline in the settings, and asks the fallback model when the settings
+    name one. Its SDK sends each request once, with the time limit in the settings.
+
+    An evaluation passes 1. It gets the model's own generator, as it always has: no
+    wrapper, no fallback and no deadline, the SDK sending each request once, and the
+    time limit its saved runs were made with. It then knows how many requests it has
+    sent, and it tries a failed question again itself.
+
+    A missing key is found here, for the fallback model too, so that a service finds it
+    when it starts and not at the first failure. Building sends no request, so a key that
+    is present but wrong is found only by a request.
     """
     if attempts is not None and attempts < 1:
         raise ValueError("A request has to be sent at least once.")
-    if settings.answer_model.startswith("gemini-"):
-        return _make_gemini_generator(settings, attempts or GEMINI_ATTEMPTS)
-    return _make_claude_generator(settings, attempts)
+    if attempts == 1:
+        return _model_generator(
+            settings,
+            settings.answer_model,
+            timeout_seconds=EVALUATION_TIMEOUT_SECONDS,
+            for_evaluation=True,
+        )
+    answer_model = _model_generator(
+        settings, settings.answer_model, timeout_seconds=settings.answer_timeout_seconds
+    )
+    fallback: Callable[[], Generator] | None = None
+    if settings.answer_fallback_model is not None:
+        _check_fallback_key(settings, settings.answer_fallback_model)
+        # Built when it is first needed, which on most days is never.
+        fallback = partial(
+            _model_generator,
+            settings,
+            settings.answer_fallback_model,
+            timeout_seconds=settings.answer_timeout_seconds,
+        )
+    return RetryingGenerator(
+        answer_model,
+        attempts=attempts or ANSWER_ATTEMPTS,
+        deadline_seconds=settings.answer_deadline_seconds,
+        fallback=fallback,
+    )
 
 
 def describe_generation(settings: Settings) -> dict[str, object]:
@@ -222,15 +266,47 @@ def answer_instructions(settings: Settings) -> str:
     return SYSTEM_PROMPT
 
 
-def _make_gemini_generator(settings: Settings, attempts: int) -> GeminiGenerator:
-    return GeminiGenerator(
-        _gemini_client(settings, attempts),
-        model=settings.answer_model,
-        max_tokens=settings.answer_max_tokens,
+def _model_generator(
+    settings: Settings, model: str, *, timeout_seconds: float, for_evaluation: bool = False
+) -> Generator:
+    """The generator of one model, named as the settings name a model.
+
+    Its SDK sends each request once, and waits ``timeout_seconds`` at most for the
+    connection and for each next part of a reply. Whoever asks again does it in our own
+    code, where each request is counted and traced.
+    """
+    if model.startswith("gemini-"):
+        return GeminiGenerator(
+            _gemini_client(settings, 1, timeout_seconds=timeout_seconds),
+            model=model,
+            max_tokens=settings.answer_max_tokens,
+        )
+    return _make_claude_generator(
+        settings, model, timeout_seconds=timeout_seconds, for_evaluation=for_evaluation
     )
 
 
-def _gemini_client(settings: Settings, attempts: int) -> genai.Client:
+def _check_fallback_key(settings: Settings, model: str) -> None:
+    """Fail now if the fallback model's provider has no key in the settings.
+
+    A Claude model that writes the answers may find its credential in the SDK's own
+    places. A fallback may not, because whether the SDK would find one cannot be known
+    without building its client, and the fallback is built only when it is needed.
+    """
+    gemini = model.startswith("gemini-")
+    key = settings.gemini_api_key if gemini else settings.anthropic_api_key
+    if key is None or not key.get_secret_value():
+        variable = "GEMINI_API_KEY" if gemini else "ANTHROPIC_API_KEY"
+        raise GenerationError(
+            f"The fallback model {model} needs {variable}, and none was found. Put it in a "
+            ".env file in the project folder, or unset HANDBOOK_RAG_ANSWER_FALLBACK_MODEL.",
+            reason="configuration",
+        )
+
+
+def _gemini_client(
+    settings: Settings, attempts: int, *, timeout_seconds: float = EVALUATION_TIMEOUT_SECONDS
+) -> genai.Client:
     key = settings.gemini_api_key
     if key is None or not key.get_secret_value():
         raise GenerationError(
@@ -238,10 +314,12 @@ def _gemini_client(settings: Settings, attempts: int) -> genai.Client:
             "in a .env file in the project folder, as GEMINI_API_KEY.",
             reason="configuration",
         )
+    # The SDK counts in whole milliseconds, and reads 0 as no time limit at all.
+    milliseconds = max(1, round(timeout_seconds * 1000))
     return genai.Client(
         api_key=key.get_secret_value(),
         http_options=genai_types.HttpOptions(
-            timeout=int(MODEL_TIMEOUT_SECONDS * 1000),  # the SDK counts in milliseconds
+            timeout=milliseconds,
             retry_options=genai_types.HttpRetryOptions(
                 attempts=attempts, http_status_codes=GEMINI_RETRY_STATUS_CODES
             ),
@@ -254,8 +332,9 @@ def make_judge[C: JudgedCase](
 ) -> Judge[C]:
     """Build the judge for one criterion.
 
-    ``attempts`` is how often one request may be sent, as for :func:`make_generator`. An
-    evaluation passes 1.
+    ``attempts`` is how often its SDK may send one request, the first time included.
+    Left out, it is :data:`GEMINI_ATTEMPTS`. An evaluation passes 1, as it does to
+    :func:`make_generator`.
     """
     if attempts is not None and attempts < 1:
         raise ValueError("A request has to be sent at least once.")
@@ -284,19 +363,24 @@ def describe_judge[C: JudgedCase](settings: Settings, criterion: Criterion[C]) -
     }
 
 
-def _make_claude_generator(settings: Settings, attempts: int | None) -> ClaudeGenerator:
+def _make_claude_generator(
+    settings: Settings, model: str, *, timeout_seconds: float, for_evaluation: bool
+) -> ClaudeGenerator:
     key = settings.anthropic_api_key
-    options: dict[str, Any] = {"timeout": MODEL_TIMEOUT_SECONDS}
-    if attempts is not None:
-        # The SDK counts the tries after the first one.
-        options["max_retries"] = attempts - 1
+    # The SDK counts the tries after the first one, so none means one request.
+    options: dict[str, Any] = {"timeout": timeout_seconds, "max_retries": 0}
+    if not for_evaluation:
+        # Each request already has a span of our own (generate/retrying.py). The SDK's
+        # own span for the same request would count its tokens a second time. An
+        # evaluation does not trace, and keeps its client as its runs had it.
+        options["open_telemetry"] = False
     # Without a key in the settings, the SDK looks in its own standard places.
     if key is not None and key.get_secret_value():
         options["api_key"] = key.get_secret_value()
     client = anthropic.Anthropic(**options)
     return ClaudeGenerator(
         client,
-        model=settings.answer_model,
+        model=model,
         max_tokens=settings.answer_max_tokens,
         effort=settings.answer_effort,
     )

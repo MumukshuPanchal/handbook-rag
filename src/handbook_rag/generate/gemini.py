@@ -21,9 +21,12 @@ from handbook_rag.generate.models import Answer, TokenUsage
 from handbook_rag.ingest.models import Chunk
 
 # The SDK passes failures of the connection on unchanged, from whichever HTTP library it
-# runs on. The first group means the API was not reached or went silent. The second
-# means something arrived that could not be read: it could not be decoded, it was not
-# JSON, or it was JSON of a shape the SDK's own types reject.
+# runs on. The first group means the API went silent for longer than the client's time
+# limit, while connecting or between two pieces of the reply. The second means the API
+# was not reached or the connection broke. The third means something arrived that could
+# not be read: it could not be decoded, it was not JSON, or it was JSON of a shape the
+# SDK's own types reject.
+_TIMEOUT_ERRORS = (httpx.TimeoutException, httpx2.TimeoutException)
 _NETWORK_ERRORS = (httpx.TransportError, httpx2.TransportError)
 _UNREADABLE_REPLY_ERRORS = (
     httpx.RequestError,
@@ -98,8 +101,9 @@ class GeminiGenerator:
             max_output_tokens=self._max_tokens,
             # No follow-up requests. Left on, the SDK sends the request again by itself
             # when a reply stops at the API's size limit or the stream drops, which would
-            # spend a small daily allowance unseen. The only repeats left are the attempts
-            # after a failed one (see wiring.py).
+            # spend a small daily allowance unseen. The only repeats left are the ones our
+            # own code makes and counts: generate/retrying.py for a question asked on the
+            # command line or over HTTP, and the evaluation's own loop for a run.
             automatic_continuation=False,
         )
         try:
@@ -121,6 +125,10 @@ class GeminiGenerator:
                     blocked = True
         except errors.APIError as error:
             raise self._explain(error) from error
+        except _TIMEOUT_ERRORS as error:
+            raise GenerationError(
+                "The Gemini API did not answer in time.", reason="timeout"
+            ) from error
         except _NETWORK_ERRORS as error:
             raise GenerationError("Could not reach the Gemini API. Check the network.") from error
         except _UNREADABLE_REPLY_ERRORS as error:
@@ -163,7 +171,17 @@ class GeminiGenerator:
             )
         if error.code == 429:
             return self._explain_rate_limit(details)
-        return GenerationError(f"The Gemini API returned an error ({error.code}): {error.message}")
+        message = f"The Gemini API returned an error ({error.code}): {error.message}"
+        if error.code == 504:
+            # The API, or a gateway in front of it, gave up waiting for the model. The
+            # SDK also sends the client's time limit with every request, as the
+            # X-Server-Timeout header, so this can be the same limit, kept at the other end.
+            return GenerationError(message, reason="timeout")
+        if 400 <= error.code < 500 and error.code != 408:
+            # The API refused the request as it was sent. The same request would be
+            # refused again, so trying again only spends another one.
+            return GenerationError(message, reason="configuration")
+        return GenerationError(message)
 
     def _explain_rate_limit(self, details: Sequence[Mapping[str, Any]]) -> GenerationError:
         """Say which limit was reached, when the API tells us.

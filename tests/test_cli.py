@@ -19,9 +19,10 @@ from handbook_rag.evals.careful import Pacer
 from handbook_rag.evals.correctness import CORRECT, CorrectnessCase
 from handbook_rag.evals.judge import JudgeError, Judgement, StatementVerdict, SupportCase
 from handbook_rag.evals.judging import Criterion
-from handbook_rag.generate.base import GenerationError, is_answered
+from handbook_rag.generate.base import GenerationError, Generator, is_answered
 from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
+from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.store import QdrantVectorStore, ScoredChunk, VectorStoreError
 from handbook_rag.ingest.build import build_corpus
 from handbook_rag.ingest.models import Chunk
@@ -806,6 +807,9 @@ def test_ask_prints_the_answer_its_sources_and_the_cost(
     assert "https://handbook.gitlab.com/handbook/people/leave/" in result.output
     assert "3,000 tokens in" in result.output
     assert "$0.00050" in result.output
+    # One request, as nearly always: nothing to say about repeats or a fallback.
+    assert "requests" not in result.output
+    assert "fallback" not in result.output
 
 
 def test_ask_reports_a_generation_failure_clearly(
@@ -833,6 +837,8 @@ def test_ask_without_a_key_says_where_to_put_one(fake_pipeline: FakeEmbedder) ->
     assert "error: No Gemini API key was found" in result.output
     assert "GEMINI_API_KEY" in result.output
     assert "Traceback" not in result.output
+    # Nothing was searched for yet, so there is nothing found to show.
+    assert result.stdout == ""
 
 
 class FixedReply(StandInModel):
@@ -925,6 +931,134 @@ def test_ask_adds_no_note_when_the_reply_ended_normally(
     assert "stopped early" not in output
     assert "withheld" not in output
     assert "cut off" not in output
+
+
+class Refusing(StandInModel):
+    """A stand-in model that fails, after writing the beginning of an answer if told to."""
+
+    def __init__(self, error: GenerationError, *, begins: str = "") -> None:
+        self.error = error
+        self.begins = begins
+
+    def generate(
+        self,
+        question: str,
+        chunks: Sequence[Chunk],
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Answer:
+        if self.begins and on_text is not None:
+            on_text(self.begins)
+        raise self.error
+
+
+def wrapped(answer_model: Generator, fallback: Generator | None = None) -> RetryingGenerator:
+    """Stand-in models in the wrapper that the command uses, with no real pauses."""
+    return RetryingGenerator(
+        answer_model,
+        attempts=3,
+        deadline_seconds=30.0,
+        fallback=None if fallback is None else lambda: fallback,
+        sleep=lambda _seconds: None,
+    )
+
+
+def test_ask_says_how_many_requests_an_answer_took_when_it_was_more_than_one(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    class Busy(CannedGenerator):
+        failed = False
+
+        def generate(
+            self,
+            question: str,
+            chunks: Sequence[Chunk],
+            *,
+            on_text: Callable[[str], None] | None = None,
+        ) -> Answer:
+            if not self.failed:
+                self.failed = True
+                raise GenerationError("The model is overloaded.")
+            return super().generate(question, chunks, on_text=on_text)
+
+    generator = wrapped(Busy())
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: generator)
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
+
+    assert result.exit_code == 0, result.output
+    assert "| 1.2 s | 2 requests\n" in result.output
+    assert "fallback" not in result.output
+
+
+def test_ask_says_when_the_fallback_model_wrote_the_answer(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    used_up = GenerationError("Today's limit is used up.", reason="quota")
+    generator = wrapped(Refusing(used_up), fallback=CannedGenerator())
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: generator)
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
+
+    assert result.exit_code == 0, result.output
+    assert "| 2 requests | written by the fallback model\n" in result.output
+
+
+def test_ask_says_what_failed_and_then_shows_what_the_search_found(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    silent = GenerationError("The Gemini API did not answer in time.", reason="timeout")
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: Refusing(silent))
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
+
+    assert result.exit_code == 1
+    assert result.output.startswith("error: The Gemini API did not answer in time.\n")
+    assert result.stdout == (
+        "\nNo answer was written. The search found these passages:\n"
+        "  Leave > Parental leave\n"
+        "      https://handbook.gitlab.com/handbook/people/leave/\n"
+        "  Laptops > Laptops\n"
+        "      https://handbook.gitlab.com/handbook/finance/expenses/\n"
+    )
+    assert "Traceback" not in result.output
+
+
+def test_ask_names_the_answer_models_failure_when_the_fallback_failed_too(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    used_up = GenerationError("Today's limit for gemini-3.5-flash-lite is used up.", reason="quota")
+    down = GenerationError("The Claude API returned an error (529): Overloaded")
+    generator = wrapped(Refusing(used_up), fallback=Refusing(down))
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: generator)
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
+
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "error: The Claude API returned an error (529): Overloaded\n"
+        "error: before the fallback model, the answer model failed: "
+        "Today's limit for gemini-3.5-flash-lite is used up.\n"
+    )
+    assert "No answer was written. The search found these passages:" in result.stdout
+
+
+def test_ask_starts_the_error_on_a_line_of_its_own_when_the_reply_broke_off(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    lost = GenerationError("Could not reach the Gemini API. Check the network.")
+    broken = Refusing(lost, begins="New parents get")
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: broken)
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
+
+    assert result.exit_code == 1
+    assert result.output.startswith("New parents get\nerror: Could not reach the Gemini API.")
 
 
 # eval-answers: a real run sends one request per question, so these use a stand-in model.

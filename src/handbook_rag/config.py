@@ -9,9 +9,9 @@ so there is one place that lists everything the application can be configured wi
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from handbook_rag.ingest.chunker import ChunkingConfig
@@ -248,6 +248,46 @@ class Settings(BaseSettings):
     answer_context_chunks: int = Field(
         default=5, gt=0, description="How many retrieved chunks the model is given to answer from."
     )
+    # Both limits are in seconds and at most ten minutes. Nobody waits that long for an
+    # answer, and the bound turns away a value written in milliseconds by mistake, as
+    # the Gemini SDK counts them.
+    answer_timeout_seconds: float = Field(
+        default=20.0,
+        gt=0,
+        le=600,
+        description=(
+            "How long one request to the answer model may be silent: to connect, and "
+            "between two pieces of the reply. It is not a limit on the whole reply. The "
+            "default is above the slowest reply of the answer evaluation, 17.1 s for the "
+            "whole of it, and twice the time within which 95% arrived, 10.1 s. An "
+            "evaluation keeps the 60 s its runs were made with (ADR 0018)."
+        ),
+    )
+    answer_deadline_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        le=600,
+        description=(
+            "How long the answer model may be tried before its first text: no new "
+            "attempt starts after it, and a pause before one is cut short. A request "
+            "already sent is not cut off by it, and ends at its own time limit if it goes "
+            "silent. It may be shorter than that limit: then only quick failures are "
+            "tried again. The default leaves room for a request that times out and one "
+            "more attempt (ADR 0018)."
+        ),
+    )
+    answer_fallback_model: str | None = Field(
+        default=None,
+        description=(
+            "A second model, asked once when the answer model has given up: it was "
+            "overloaded, went silent, reached its limit or used up its allowance for the "
+            "day. Not when the answer model is wrongly configured: that is for whoever "
+            "runs the service to fix. It is named like the answer model, and its "
+            "provider's key must be in the settings when the service starts: "
+            "GEMINI_API_KEY for a Gemini model, ANTHROPIC_API_KEY for a Claude model. "
+            "Unset or empty: no fallback."
+        ),
+    )
     eval_requests_per_minute: float = Field(
         default=10.0,
         gt=0,
@@ -289,18 +329,24 @@ class Settings(BaseSettings):
     @field_validator("answer_model")
     @classmethod
     def _answer_model_names_a_provider(cls, value: str) -> str:
-        if not any(
-            value.startswith(prefix) and value != prefix for prefix in ANSWER_MODEL_PREFIXES
-        ):
+        return _exact_answer_model(value)
+
+    @field_validator("answer_fallback_model")
+    @classmethod
+    def _fallback_model_names_a_provider(cls, value: str | None) -> str | None:
+        # An empty value is what the example file holds, and means no fallback.
+        if value is None or value == "":
+            return None
+        return _exact_answer_model(value)
+
+    @model_validator(mode="after")
+    def _fallback_is_another_model(self) -> Self:
+        if self.answer_fallback_model == self.answer_model:
             raise ValueError(
-                f"must be a Gemini model (gemini-...) or a Claude model (claude-...), not {value!r}"
+                "answer_fallback_model must be another model than answer_model: asked "
+                "again, the same model would only spend another request of the same allowance"
             )
-        if value.endswith("-latest"):
-            raise ValueError(
-                f"must be an exact model name: {value!r} is an alias that moves to a new "
-                "model without notice, and results would stop being comparable"
-            )
-        return value
+        return self
 
     @property
     def chunking(self) -> ChunkingConfig:
@@ -326,6 +372,20 @@ class Settings(BaseSettings):
             f"handbook-{self.handbook_commit[:8]}-{slug(self.embedding_model)}"
             f"-{slug(self.sparse_model)}-{self.chunking.version}"
         )
+
+
+def _exact_answer_model(value: str) -> str:
+    """The name of a model that can write answers, or an error that says what is wrong."""
+    if not any(value.startswith(prefix) and value != prefix for prefix in ANSWER_MODEL_PREFIXES):
+        raise ValueError(
+            f"must be a Gemini model (gemini-...) or a Claude model (claude-...), not {value!r}"
+        )
+    if value.endswith("-latest"):
+        raise ValueError(
+            f"must be an exact model name: {value!r} is an alias that moves to a new "
+            "model without notice, and results would stop being comparable"
+        )
+    return value
 
 
 @lru_cache

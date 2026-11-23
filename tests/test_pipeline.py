@@ -7,8 +7,9 @@ from opentelemetry.trace import SpanKind, StatusCode
 
 from handbook_rag import tracing, wiring
 from handbook_rag.config import Settings
-from handbook_rag.generate.base import GenerationError
+from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
+from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import ScoredChunk
 from handbook_rag.ingest.models import Chunk
@@ -190,6 +191,8 @@ def test_the_search_span_records_the_question_by_its_length_and_what_was_found(
     assert attributes(named(spans, "answer")) == {
         "handbook_rag.query.chars": len(QUESTION),
         "handbook_rag.answered": True,
+        "handbook_rag.requests": 1,
+        "handbook_rag.fallback": False,
     }
 
 
@@ -232,6 +235,9 @@ def test_the_model_call_records_the_reply_under_the_names_of_the_conventions(
         "handbook_rag.passages.cited": 2,
         # In the order the answer numbers them, which is not the order they were found.
         "handbook_rag.passages.cited_chunk_ids": (EXPENSES.chunk_id, LEAVE.chunk_id),
+        # A generator that is not wrapped sends one request for each answer.
+        "handbook_rag.attempt": 1,
+        "handbook_rag.fallback": False,
     }
 
 
@@ -301,7 +307,11 @@ def test_a_failed_model_call_is_marked_failed_and_so_is_the_answer_around_it(
     assert call.status.description == "handbook_rag.generate.base.GenerationError"
     assert "gen_ai.response.model" not in attributes(call), "there was no reply"
     assert attributes(call)["gen_ai.request.model"] == "stand-in-model", "the request is known"
-    assert named(spans, "answer").status.status_code is StatusCode.ERROR
+    assert attributes(call)["handbook_rag.failure"] == "unavailable", "the reason, in fixed words"
+    whole = named(spans, "answer")
+    assert whole.status.status_code is StatusCode.ERROR
+    assert (whole.attributes or {})["handbook_rag.requests"] == 1
+    assert (whole.attributes or {})["handbook_rag.fallback"] is False
     assert named(spans, "search").status.status_code is not StatusCode.ERROR
 
 
@@ -340,6 +350,10 @@ def test_with_nothing_found_there_is_no_span_for_a_model_call_that_was_not_made(
     assert attributes(named(spans, "answer"))["handbook_rag.answered"] is False
     assert attributes(named(spans, "answer"))["handbook_rag.section"] == "legal"
     assert attributes(named(spans, "search"))["handbook_rag.section"] == "legal"
+    # The stand-in does not say so itself, and still no request is counted.
+    assert (answer.requests, answer.fallback) == (0, False)
+    assert attributes(named(spans, "answer"))["handbook_rag.requests"] == 0
+    assert attributes(named(spans, "answer"))["handbook_rag.fallback"] is False
 
 
 def test_the_caller_learns_the_trace_id_before_anything_else_happens(
@@ -374,3 +388,113 @@ def test_the_trace_id_is_not_passed_on_when_nothing_is_recorded() -> None:
     )
 
     assert told == []
+
+
+# An answer that takes more than one request, through the wrapper that sends them.
+
+
+class Flaky(StandInModel):
+    """A stand-in model that fails with the given errors first, then answers."""
+
+    def __init__(self, *failures: GenerationError, model: str = "stand-in-model") -> None:
+        self.failures = list(failures)
+        self.model = model
+
+    def generate(
+        self,
+        question: str,
+        chunks: Sequence[Chunk],
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Answer:
+        if self.failures:
+            raise self.failures.pop(0)
+        if on_text is not None:
+            on_text("An answer.")
+        return reply(question, chunks)
+
+
+def retrying(model: Generator, fallback: Generator | None = None) -> RetryingGenerator:
+    return RetryingGenerator(
+        model,
+        attempts=3,
+        deadline_seconds=30.0,
+        fallback=None if fallback is None else lambda: fallback,
+        sleep=lambda _seconds: None,
+    )
+
+
+def test_an_answer_that_took_two_requests_has_a_span_for_each_and_counts_them(
+    spans: InMemorySpanExporter,
+) -> None:
+    generator = retrying(Flaky(GenerationError("The model is overloaded.")))
+
+    answer = answer_question(
+        QUESTION, retriever=FakeRetriever([ScoredChunk(LEAVE, 0.9)]), generator=generator, limit=1
+    )
+
+    assert (answer.requests, answer.fallback) == (2, False)
+    # One span for each request, the failed one included, and no span around both.
+    assert paths(spans) == [
+        "answer",
+        "answer > search",
+        "answer > chat stand-in-model",
+        "answer > chat stand-in-model",
+    ]
+    first, second = sorted(
+        (span for span in spans.get_finished_spans() if span.name == "chat stand-in-model"),
+        key=lambda span: span.start_time or 0,
+    )
+    assert (first.status.status_code, attributes(first)["handbook_rag.attempt"]) == (
+        StatusCode.ERROR,
+        1,
+    )
+    assert (second.status.status_code, attributes(second)["handbook_rag.attempt"]) == (
+        StatusCode.UNSET,
+        2,
+    )
+    whole = attributes(named(spans, "answer"))
+    assert (whole["handbook_rag.requests"], whole["handbook_rag.fallback"]) == (2, False)
+
+
+def test_an_answer_written_by_the_fallback_says_so_on_the_answer_and_in_the_trace(
+    spans: InMemorySpanExporter,
+) -> None:
+    used_up = GenerationError("Today's limit is used up.", reason="quota")
+    generator = retrying(Flaky(used_up), fallback=Flaky(model="fallback-model"))
+
+    answer = answer_question(
+        QUESTION, retriever=FakeRetriever([ScoredChunk(LEAVE, 0.9)]), generator=generator, limit=1
+    )
+
+    assert (answer.requests, answer.fallback) == (2, True)
+    assert paths(spans)[2:] == ["answer > chat stand-in-model", "answer > chat fallback-model"]
+    assert attributes(named(spans, "chat fallback-model"))["handbook_rag.fallback"] is True
+    whole = attributes(named(spans, "answer"))
+    assert (whole["handbook_rag.requests"], whole["handbook_rag.fallback"]) == (2, True)
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_a_failed_answer_hands_on_the_passages_it_found_without_searching_again(
+    wrapped: bool, spans: InMemorySpanExporter
+) -> None:
+    retriever = FakeRetriever([ScoredChunk(LEAVE, 0.9), ScoredChunk(EXPENSES, 0.4)])
+    busy = [GenerationError("The model is overloaded.") for _ in range(3)]
+    generator: Generator = (
+        retrying(Flaky(*busy), fallback=Flaky(GenerationError("Down too."), model="fallback"))
+        if wrapped
+        else FakeGenerator(error=busy[0])
+    )
+
+    with pytest.raises(GenerationError) as raised:
+        answer_question(QUESTION, retriever=retriever, generator=generator, limit=2)
+
+    assert [(found.chunk, found.score) for found in raised.value.retrieved] == [
+        (LEAVE, 0.9),
+        (EXPENSES, 0.4),
+    ]
+    assert len(retriever.calls) == 1
+    whole = attributes(named(spans, "answer"))
+    assert (whole["handbook_rag.requests"], whole["handbook_rag.fallback"]) == (
+        (4, True) if wrapped else (1, False)
+    )

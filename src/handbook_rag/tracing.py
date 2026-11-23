@@ -158,7 +158,15 @@ def record_query(span: Span, query: str) -> None:
 
 
 @contextmanager
-def model_call(*, provider: str, operation: str, model: str, passages: int) -> Iterator[Span]:
+def model_call(
+    *,
+    provider: str,
+    operation: str,
+    model: str,
+    passages: int,
+    attempt: int = 1,
+    fallback: bool = False,
+) -> Iterator[Span]:
     """Open the span of one request to a language model.
 
     The span is named and described as OpenTelemetry's conventions for generative AI
@@ -167,13 +175,36 @@ def model_call(*, provider: str, operation: str, model: str, passages: int) -> I
     runs at the provider. What the conventions have no name for, such as how many
     passages the model was given, carries the project's prefix. A failed request marks
     the span as failed, as in any stage.
+
+    An answer can take more than one request. ``attempt`` is this request's place among
+    them, counted from 1 across both models, and ``fallback`` says whether it went to
+    the fallback model.
     """
-    with stage(f"{operation} {model}", kind=SpanKind.CLIENT) as span:
+    with stage(
+        f"{operation} {model}", kind=SpanKind.CLIENT, attempt=attempt, fallback=fallback
+    ) as span:
         span.set_attribute(GEN_AI_OPERATION_NAME, operation)
         span.set_attribute(GEN_AI_PROVIDER_NAME, provider)
         span.set_attribute(GEN_AI_REQUEST_MODEL, model)
         span.set_attribute(f"{ATTRIBUTE_PREFIX}.passages.given", passages)
         yield span
+
+
+def record_failure(span: Span, reason: str) -> None:
+    """Note why a model call failed, in the fixed words of a generation error's reason.
+
+    A reason is one of a handful of words chosen in advance, such as "timeout" or
+    "quota", never the error's own message. So it is always recorded, and a trace shows
+    why an attempt was or was not followed by another.
+    """
+    span.set_attribute(f"{ATTRIBUTE_PREFIX}.failure", reason)
+
+
+def record_requests(span: Span, *, requests: int, fallback: bool) -> None:
+    """Note on the span of an answer how many requests to a model it took, and whether
+    the fallback model was asked. Recorded whether the answer was written or not."""
+    span.set_attribute(f"{ATTRIBUTE_PREFIX}.requests", requests)
+    span.set_attribute(f"{ATTRIBUTE_PREFIX}.fallback", fallback)
 
 
 def record_reply(span: Span, answer: "Answer") -> None:

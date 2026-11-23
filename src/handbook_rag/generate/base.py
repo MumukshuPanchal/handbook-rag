@@ -11,15 +11,19 @@ from typing import Literal, Protocol
 
 from handbook_rag.generate.models import Answer, Segment
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
+from handbook_rag.index.store import ScoredChunk
 from handbook_rag.ingest.models import Chunk
 
-FailureReason = Literal["rate_limit", "quota", "configuration", "unavailable"]
+FailureReason = Literal["rate_limit", "quota", "configuration", "unavailable", "timeout"]
 """What kind of failure stopped a request, which decides what may help.
 
 - ``rate_limit``: too many requests in a short time. Trying again soon may work.
 - ``quota``: the allowance for the day is used up. Trying again today will not work.
-- ``configuration``: no credential, a rejected one, or a model that cannot be used.
-  Nothing works until the settings change.
+- ``configuration``: no credential, a rejected one, a model that cannot be used, or a
+  request the provider refuses as it was sent. Nothing works until the settings or the
+  code change.
+- ``timeout``: the API went silent for longer than the client's time limit, while
+  connecting or between two pieces of a reply.
 - ``unavailable``: anything else. The API failed, could not be reached, or sent a reply
   that could not be read.
 """
@@ -31,6 +35,10 @@ class GenerationError(RuntimeError):
     The message is for the person who runs the application: it can name settings and
     files. A caller of the HTTP API is told only the ``reason``, in fixed words, and
     when to try again if that is known.
+
+    The error also says what the answer had cost when it failed. Those attributes are
+    filled in on its way out, by the code that sent the request and the code that
+    searched, so the generators themselves never set them.
     """
 
     def __init__(
@@ -47,6 +55,15 @@ class GenerationError(RuntimeError):
         usable = retry_after is not None and math.isfinite(retry_after) and retry_after >= 0
         self.retry_after = retry_after if usable else None
         """Seconds to wait before trying again, when the provider said so."""
+        self.requests = 0
+        """How many requests to a model the answer had made when it failed, this one included."""
+        self.fallback = False
+        """Whether this is the failure of the fallback model, tried after the answer model."""
+        self.before_fallback: GenerationError | None = None
+        """Why the answer model gave up, when this is the failure of the fallback model."""
+        self.retrieved: tuple[ScoredChunk, ...] = ()
+        """The passages the search had found, so that a caller can show them without
+        searching again. Empty when the failure came before a search."""
 
 
 class Generator(Protocol):
@@ -97,6 +114,7 @@ def decline_without_context(
         answered=False,
         model=model,
         stop_reason="no_context",
+        requests=0,
     )
 
 

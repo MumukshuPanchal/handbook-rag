@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from typing import Literal
 
 import anthropic
+import httpx2
 from anthropic.types import Message
 
 from handbook_rag.generate.base import GenerationError, decline_without_context, is_answered
@@ -14,6 +15,12 @@ from handbook_rag.generate.prompt import SYSTEM_PROMPT, build_user_content
 from handbook_rag.ingest.models import Chunk
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
+
+# The refusals in the 400s that the SDK itself would send again: the server gave up
+# waiting for the request (408), or for a lock (409). Every other one means that the
+# request, as it was sent, will not be accepted.
+_WORTH_REPEATING = frozenset({408, 409})
+_NOT_IN_TIME = "The Claude API did not answer in time."
 
 
 class ClaudeGenerator:
@@ -89,12 +96,25 @@ class ClaudeGenerator:
                 retry_after=_retry_after(error),
             ) from error
         except anthropic.APIStatusError as error:
-            # Includes a rejected request, such as an organization with no credit left.
-            raise GenerationError(
-                f"The Claude API returned an error ({error.status_code}): {error.message}"
-            ) from error
+            said = f"The Claude API returned an error ({error.status_code}): {error.message}"
+            if 400 <= error.status_code < 500 and error.status_code not in _WORTH_REPEATING:
+                # A rejected request, such as an organization with no credit left. The
+                # same request would be rejected again.
+                raise GenerationError(said, reason="configuration") from error
+            raise GenerationError(said) from error
+        except anthropic.APITimeoutError as error:
+            raise GenerationError(_NOT_IN_TIME, reason="timeout") from error
         except anthropic.APIConnectionError as error:
             raise GenerationError("Could not reach the Claude API. Check the network.") from error
+        except httpx2.TimeoutException as error:
+            # The SDK turns a failure of the connection into its own error only while the
+            # request is sent. In the middle of the stream it passes the HTTP library's
+            # error on unchanged.
+            raise GenerationError(_NOT_IN_TIME, reason="timeout") from error
+        except httpx2.TransportError as error:
+            raise GenerationError(
+                "The connection to the Claude API broke. Check the network."
+            ) from error
         except TypeError as error:
             # With no credential configured at all, the SDK raises a plain TypeError
             # before sending anything. Any other TypeError is a bug and must surface.

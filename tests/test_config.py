@@ -1,5 +1,6 @@
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -155,3 +156,85 @@ def test_the_judge_is_the_answer_model_unless_told_otherwise(
 def test_the_judge_must_be_an_exact_gemini_model(model: str) -> None:
     with pytest.raises(ValidationError):
         Settings(judge_model=model)
+
+
+def test_an_answer_request_may_be_silent_for_20_seconds_and_tried_again_for_30() -> None:
+    settings = Settings()
+
+    assert settings.answer_timeout_seconds == 20.0
+    assert settings.answer_deadline_seconds == 30.0
+    assert settings.answer_fallback_model is None
+
+
+def test_the_time_limits_and_the_fallback_can_be_set_in_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HANDBOOK_RAG_ANSWER_TIMEOUT_SECONDS", "12.5")
+    monkeypatch.setenv("HANDBOOK_RAG_ANSWER_DEADLINE_SECONDS", "45")
+    monkeypatch.setenv("HANDBOOK_RAG_ANSWER_FALLBACK_MODEL", "gemini-3.8-flash")
+
+    settings = Settings()
+
+    assert settings.answer_timeout_seconds == 12.5
+    assert settings.answer_deadline_seconds == 45.0
+    assert settings.answer_fallback_model == "gemini-3.8-flash"
+
+
+@pytest.mark.parametrize("field", ["answer_timeout_seconds", "answer_deadline_seconds"])
+@pytest.mark.parametrize("seconds", [0, -1, 600.5, 20_000, float("inf"), float("nan")])
+def test_a_time_limit_must_be_a_number_of_seconds_up_to_ten_minutes(
+    field: str, seconds: float
+) -> None:
+    # 20,000 is twenty seconds written in milliseconds, as the Gemini SDK counts them.
+    options: dict[str, Any] = {field: seconds}
+    with pytest.raises(ValidationError, match=field):
+        Settings(**options)
+
+
+@pytest.mark.parametrize("field", ["answer_timeout_seconds", "answer_deadline_seconds"])
+@pytest.mark.parametrize("seconds", [0.5, 600])
+def test_a_time_limit_from_half_a_second_to_ten_minutes_is_accepted(
+    field: str, seconds: float
+) -> None:
+    options: dict[str, Any] = {field: seconds}
+    assert getattr(Settings(**options), field) == seconds
+
+
+def test_a_deadline_shorter_than_the_time_limit_of_one_request_is_allowed() -> None:
+    # The deadline only stops new attempts. With one this short, only a quick failure is
+    # tried again, and a silent request still has its whole time limit.
+    settings = Settings(answer_timeout_seconds=20, answer_deadline_seconds=5)
+
+    assert (settings.answer_timeout_seconds, settings.answer_deadline_seconds) == (20, 5)
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-flash", "claude-haiku-5-5"])
+def test_the_fallback_may_be_a_gemini_or_a_claude_model(model: str) -> None:
+    assert Settings(answer_fallback_model=model).answer_fallback_model == model
+
+
+def test_an_empty_fallback_copied_from_the_example_file_means_none() -> None:
+    Path(".env").write_text("HANDBOOK_RAG_ANSWER_FALLBACK_MODEL=\n")
+
+    assert Settings().answer_fallback_model is None
+    assert Settings(answer_fallback_model="").answer_fallback_model is None
+
+
+@pytest.mark.parametrize(
+    ("model", "message"),
+    [
+        ("gpt-4o", r"must be a Gemini model .* or a Claude model"),
+        ("gemini-", r"must be a Gemini model .* or a Claude model"),
+        ("gemini-flash-latest", "must be an exact model name"),
+    ],
+)
+def test_the_fallback_is_named_by_the_same_rule_as_the_answer_model(
+    model: str, message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        Settings(answer_fallback_model=model)
+
+
+def test_the_fallback_must_be_another_model_than_the_answer_model() -> None:
+    with pytest.raises(ValidationError, match="must be another model than answer_model"):
+        Settings(answer_model="gemini-3.8-flash", answer_fallback_model="gemini-3.8-flash")

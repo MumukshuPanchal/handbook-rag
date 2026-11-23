@@ -83,6 +83,7 @@ BUSY = "The service is writing as many answers as it can. Try again in a few sec
 MODEL_RATE_LIMITED = "The answer model's rate limit was reached. Try again shortly."
 MODEL_QUOTA = "The answer model's allowance for today is used up. Try again tomorrow."
 MODEL_UNAVAILABLE = "The answer model is unavailable. Try again later."
+MODEL_TIMED_OUT = "The answer model did not answer in time. Try again later."
 NOT_FINISHED = "The answer could not be finished."
 
 logger = logging.getLogger(__name__)
@@ -247,6 +248,15 @@ class AskResponse(BaseModel):
         description="Why the model stopped: end_turn, max_tokens, refusal, no_context or another."
     )
     usage: Usage
+    requests: int = Field(
+        description=(
+            "How many requests to a model the answer took, failed ones included. 0 when "
+            "nothing was found to answer from, so that no model was asked."
+        )
+    )
+    fallback: bool = Field(
+        description="Whether the fallback model wrote the reply, because the answer model gave up."
+    )
     took_ms: float = Field(description="Time from the request to the whole answer, in ms.")
     first_text_ms: float | None = Field(
         description=(
@@ -302,16 +312,16 @@ ASK_STREAM_EXAMPLE = (
     '"url":"https://handbook.example.com/handbook/people/leave/","section":"people",'
     '"heading_path":["Parental leave"],"text":"New parents get sixteen weeks of paid leave."}],'
     '"model":"gemini-3.5-flash-lite","stop_reason":"end_turn",'
-    '"usage":{"input_tokens":1200,"output_tokens":20},"took_ms":1500.0,"first_text_ms":1300.0,'
-    '"trace_id":null}\n'
+    '"usage":{"input_tokens":1200,"output_tokens":20},"requests":1,"fallback":false,'
+    '"took_ms":1500.0,"first_text_ms":1300.0,"trace_id":null}\n'
     "\n"
 )
 ASK_UNAVAILABLE = (
     "No answer could be started, or none could be finished before anything was sent: the "
-    "vector store or the answer model is unavailable, the model's limit was reached, "
-    "answering is not configured, or the service is writing as many answers as it can. "
-    "The body says which, in fixed words. This is also the response when `stream` is true "
-    "and the failure came before the first text."
+    "vector store or the answer model is unavailable, the model did not answer in time, "
+    "the model's limit was reached, answering is not configured, or the service is "
+    "writing as many answers as it can. The body says which, in fixed words. This is also "
+    "the response when `stream` is true and the failure came before the first text."
 )
 
 
@@ -356,6 +366,8 @@ def _respond(answer: Answer, *, started: float, run: AnswerRun) -> AskResponse:
         usage=Usage(
             input_tokens=answer.usage.input_tokens, output_tokens=answer.usage.output_tokens
         ),
+        requests=answer.requests,
+        fallback=answer.fallback,
         took_ms=_milliseconds(time.perf_counter() - started),
         first_text_ms=first_text,
         trace_id=run.trace_id,
@@ -384,7 +396,17 @@ def _refusal(error: BaseException) -> tuple[str, dict[str, str]] | None:
         return MODEL_RATE_LIMITED, {"Retry-After": str(wait)}
     if error.reason == "quota":
         return MODEL_QUOTA, {}
+    if error.reason == "timeout":
+        return MODEL_TIMED_OUT, {}
     return MODEL_UNAVAILABLE, {}
+
+
+def _for_the_log(error: BaseException) -> str:
+    """What the service's log says about a failure: its message, and, when the fallback
+    model failed too, why the answer model had given up before it."""
+    if isinstance(error, GenerationError) and error.before_fallback is not None:
+        return f"{error} (before the fallback, the answer model failed: {error.before_fallback})"
+    return str(error)
 
 
 def _trace_headers(run: AnswerRun) -> dict[str, str]:
@@ -435,7 +457,9 @@ async def _events(run: AnswerRun, first: Text | Finished, started: float) -> Asy
         logger.error("answer failed after it began, trace %s", run.trace_id, exc_info=event.error)
         detail = NOT_FINISHED
     else:
-        logger.warning("answer failed after it began, trace %s: %s", run.trace_id, event.error)
+        logger.warning(
+            "answer failed after it began, trace %s: %s", run.trace_id, _for_the_log(event.error)
+        )
         detail = refusal[0]
     yield server_sent_event("error", _json_line({"detail": detail}))
 
@@ -710,7 +734,7 @@ def create_app(
         detail, headers = refusal
         # The cause goes to the log, not to the caller: it can name files, settings and
         # internal addresses. The trace records the kind of error.
-        logger.warning("answer failed, trace %s: %s", run.trace_id, event.error)
+        logger.warning("answer failed, trace %s: %s", run.trace_id, _for_the_log(event.error))
         raise HTTPException(
             status_code=503, detail=detail, headers={**headers, **_trace_headers(run)} or None
         ) from event.error

@@ -74,7 +74,7 @@ These are the [limitations in the README](README.md#limitations).
 - Both judges are the answer model itself ([#63]).
 - The judges were checked on one model's answers only, and whether a planted instruction moves a judge is not tested.
 - The first judge's instructions lack two rules of its rubric, and its numbering slipped in one long answer ([#58]).
-- Questions with a false assumption are too few to test whether the assistant corrects the assumption ([#37]).
+- Questions whose false assumption the handbook corrects are not in the test set, so nothing tests whether the assistant corrects the assumption ([#37]).
 - Planted instructions got through in 8 of the 20 cases that plant one, and nothing is fixed yet ([#66]).
 - Answers that leave out a limit or an exception are not measured reliably ([#59]).
 - One reply for each question, on a free tier whose speed is uneven: the time to a complete answer is over the charter's target.

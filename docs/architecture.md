@@ -9,7 +9,7 @@ The assistant answers questions from a company handbook. It works in two phases:
 1. **Indexing (offline).** The handbook is split into chunks. Each chunk is turned into vectors and stored in a vector store.
 2. **Answering (online).** For each question, the system finds the most relevant chunks and asks a language model to answer using only those chunks, with citations.
 
-Two further parts keep the system honest: an **evaluation harness** that measures quality on a fixed set of questions, and **tracing** that records what happened inside every request.
+Two further parts keep the system honest: an **evaluation harness** that measures quality on a fixed set of questions, and **tracing** that, when switched on, records what happened inside every request.
 
 ## Design principles
 
@@ -78,7 +78,7 @@ The first working version (the baseline) used dense search only and skipped step
 | Generator | Write a grounded, cited answer | Gemini through Google's API by default, or Claude through the Anthropic API | [ADR 0013](adr/0013-gemini-free-tier-with-marker-citations.md), [ADR 0006](adr/0006-claude-with-native-citations-for-generation.md), [ADR 0010](adr/0010-search-result-blocks-and-declining.md) |
 | API | HTTP interface: `POST /ask` (JSON or server-sent events), `POST /search` and `GET /health` | FastAPI | [ADR 0015](adr/0015-answers-over-http.md) |
 | Evaluation | Measure retrieval and answer quality | Our own harness | [ADR 0007](adr/0007-evaluation-strategy.md) |
-| Tracing | Record every stage of every request | OpenTelemetry | [ADR 0008](adr/0008-opentelemetry-tracing.md) |
+| Tracing | Record every stage of a request, when switched on | OpenTelemetry | [ADR 0008](adr/0008-opentelemetry-tracing.md) |
 
 ## Data model
 

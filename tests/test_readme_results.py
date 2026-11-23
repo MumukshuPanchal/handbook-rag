@@ -27,6 +27,8 @@ REPOSITORY = "https://github.com/MumukshuPanchal/production-rag-pipeline"
 # The issues and pull requests of the repository at version 1.0.0, as `gh issue list` and
 # `gh pr list` gave them. A test cannot ask GitHub, so a link may name only these. GitHub
 # numbers both from one sequence, so a number in the other list is a wrong link too.
+# When the README links a newer issue or pull request, add its number here
+# (CONTRIBUTING.md says so too).
 ISSUES = {*range(1, 23), 24, 34, 37, 42, 43, 47, 51, 52, 53, 58, 59, 60, 61, 66}
 PULLS = {23, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 38, 39, 40, 41, 44, 45, 46, 48}
 PULLS |= {49, 50, 54, 55, 56, 57, 62, 63, 64, 65, 67, 68}
@@ -415,6 +417,9 @@ def test_every_issue_and_pull_request_linked_is_one_of_the_repository() -> None:
         if match is None:
             continue
         known = ISSUES if match[1] == "issues" else PULLS
-        assert int(match[2]) in known, f"{url}: not an existing {match[1]} item at 1.0.0"
+        assert int(match[2]) in known, (
+            f"{url}: not in the list of {match[1]} items at the top of this file. If it is new, "
+            "add its number there."
+        )
         named = re.search(r"(?:issue|pull request) (\d+)", text)
         assert named is None or named[1] == match[2], f"{text!r} links to {url}"

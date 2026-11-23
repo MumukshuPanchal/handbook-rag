@@ -72,8 +72,9 @@ def test_an_empty_key_copied_from_the_example_file_is_a_clear_error(
 ) -> None:
     monkeypatch_environment["GEMINI_API_KEY"] = ""
 
-    with pytest.raises(GenerationError, match="No Gemini API key was found"):
+    with pytest.raises(GenerationError, match="No Gemini API key was found") as raised:
         make_generator(Settings())
+    assert raised.value.reason == "configuration"
 
 
 def test_a_claude_model_name_selects_the_claude_generator(

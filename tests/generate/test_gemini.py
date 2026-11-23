@@ -578,6 +578,18 @@ def test_api_failures_become_clear_errors(
     assert raised.value.retry_after == retry_after
 
 
+@pytest.mark.parametrize("wait", ["36sx", "36s extra", "about 36s", "1e3s", "36 s", "-36s"])
+def test_a_wait_written_in_any_other_form_gives_no_wait(wait: str) -> None:
+    """Only the whole of a written wait counts, so a caller is never told a wrong one."""
+    retry = {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": wait}
+    client = FakeClient(error=api_error(429, "RESOURCE_EXHAUSTED", [retry]))
+
+    with pytest.raises(GenerationError) as raised:
+        generator_for(client).generate("q", [LEAVE])
+    assert raised.value.reason == "rate_limit"
+    assert raised.value.retry_after is None
+
+
 def test_the_generator_names_the_model_it_asks_for() -> None:
     # The span of a failed request names the model too, and there is no reply to read it from.
     assert generator_for(FakeClient()).model == MODEL

@@ -64,6 +64,9 @@ TRACE_HEADER = "X-Trace-Id"
 # What a caller who is turned away because answers are full should wait, in seconds. A
 # typical answer took two to three seconds when measured, and 95% took under ten.
 BUSY_RETRY_AFTER_SECONDS = 5
+# The longest wait a Retry-After header asks for. A provider's per-minute limit needs
+# far less, and a caller told to wait for days would simply not come back.
+MAX_RETRY_AFTER_SECONDS = 3600
 # The headers of a stream. A proxy that holds a response back until it is complete
 # would hold back every event; these two ask caches and proxies not to.
 STREAM_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
@@ -312,8 +315,15 @@ ASK_UNAVAILABLE = (
 
 
 def _json_line(value: object) -> str:
-    """JSON on one line, as compact as the framework writes it, with text left in UTF-8."""
-    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    """JSON on one line, as compact as the framework writes it, with text left in UTF-8.
+
+    Both forms of an answer are written through here, so this is the one place that
+    makes sure the text can be sent. A model can write a lone half of a surrogate pair,
+    which UTF-8 cannot encode; it becomes a question mark instead of failing the
+    response, or a stream halfway through.
+    """
+    text = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    return text.encode("utf-8", errors="replace").decode("utf-8")
 
 
 def _respond(answer: Answer, *, started: float, run: AnswerRun) -> AskResponse:
@@ -368,8 +378,9 @@ def _refusal(error: BaseException) -> tuple[str, dict[str, str]] | None:
         if error.retry_after is None:
             return MODEL_RATE_LIMITED, {}
         # The header takes whole seconds. Rounded up, so a caller who waits that long
-        # does not come back a moment too early.
-        return MODEL_RATE_LIMITED, {"Retry-After": str(max(1, math.ceil(error.retry_after)))}
+        # does not come back a moment too early, and never more than an hour.
+        wait = min(MAX_RETRY_AFTER_SECONDS, max(1, math.ceil(error.retry_after)))
+        return MODEL_RATE_LIMITED, {"Retry-After": str(wait)}
     if error.reason == "quota":
         return MODEL_QUOTA, {}
     return MODEL_UNAVAILABLE, {}

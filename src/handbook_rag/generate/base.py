@@ -4,6 +4,7 @@ A generator is the part that talks to a language model. There is one per provide
 the rest of the application only ever sees the interface defined here.
 """
 
+import math
 import re
 from collections.abc import Callable, Sequence
 from typing import Literal, Protocol
@@ -41,7 +42,10 @@ class GenerationError(RuntimeError):
     ) -> None:
         super().__init__(message)
         self.reason: FailureReason = reason
-        self.retry_after = retry_after
+        # A wait that is infinite, not a number or negative is no wait at all. It is
+        # dropped here, so that no reader of the error has to check for it.
+        usable = retry_after is not None and math.isfinite(retry_after) and retry_after >= 0
+        self.retry_after = retry_after if usable else None
         """Seconds to wait before trying again, when the provider said so."""
 
 

@@ -34,6 +34,7 @@ from tests.support import (
     FakeSparseEncoder,
     StandInModel,
     count_words,
+    everything_recorded,
     make_chunk,
     write_snapshot,
 )
@@ -633,9 +634,10 @@ def test_a_traced_answer_prints_the_id_of_its_trace_at_the_end(
     assert {"search", "retrieve.hybrid", "chat stand-in-model"} <= {span.name for span in sent}
     assert result.output.splitlines()[-1] == f"trace {format(root.context.trace_id, '032x')}"
     assert built == [False], "the model is built before the trace begins"
-    recorded = {key: value for span in sent for key, value in (span.attributes or {}).items()}
+    recorded = everything_recorded(sent)
     assert "handbook_rag.query.text" not in recorded
-    assert "how many weeks of paid leave" not in recorded.values()
+    assert "how many weeks of paid leave" not in recorded
+    assert "Sixteen weeks of paid leave" not in recorded, "nor the answer"
 
 
 @pytest.mark.usefixtures("indexed_handbook")

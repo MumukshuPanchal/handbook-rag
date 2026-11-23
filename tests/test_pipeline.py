@@ -14,7 +14,13 @@ from handbook_rag.index.store import ScoredChunk
 from handbook_rag.ingest.models import Chunk
 from handbook_rag.pipeline import answer_question
 from handbook_rag.retrieve.dense import Retriever
-from tests.support import FakeEmbedder, FakeSparseEncoder, StandInModel, make_chunk
+from tests.support import (
+    FakeEmbedder,
+    FakeSparseEncoder,
+    StandInModel,
+    everything_recorded,
+    make_chunk,
+)
 
 LEAVE = make_chunk("New parents get sixteen weeks of paid leave.")
 EXPENSES = make_chunk("Expense a laptop up to one thousand dollars.", doc_id="finance/expenses.md")
@@ -207,7 +213,8 @@ def test_the_model_call_records_the_reply_under_the_names_of_the_conventions(
         )
 
     retriever = FakeRetriever([ScoredChunk(LEAVE, 0.9), ScoredChunk(EXPENSES, 0.4)])
-    answer_question(QUESTION, retriever=retriever, generator=FakeGenerator(cut_off), limit=2)
+    # Asked for more than the search finds, so the passages given are not the limit.
+    answer_question(QUESTION, retriever=retriever, generator=FakeGenerator(cut_off), limit=5)
 
     assert attributes(named(spans, "chat stand-in-model")) == {
         "gen_ai.operation.name": "chat",
@@ -261,13 +268,12 @@ def test_the_question_and_the_answer_are_left_out_of_a_trace_unless_content_is_s
     retriever = FakeRetriever([ScoredChunk(LEAVE, 0.9)])
 
     answer_question(QUESTION, retriever=retriever, generator=FakeGenerator(), limit=1)
-    values = [value for span in spans.get_finished_spans() for value in attributes(span).values()]
-    keys = [key for span in spans.get_finished_spans() for key in attributes(span)]
+    recorded = everything_recorded(spans.get_finished_spans())
 
-    assert QUESTION not in values
-    assert not [value for value in values if "An answer." in str(value)]
-    assert "handbook_rag.query.text" not in keys
-    assert "handbook_rag.answer.text" not in keys
+    assert QUESTION not in recorded
+    assert "An answer." not in recorded
+    assert "handbook_rag.query.text" not in recorded
+    assert "handbook_rag.answer.text" not in recorded
 
     spans.clear()
     monkeypatch.setattr(tracing, "_record_content", True)
@@ -297,6 +303,29 @@ def test_a_failed_model_call_is_marked_failed_and_so_is_the_answer_around_it(
     assert attributes(call)["gen_ai.request.model"] == "stand-in-model", "the request is known"
     assert named(spans, "answer").status.status_code is StatusCode.ERROR
     assert named(spans, "search").status.status_code is not StatusCode.ERROR
+
+
+def test_an_errors_own_message_reaches_the_trace_of_an_answer_only_with_content_on(
+    spans: InMemorySpanExporter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "Could not read /Users/someone/handbook/.env: check GEMINI_API_KEY."
+    failing = FakeGenerator(error=GenerationError(secret, reason="configuration"))
+    retriever = FakeRetriever([ScoredChunk(LEAVE, 0.9)])
+
+    def fail() -> str:
+        with pytest.raises(GenerationError):
+            answer_question(QUESTION, retriever=retriever, generator=failing, limit=1)
+        return everything_recorded(spans.get_finished_spans())
+
+    quiet = fail()
+    spans.clear()
+    monkeypatch.setattr(tracing, "_record_content", True)
+    full = fail()
+
+    for part in (secret, "/Users/someone", "GEMINI_API_KEY", QUESTION):
+        assert part not in quiet
+        assert part in full, "the search above can find it"
+    assert "handbook_rag.generate.base.GenerationError" in quiet, "the kind of error only"
 
 
 def test_with_nothing_found_there_is_no_span_for_a_model_call_that_was_not_made(

@@ -10,6 +10,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.util.types import Attributes
+
 from handbook_rag.index.sparse import SparseVector
 from handbook_rag.ingest.models import Chunk
 
@@ -135,3 +138,28 @@ class FakeReranker:
         self.calls.append((query, list(texts)))
         wanted = set(re.findall(r"[a-z0-9]+", query.lower()))
         return [float(len(wanted & set(re.findall(r"[a-z0-9]+", text.lower())))) for text in texts]
+
+
+def everything_recorded(spans: Sequence[ReadableSpan]) -> str:
+    """All the text a set of spans holds, in one string, to search for what must not be there.
+
+    The names and values of attributes, the names and attributes of events, and the
+    descriptions of statuses. A test that looks for a secret as part of this string
+    finds it also inside a longer value, a list, or an error's message.
+    """
+    texts: list[str] = []
+
+    def add(attributes: Attributes) -> None:
+        for key, value in (attributes or {}).items():
+            texts.append(key)
+            values = value if isinstance(value, tuple | list) else [value]
+            texts.extend(str(item) for item in values)
+
+    for span in spans:
+        texts.append(span.name)
+        texts.append(span.status.description or "")
+        add(span.attributes)
+        for event in span.events:
+            texts.append(event.name)
+            add(event.attributes)
+    return "\n".join(texts)

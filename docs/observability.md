@@ -48,10 +48,11 @@ answer                                    the question as a whole
   generate_content gemini-3.5-flash-lite  the request to the model, at the provider
 ```
 
-A real answer, streamed through `POST /ask` on 23 November 2026, as Jaeger showed it. The trace has 13 spans. The first two are the web framework's own:
+A real answer, streamed through `POST /ask` on 23 November 2026, as Jaeger showed it. The trace has 13 spans. The first three are the web framework's own:
 
 ```
 POST /ask                                 1788 ms   the HTTP request, until the last event was sent
+  fastapi.dependencies                     0.4 ms   the framework, before the endpoint runs
   fastapi.endpoint                        1472 ms   our endpoint, until the stream began
     answer                                1780 ms
       search                               109 ms   5 passages found
@@ -88,7 +89,7 @@ The `ask` command and `/ask` count tokens read from the cache apart from the oth
 
 A request to the API is traced the same way. Its response carries the trace id in `trace_id` and in the `X-Trace-Id` header, and the header is also on a failed request, which is the one a caller most needs an id for. The web framework adds its own spans around ours: the trace starts with `POST /search` or `POST /ask`, which records the method, the route and the status code, and our spans sit inside it.
 
-An answer is written in a worker thread, which starts with a copy of the request's context, so its spans stay in the request's trace. A streamed answer carries the trace id in the header and in its last event. A request to `/ask` that is turned away before an answer starts, because the service is full or answering is not configured, carries no trace id. A caller who leaves in the middle of a stream stops the model call; the spans of that answer end as failed, with the kind `handbook_rag.streaming.CallerGone`.
+An answer is written in a worker thread, which starts with a copy of the request's context, so its spans stay in the request's trace. A streamed answer carries the trace id in the header and in its `answer` event; an `error` event carries only its `detail`, and the header is sent all the same. A request to `/ask` that is turned away before an answer starts, because the service is full or answering is not configured, carries no trace id. A caller who leaves in the middle of a stream stops the model call; the spans of that answer end as failed, with the kind `handbook_rag.streaming.CallerGone`.
 
 Requests to `/health` are not traced. Something asks for it every few seconds, and those traces would bury the ones made by people.
 

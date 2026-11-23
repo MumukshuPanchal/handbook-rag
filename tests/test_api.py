@@ -2,7 +2,9 @@ import asyncio
 import itertools
 import json
 import logging
+import math
 import threading
+import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import suppress
 from types import SimpleNamespace
@@ -66,7 +68,13 @@ from handbook_rag.streaming import (
     Text,
     server_sent_event,
 )
-from tests.support import FakeEmbedder, FakeSparseEncoder, StandInModel, make_chunk
+from tests.support import (
+    FakeEmbedder,
+    FakeSparseEncoder,
+    StandInModel,
+    everything_recorded,
+    make_chunk,
+)
 
 LEAVE = "New parents get sixteen weeks of paid leave."
 LAPTOP = "Expense a laptop up to one thousand dollars."
@@ -769,6 +777,20 @@ def test_a_stream_sends_each_piece_as_it_is_written_then_the_answer_byte_for_byt
     )
 
 
+def test_text_that_utf8_cannot_encode_is_replaced_instead_of_failing_either_form() -> None:
+    # A lone half of a surrogate pair is a valid Python string and not valid UTF-8.
+    model = Writing(("Sixteen weeks \ud800.", (0,)))
+    with TestClient(answering(model)) as client:
+        plain = client.post("/ask", json={"query": QUESTION})
+        streamed = client.post("/ask", json={"query": QUESTION, "stream": True})
+
+    assert plain.status_code == 200
+    assert plain.json()["answer"] == "Sixteen weeks ?.[1]"
+    assert streamed.status_code == 200
+    assert streamed.content.startswith(b'event: text\ndata: {"text":"Sixteen weeks ?."}\n\n')
+    assert json.loads(answer_event(streamed.content))["answer"] == "Sixteen weeks ?.[1]"
+
+
 @pytest.mark.usefixtures("ticking_clock")
 def test_the_answer_at_the_end_of_a_stream_is_exactly_the_response_without_one() -> None:
     model = Writing(("Sixteen weeks.", (0,)), (" A laptop too.", (1,)))
@@ -830,6 +852,14 @@ def test_a_model_that_fails_before_any_text_is_a_503_that_keeps_the_cause_to_the
         # The header takes whole seconds, and never says to come back at once.
         (GenerationError("x", reason="rate_limit", retry_after=0.2), MODEL_RATE_LIMITED, "1"),
         (GenerationError("x", reason="rate_limit", retry_after=0.0), MODEL_RATE_LIMITED, "1"),
+        # Never more than an hour, however long the provider asks for.
+        (GenerationError("x", reason="rate_limit", retry_after=3600.0), MODEL_RATE_LIMITED, "3600"),
+        (GenerationError("x", reason="rate_limit", retry_after=3600.5), MODEL_RATE_LIMITED, "3600"),
+        (GenerationError("x", reason="rate_limit", retry_after=1e300), MODEL_RATE_LIMITED, "3600"),
+        # A wait that is not a number of seconds is no wait, and no fault of the service.
+        (GenerationError("x", reason="rate_limit", retry_after=math.inf), MODEL_RATE_LIMITED, None),
+        (GenerationError("x", reason="rate_limit", retry_after=math.nan), MODEL_RATE_LIMITED, None),
+        (GenerationError("x", reason="rate_limit", retry_after=-5.0), MODEL_RATE_LIMITED, None),
         (GenerationError("x", reason="rate_limit"), MODEL_RATE_LIMITED, None),
         (GenerationError("x", reason="quota"), MODEL_QUOTA, None),
         (GenerationError("x", reason="quota", retry_after=36.0), MODEL_QUOTA, None),
@@ -1089,9 +1119,42 @@ def test_a_traced_answer_returns_the_id_of_its_trace_and_leaves_the_question_out
     assert root.name == "answer"
     assert trace_id_of_ask(response, stream) == format(root.context.trace_id, "032x")
     assert response.headers[TRACE_HEADER] == format(root.context.trace_id, "032x")
-    recorded = [value for span in finished for value in (span.attributes or {}).values()]
+    recorded = everything_recorded(finished)
     assert QUESTION not in recorded
-    assert "Sixteen weeks.[1]" not in recorded
+    assert "Sixteen weeks." not in recorded
+    assert QUESTION not in sent_back(response)
+
+
+def sent_back(response: Response) -> str:
+    """Everything a response tells its caller: its headers and its body."""
+    headers = "\n".join(f"{name}: {value}" for name, value in response.headers.items())
+    return f"{headers}\n{response.text}"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("after_text", [False, True])
+def test_a_failed_answer_keeps_the_question_the_answer_and_the_errors_message_to_itself(
+    stream: bool, after_text: bool, spans: InMemorySpanExporter
+) -> None:
+    secret = "Could not read /Users/someone/handbook/.env: check GEMINI_API_KEY."
+    question = "my salary is 90,000: how many weeks of paid leave do I get?"
+    error = GenerationError(secret)
+    model = (
+        Writing(("Parents get sixteen weeks.", (0,)), fail_after=error)
+        if after_text
+        else Writing(fail_before=error)
+    )
+    with TestClient(answering(model)) as client:
+        spans.clear()
+        response = client.post("/ask", json={"query": question, "stream": stream})
+        assert answers_ended()
+
+    recorded = everything_recorded(spans.get_finished_spans())
+    for part in (question, "salary is 90,000", secret, "/Users/someone", "GEMINI_API_KEY"):
+        assert part not in recorded
+        assert part not in sent_back(response)
+    assert "Parents get sixteen weeks" not in recorded
+    assert "handbook_rag.generate.base.GenerationError" in recorded, "the kind of error only"
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -1213,6 +1276,72 @@ def test_a_failure_in_the_worker_is_handed_to_the_reader_as_the_last_event() -> 
     assert slots.in_use == 0
 
 
+@pytest.mark.parametrize("stop", [SystemExit(3), KeyboardInterrupt()])
+def test_even_an_exit_raised_in_the_worker_reaches_the_reader_and_frees_its_slot(
+    stop: BaseException,
+) -> None:
+    """Not only errors: without a last event the request would wait for ever."""
+    slots = Slots(1)
+
+    def write(on_text: Callable[[str], None], on_trace: Callable[[str], None]) -> Answer:
+        raise stop
+
+    async def scenario() -> object:
+        assert slots.take()
+        run = AnswerRun.start(write, slots)
+        return await asyncio.wait_for(run.next(), WAIT)
+
+    assert asyncio.run(scenario()) == Failed(stop)
+    assert answers_ended()
+    assert slots.in_use == 0
+
+
+class SlowToGiveBack(Slots):
+    """Slots that take a moment to give one back, as a busy machine might."""
+
+    def give_back(self) -> None:
+        time.sleep(0.2)
+        super().give_back()
+
+
+def test_the_slot_is_free_by_the_time_the_last_event_is_read() -> None:
+    """A caller who has read the answer and asks again must not find the service full."""
+    slots = SlowToGiveBack(1)
+
+    async def scenario() -> tuple[object, int]:
+        assert slots.take()
+        run = AnswerRun.start(lambda _on_text, _on_trace: ANSWER, slots)
+        last = await asyncio.wait_for(run.next(), WAIT)
+        # Read at once: no waiting for the worker thread to end.
+        return last, slots.in_use
+
+    assert asyncio.run(scenario()) == (Finished(ANSWER), 0)
+    assert answers_ended()
+
+
+def test_a_worker_thread_does_not_keep_the_process_alive() -> None:
+    """A model that never answers must not stop the server from shutting down."""
+    slots = Slots(1)
+    go_on = threading.Event()
+
+    def write(on_text: Callable[[str], None], on_trace: Callable[[str], None]) -> Answer:
+        assert go_on.wait(WAIT)
+        return ANSWER
+
+    async def scenario() -> list[threading.Thread]:
+        assert slots.take()
+        run = AnswerRun.start(write, slots)
+        workers = [thread for thread in threading.enumerate() if thread.name == THREAD_NAME]
+        go_on.set()
+        await run.next()
+        return workers
+
+    (worker,) = asyncio.run(scenario())
+
+    assert worker.daemon is True
+    assert answers_ended()
+
+
 def test_a_run_that_is_stopped_abandons_its_answer_at_the_next_text_and_frees_its_slot() -> None:
     slots = Slots(1)
     go_on = threading.Event()
@@ -1313,12 +1442,19 @@ def test_a_server_sent_event_is_its_name_its_data_and_a_blank_line() -> None:
             server_sent_event("text", broken)
 
 
-def test_a_request_cancelled_while_it_waits_for_its_answer_stops_the_model_call() -> None:
-    """As when the server shuts down while the model is still thinking."""
+@pytest.mark.parametrize("stream", [False, True])
+def test_a_request_cancelled_while_it_waits_for_its_answer_stops_the_model_call(
+    stream: bool,
+) -> None:
+    """As when the server shuts down while the model is still thinking.
+
+    A stream is decided on only once the first text is there, so until then both forms
+    wait in the same place.
+    """
     hold = threading.Event()
     model = Writing(("Sixteen weeks.", (0,)), hold=hold, hold_at=0)
     application = answering(model)
-    body = json.dumps({"query": QUESTION}).encode()
+    body = json.dumps({"query": QUESTION, "stream": stream}).encode()
 
     async def cancel_while_waiting() -> None:
         asked = False

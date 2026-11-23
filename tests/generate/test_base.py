@@ -1,5 +1,7 @@
 """The rules every generator shares: what counts as an answer, and declining without a model."""
 
+import math
+
 import pytest
 
 from handbook_rag.generate.base import GenerationError, decline_without_context, is_answered
@@ -92,3 +94,13 @@ def test_a_generation_error_counts_as_unavailable_unless_it_says_otherwise() -> 
         None,
     )
     assert (limited.reason, limited.retry_after) == ("rate_limit", 36.0)
+
+
+@pytest.mark.parametrize("wait", [math.inf, -math.inf, math.nan, -0.5])
+def test_a_wait_that_is_not_a_number_of_seconds_is_dropped(wait: float) -> None:
+    """Every reader of the error can then use the wait without checking it first."""
+    assert GenerationError("Slow down.", reason="rate_limit", retry_after=wait).retry_after is None
+
+
+def test_a_wait_of_no_time_at_all_is_kept() -> None:
+    assert GenerationError("Slow down.", reason="rate_limit", retry_after=0.0).retry_after == 0.0

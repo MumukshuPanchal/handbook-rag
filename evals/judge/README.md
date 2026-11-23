@@ -1,10 +1,12 @@
-# Labelled answers for checking the judge
+# Labelled answers for checking the judges
 
-Answers whose statements have known verdicts. They are what the judge is checked against before any score it gives is reported: `eval-judge` gives the judge these answers and counts how often it reaches the labelled verdict. The reasoning is in [ADR 0014](../../docs/adr/0014-answer-evaluation-in-stages.md), and the commands are in the [evaluation guide](../../docs/evaluation.md).
+Answers whose verdicts are known. They are what a judge is checked against before any score it gives is reported: `eval-judge` gives the judge these answers and counts how often it reaches the labelled verdict. There are two sets, one for each thing a judge decides. The first is described from here on. The second, for whether an answer agrees with its reference answer, has [a section of its own](#the-second-set-answers-against-their-reference-answers) further down. The reasoning is in [ADR 0014](../../docs/adr/0014-answer-evaluation-in-stages.md), and the commands are in the [evaluation guide](../../docs/evaluation.md).
 
-> **Status: labelled by independent model sessions, not by a person.** One model session labelled every statement, a second labelled them again without seeing the first one's labels, and a third settled the cases they left open. No person has labelled any of them. All three sessions were Claude models, which is another model family than the judge, a Gemini model.
+> **Status of both sets: labelled by independent model sessions, not by a person.** One model session labelled every statement, a second labelled them again without seeing the first one's labels, and a third settled the cases they left open. No person has labelled any of them. All three sessions were Claude models, which is another model family than the judge, a Gemini model.
 
-## What is in it
+## The first set: statements against the passages they cite
+
+### What is in it
 
 [`support/cases.jsonl`](support/cases.jsonl) holds 169 answers, one on each line.
 
@@ -35,7 +37,7 @@ Each of the 40 copies has exactly one altered statement, five of each kind:
 
 A statement names its passages by number. A passage is recorded by chunk id, with a hash of its text, and the text itself is fetched from the handbook snapshot when the file is loaded. If a passage is no longer in the corpus, or reads differently, loading stops: a label is about exact words. The labels are tied to the handbook at commit `e645aac6dc6fbb0b759b92ed32f016aaed5ef4b8` and to the chunking `v1-max320-min60-overlap40`.
 
-## How it was made: three readers
+### How it was made: three readers
 
 The readers decided by [the rubric](rubric.md). The judge's instructions give the same rules except two that have been missing from them since they were first committed, as the [evaluation guide](../../docs/evaluation.md#what-the-judge-decides) describes.
 
@@ -54,7 +56,7 @@ What the comparison showed:
 
 The rubric changed while the labels were made. The first reader's notes showed where two careful readers would split, and rules were added for limits and exceptions, for permission and obligation, for a name written in two ways, and for a passage that can be read in two ways. Only the eight statements the third reader settled were read under the final wording. With their copies those are 11 of the 264 lines. The other 253 were labelled under an earlier wording, and on each of them two readers agreed.
 
-## Known limits
+### Known limits
 
 - **No person has labelled anything.** Two models of one family can share a blind spot, and where they do, their agreement proves nothing.
 - **The planted faults were written by a model.** They may be easier or harder to catch than the faults a model makes by itself. The check says how well the judge catches these, not every kind.
@@ -63,8 +65,59 @@ The rubric changed while the labels were made. The first reader's notes showed w
 - **The set is tied to one snapshot and one chunking.** After a change to either, the passages have to be found again and the labels checked.
 - **The real answers come from one run of one model.** A judge that does well on them has not been shown to do well on another model's answers.
 
+## The second set: answers against their reference answers
+
+[`correct/cases.jsonl`](correct/cases.jsonl) holds 167 answers, one on each line. Each line holds everything the judge reads: the question, the reference answer from the golden set, and the answer.
+
+| | Count |
+|---|---|
+| Real answers: every answer of the first answer run to a question that has a reference answer | 127 |
+| Copies of a real answer with one planted fault | 40 |
+| labelled `correct` | 127 |
+| labelled `incorrect` | 35 |
+| labelled `partial` (right as far as it goes, with part of what was asked missing) | 5 |
+| labelled `unclear` | 0 |
+
+**The readers called all 127 real answers correct.** So here too the planted faults are what makes the check possible: without them there would be nothing for a judge to catch. Each of the 40 copies has one fault, five of each kind:
+
+| Kind | What was changed in the answer | Label |
+|---|---|---|
+| `number` | A number, date or amount the question asks for became another plausible one | `incorrect` |
+| `name` | A person, role, team, tool or document was replaced by another | `incorrect` |
+| `negation` | The answer was reversed, or its strength changed: optional became mandatory | `incorrect` |
+| `scope` | The answer was given for other people, places or plans than the reference gives it for | `incorrect` |
+| `contradiction` | The right answer was kept, and a sentence was added that contradicts the reference | `incorrect` |
+| `other_question` | The answer was replaced by a confident answer to another question on the same topic | `incorrect` |
+| `no_answer` | The answer was replaced by a reply that gives none of what was asked: "the handbook does not say", "it depends", a referral | `incorrect` |
+| `omission` | Part of what the question asks for was removed, and what remains is right | `partial` |
+
+Two of these, `other_question` and `no_answer`, are known negatives that [issue 8](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/8) asks for: a confident answer to another question, and "I don't know". The third it names, an empty answer, never reaches the judge: code counts an empty reply, and the fixed sentence the assistant declines with, as declining.
+
+### How it was made
+
+The readers decided by [the rubric](correct/rubric.md). That file is, word for word, what the judge is instructed with, and a test holds the two together. This is the lesson of the first set, whose judge turned out to have been told two rules fewer than its readers. The rubric was also fixed before the first label was made and not changed afterwards, so every label was made under the same words.
+
+| Step | Reader | Model | What happened |
+|---|---|---|---|
+| 1 | First | claude-opus-5-5 | Labelled the 127 real answers: all correct, 5 of them marked as borderline. Then wrote the 40 copies with a planted fault, each from a different answer |
+| 2 | Second | claude-sonnet-5-5 | Labelled all 167. It was not shown the first reader's labels, and was not told which answers had been altered or how many |
+| 3 | Third | claude-opus-5-5 | Read the 8 cases that one of the first two had marked as borderline, with both earlier verdicts shown without names |
+
+- **The first two readers gave the same verdict on all 167** (Cohen's kappa 1.000).
+- **The second reader faulted all 40 planted faults**, each with the very verdict the first had intended, without knowing they were planted.
+- **The third reader agreed on all 8 borderline cases**, so no case is labelled `unclear`.
+
+### Known limits
+
+- **No person has labelled anything**, and all three readers are models of one family. Complete agreement between them shows that the cases are easy for such readers. It does not show that the labels are right.
+- **The planted faults are plain by design.** The readers were asked for faults that a careful reader would certainly call a fault. A fault as subtle as a real slip is not in the set, so the check says nothing about those.
+- **No real fault at all.** The readers found every real answer correct. How a judge does on wrong answers that arise naturally cannot be told from this set.
+- **"Correct" means "agrees with the reference answer".** Most reference answers were written by a model from the same passage the assistant later quotes, which makes agreement likely once the passage is found. And if a reference answer is wrong, an answer that repeats it counts as correct.
+- **Where the rubric leaves room**, by the readers' own notes: an answer that adds a condition or a step the reference does not mention; a reference that gives a general instruction beside the one the question asks about; a role named loosely ("Executive Sponsor" for "E-Group Sponsor"). The eight borderline cases are of these kinds.
+- **The real answers come from one run of one model.**
+
 ## Licence and attribution
 
-The statements are replies of this project's assistant, and edits of those replies. Some repeat a few words of the [GitLab Handbook](https://handbook.gitlab.com/), © GitLab and its contributors, used under the [Creative Commons Attribution-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-sa/4.0/) licence. The file holds no passage of the handbook: passages are named by id and read from the snapshot.
+The statements and answers are replies of this project's assistant, and edits of those replies. The questions and reference answers in the second set are those of the [golden set](../golden/README.md). Some repeat a few words of the [GitLab Handbook](https://handbook.gitlab.com/), © GitLab and its contributors, used under the [Creative Commons Attribution-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-sa/4.0/) licence. The file holds no passage of the handbook: passages are named by id and read from the snapshot.
 
 The files in this directory are licensed under CC BY-SA 4.0, separately from the code, which is under the MIT licence. This project is not affiliated with or endorsed by GitLab. The basis for using the handbook is recorded in [ADR 0002](../../docs/adr/0002-handbook-corpus.md).

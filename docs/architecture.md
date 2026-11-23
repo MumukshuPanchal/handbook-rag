@@ -32,7 +32,7 @@ flowchart LR
 - **Load and clean.** Reads each Markdown file, separates front matter from the body, removes template shortcodes and raw HTML, and records the title, public URL and handbook section.
 - **Chunk.** Packs a page's sections into chunks within a token budget, starting a new chunk at each major heading, and cuts sections that are too long with a small overlap. Each chunk keeps its heading path (for example `Leave > Parental leave`) and its character offsets in the page. Details: [ADR 0009](adr/0009-structure-aware-chunking.md).
 - **Embed.** Computes a dense vector (captures meaning) and a sparse vector (captures exact terms) for each chunk.
-- **Store.** Writes vectors and metadata to Qdrant. Writes are idempotent: indexing the same snapshot twice changes nothing.
+- **Store.** Writes vectors and metadata to Qdrant. Writes are idempotent: indexing the same snapshot twice changes nothing. A chunk is skipped only when the point stored under its id describes it exactly, since its title and headings are embedded with it and are not part of its id. A newer commit is indexed into a collection of its own, and a chunk whose embedded text is unchanged takes its vectors from the older commit's collection, which is only read. Details: [ADR 0019](adr/0019-updating-the-index-by-reusing-vectors.md).
 
 ## Query path
 
@@ -100,13 +100,13 @@ The first working version (the baseline) used dense search only and skipped step
 
 | Field | Meaning |
 |---|---|
-| `chunk_id` | Deterministic ID derived from `doc_id`, the character offsets and the chunker version |
+| `chunk_id` | Deterministic ID derived from `doc_id`, the character offsets, the chunker version and a hash of the chunk's text |
 | `doc_id` | The document it belongs to |
 | `heading_path` | Headings above the chunk, outermost first |
 | `start_char`, `end_char` | Position of the chunk in the document text |
 | `text`, `token_count` | The chunk text and its length in tokens |
 
-Deterministic IDs make indexing idempotent. Character offsets let the evaluation decide whether a retrieved chunk covers a labelled passage, whatever the chunk size.
+Deterministic IDs make indexing idempotent, together with a comparison of what is stored under each id: the id does not cover the page's title or the headings above the chunk, which are embedded with it. Vectors are reused from one commit's index in the next by the embedded text, not by the id ([ADR 0019](adr/0019-updating-the-index-by-reusing-vectors.md)). Character offsets let the evaluation decide whether a retrieved chunk covers a labelled passage, whatever the chunk size.
 
 ## Evaluation
 
@@ -153,7 +153,7 @@ Details and reasoning: [ADR 0008](adr/0008-opentelemetry-tracing.md).
 src/handbook_rag/
     config.py           settings from the environment
     ingest/             loading, cleaning, chunking
-    index/              embedding and vector store
+    index/              embedding, vector store, reuse of an older commit's vectors, comparing two indexes
     retrieve/           dense, sparse, fusion, rerank
     generate/           prompt assembly, one generator per provider, citation mapping,
                         and the wrapper that asks again and falls back
@@ -191,7 +191,7 @@ compose.yaml            API, Qdrant and trace backend
 
 - Multi-turn conversation: each question is answered independently.
 - Fine-tuning of any model.
-- Live sync with the handbook: we index a pinned snapshot.
+- Live sync with the handbook: we index a pinned snapshot. The index can be updated to a newer commit by a command ([ADR 0019](adr/0019-updating-the-index-by-reusing-vectors.md)), but nothing follows the handbook by itself.
 - Languages other than English.
 
 ## Glossary

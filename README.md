@@ -32,7 +32,7 @@ flowchart TB
     IN -. "a span for each stage, when tracing is on" .-> T["Trace backend<br/>Jaeger, over OTLP"]
 ```
 
-- **Data path.** `make snapshot` downloads the handbook's Markdown pages at a pinned commit ([ADR 0002](docs/adr/0002-handbook-corpus.md)). `make index` cleans each page, cuts it into chunks along its headings ([ADR 0009](docs/adr/0009-structure-aware-chunking.md)), and stores two vectors for each chunk in Qdrant: a dense one for meaning and a sparse one for exact words ([ADR 0004](docs/adr/0004-qdrant-as-vector-store.md), [ADR 0005](docs/adr/0005-local-embedding-and-reranking-models.md)).
+- **Data path.** `make snapshot` downloads the handbook's Markdown pages at a pinned commit ([ADR 0002](docs/adr/0002-handbook-corpus.md)). `make index` cleans each page, cuts it into chunks along its headings ([ADR 0009](docs/adr/0009-structure-aware-chunking.md)), and stores two vectors for each chunk in Qdrant: a dense one for meaning and a sparse one for exact words ([ADR 0004](docs/adr/0004-qdrant-as-vector-store.md), [ADR 0005](docs/adr/0005-local-embedding-and-reranking-models.md)). A newer commit of the handbook can be indexed into a collection of its own by reusing the vectors of every chunk whose embedded text has not changed, so only what changed is embedded again ([ADR 0019](docs/adr/0019-updating-the-index-by-reusing-vectors.md)).
 - **Question path.** One function, `answer_question` in [`pipeline.py`](src/handbook_rag/pipeline.py), serves the `ask` command, `POST /ask` and the answer evaluation. It searches both ways and merges the two lists. Reranking is available and off by default ([ADR 0011](docs/adr/0011-hybrid-retrieval-by-default.md)). The model writes a number such as `[2]` after each statement, and code checks that the number names a passage that was really sent ([ADR 0013](docs/adr/0013-gemini-free-tier-with-marker-citations.md)). When the passages do not hold the answer, the reply is one fixed sentence with no sources ([ADR 0010](docs/adr/0010-search-result-blocks-and-declining.md)). A request to the model has a time limit, a failed one is asked again when that may help, and a second model can stand in ([ADR 0018](docs/adr/0018-time-limits-retries-and-a-fallback.md)).
 - **Evaluation.** The answer evaluation and the adversarial questions from outside the handbook call that same function, so they measure the system that runs. The retrieval evaluation calls the search alone, the adversarial cases with a planted passage give their passages to the answer model directly, and the judges call the model with their own instructions. Every run is committed under [`evals/runs/`](evals/runs) ([ADR 0007](docs/adr/0007-evaluation-strategy.md), [ADR 0014](docs/adr/0014-answer-evaluation-in-stages.md)).
 - **Tracing** records every stage of a request as a span. It is off by default and on in Docker Compose ([ADR 0008](docs/adr/0008-opentelemetry-tracing.md)).
@@ -55,7 +55,7 @@ You need [uv](https://docs.astral.sh/uv/), `make`, `git` and Docker. uv installs
 
 3. **Start the vector store.** `make qdrant` starts Qdrant in Docker, listening on this machine only.
 
-4. **Build the index.** `make index` cleans and chunks the pages, embeds every chunk and stores it in Qdrant. This is the slow step, and the first run also downloads the models. On a CPU, at the speed measured in CI, the whole handbook takes 45 to 56 minutes ([ADR 0012](docs/adr/0012-retrieval-gate-on-a-slice.md)). A GPU is used when there is one: on the development laptop the embedding model ran about twice as fast on its Apple GPU as on its CPU ([ADR 0005](docs/adr/0005-local-embedding-and-reranking-models.md)). Indexing can be stopped and run again; it skips what is already stored.
+4. **Build the index.** `make index` cleans and chunks the pages, embeds every chunk and stores it in Qdrant. This is the slow step, and the first run also downloads the models. On a CPU, at the speed measured in CI, the whole handbook takes 45 to 56 minutes ([ADR 0012](docs/adr/0012-retrieval-gate-on-a-slice.md)). A GPU is used when there is one: on the development laptop the embedding model ran about twice as fast on its Apple GPU as on its CPU ([ADR 0005](docs/adr/0005-local-embedding-and-reranking-models.md)). Indexing can be stopped and run again; it skips what is already stored as it would be stored now.
 
    Search works from here on, without a key: `make search q="how do I expense a laptop"`.
 
@@ -250,7 +250,7 @@ What this version does not do, or does not show. Each point is already stated in
 - **No authentication and no rate limit for each caller.** Anyone who reaches the port can spend the key's allowance. The service listens on this machine only unless told otherwise, and it caps answers in flight, not callers ([ADR 0015](docs/adr/0015-answers-over-http.md)).
 - **A fallback model that answers has not been seen.** The time limits, the repeats and the fallback were tried on an overloaded evening: a silent model was given up after two requests, and a fallback was asked and failed too. A fallback that succeeds was not seen, and the fallback model's answers are not evaluated: the evaluation measures the answer model only ([ADR 0018](docs/adr/0018-time-limits-retries-and-a-fallback.md)).
 - **No automated test runs the demo page's script.** The project has no JavaScript toolchain. The tests check the page's files, their headers and the script's source, and how the page behaves in a browser is left to a check by hand ([ADR 0016](docs/adr/0016-a-demo-page-without-a-build-step.md)).
-- **One pinned snapshot of the handbook.** Everything is built and measured on the handbook at one commit ([ADR 0002](docs/adr/0002-handbook-corpus.md)). It does not follow the live handbook ([issue 21](https://github.com/MumukshuPanchal/handbook-rag/issues/21)), and text the handbook repeats is indexed as often as it appears ([issue 34](https://github.com/MumukshuPanchal/handbook-rag/issues/34)).
+- **One pinned snapshot of the handbook.** Everything is built and measured on the handbook at one commit ([ADR 0002](docs/adr/0002-handbook-corpus.md)). The index can be updated to a newer commit by reusing the vectors of unchanged chunks, but the test questions, the labelled answers and the saved runs are tied to the pinned commit, so the default does not move; [ADR 0019](docs/adr/0019-updating-the-index-by-reusing-vectors.md) lists what moving it takes. Text the handbook repeats is indexed as often as it appears ([issue 34](https://github.com/MumukshuPanchal/handbook-rag/issues/34)).
 - **The Claude path has never been run, and model tiers were not compared.** The Claude generator is unit-tested and has never met the Claude API, which needs a paid key. So the comparison of tiers on quality, speed and cost was not done ([issue 17](https://github.com/MumukshuPanchal/handbook-rag/issues/17)), and the answer model was chosen among free Gemini models from a handful of requests ([ADR 0013](docs/adr/0013-gemini-free-tier-with-marker-citations.md)).
 - **Checked on one laptop.** The real runs, the timings and the Docker checks were made on one development laptop, an 8-core Apple M1 Pro ([ADR 0005](docs/adr/0005-local-embedding-and-reranking-models.md)). CI runs the fast tests and the retrieval gate, and builds the image. The quickstart has not been followed on a clean machine, and a full indexing run inside a container has not been done.
 
@@ -384,6 +384,7 @@ make snapshot   # download the handbook at the pinned commit into data/
 make chunks     # clean and chunk it, and print a summary
 make qdrant     # start the Qdrant vector store in Docker
 make index      # embed the chunks and store them; safe to run again
+uv run handbook-rag index --reuse-from <older commit>   # index a newer commit, reusing unchanged chunks' vectors
 make search q="how do I expense a laptop"
 make traces     # start the trace backend; see docs/observability.md
 make serve      # run the HTTP API at http://127.0.0.1:8000; POST /ask answers, POST /search searches
@@ -403,6 +404,24 @@ make eval-adversarial  # planted instructions and questions outside the handbook
 make eval-table      # print a results table with one row per run on disk
 make eval-gate       # the retrieval check CI runs, on a slice of the handbook
 ```
+
+### Updating the index to a newer commit
+
+A newer commit of the handbook is downloaded into a second data directory and indexed into a collection of its own. Chunks whose embedded text (the page's title, the headings above the chunk, and the chunk) is unchanged take their vectors from the pinned commit's collection, which is only read, and only the rest is embedded. Going back is a matter of dropping the two settings ([ADR 0019](docs/adr/0019-updating-the-index-by-reusing-vectors.md)).
+
+```bash
+OLD=e645aac6dc6fbb0b759b92ed32f016aaed5ef4b8
+NEW=$(git ls-remote https://gitlab.com/gitlab-com/content-sites/handbook.git refs/heads/main | cut -f1)
+export HANDBOOK_RAG_DATA_DIR=data-next HANDBOOK_RAG_HANDBOOK_COMMIT=$NEW
+uv run handbook-rag snapshot                         # the newer commit, beside data/
+uv run handbook-rag check-reuse --reuse-from $OLD    # the gate's slice, indexed twice in memory and compared
+uv run handbook-rag index --reuse-from $OLD          # the whole handbook, into a new collection
+unset HANDBOOK_RAG_DATA_DIR HANDBOOK_RAG_HANDBOOK_COMMIT   # back to the pinned commit
+```
+
+`snapshot` refuses to replace a snapshot of another commit in place unless it is given `--replace`, and `index` refuses to reuse vectors made with another embedding model, keyword model or chunking. `handbook-rag compare-collections <reference> <candidate>` compares two collections in the store: ids, payloads, and vectors within a tolerance.
+
+Measured on 23 November 2026 on the development Mac, with the embedding model on its GPU. The newest commit of the handbook that day (`8fbd57c1`), made two days and 20 hours after the pinned one, had 2 pages added, 7 changed, 2 removed and 3,837 unchanged. The update reused the vectors of 38,847 of its 38,891 chunks and embedded 44. Its indexing step took 38 and 47 seconds in two runs, against 394 seconds for a full index of the same commit on the same machine; cutting the pages into chunks takes another 39 seconds either way. Compared point by point over the whole handbook, the updated index and the full one held the same 38,891 ids and payloads, dense vectors at most 5e-09 apart in any entry, and the same keyword vectors. On the gate's slice (134 pages, 3,278 chunks) `check-reuse` found the same ids and payloads, no difference in any dense vector and at most 2.21e-07 in a keyword weight. A hash of every id, payload and vector of the pinned collection was the same before and after the update. On a CPU, where a full index takes 45 to 56 minutes ([ADR 0012](docs/adr/0012-retrieval-gate-on-a-slice.md)), the update has not been timed.
 
 ### The answer model
 

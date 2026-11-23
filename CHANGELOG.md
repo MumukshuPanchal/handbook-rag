@@ -2,6 +2,12 @@
 
 What each version of this project contains. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each item names the pull request or decision record that holds it.
 
+## [Unreleased]
+
+### Fixed
+
+- The documents said that measuring the answers again after a change to the instructions costs more than a day of the free allowance. It is about 460 requests of the 500 a day, and more than a day only when attempts have to be repeated ([#69]).
+
 ## [1.0.0] - 2026-11-23
 
 The first version: an assistant that answers questions from the GitLab handbook with numbered citations, or declines, on the command line and over HTTP. Its search and its answers are measured by runs committed to the repository, and the [README](README.md#results) reports them.
@@ -83,6 +89,7 @@ These are the [limitations in the README](README.md#limitations).
 - The Claude path has never been run, and model tiers were not compared ([#17]).
 - Checked on one laptop: the quickstart has not been followed on a clean machine, and a full indexing run inside a container has not been done.
 
+[Unreleased]: https://github.com/MumukshuPanchal/production-rag-pipeline/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/MumukshuPanchal/production-rag-pipeline/releases/tag/v1.0.0
 [#8]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/8
 [#17]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/17
@@ -125,6 +132,7 @@ These are the [limitations in the README](README.md#limitations).
 [#65]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/65
 [#66]: https://github.com/MumukshuPanchal/production-rag-pipeline/issues/66
 [#67]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/67
+[#69]: https://github.com/MumukshuPanchal/production-rag-pipeline/pull/69
 [ADR 0001]: docs/adr/0001-record-architecture-decisions.md
 [ADR 0002]: docs/adr/0002-handbook-corpus.md
 [ADR 0003]: docs/adr/0003-own-pipeline-code-instead-of-a-framework.md

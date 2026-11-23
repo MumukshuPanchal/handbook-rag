@@ -926,6 +926,8 @@ def test_a_correct_answer_counts_for_the_answer_and_for_the_question() -> None:
     wrong = summarise_answers(QUESTIONS, records, judged={"correct": {"q001": False}})
     # The judge has ruled on correctness in this run, but not yet on this answer.
     waiting = summarise_answers(QUESTIONS, records, judged={"correct": {"q999": True}})
+    # Only the other judge has run.
+    other = summarise_answers(QUESTIONS, records, judged={"supported": {"q001": True}})
 
     grades = {item.question.id: item.scores for item in right.scored}
     # The answer that was given is correct: one of one answers.
@@ -942,12 +944,12 @@ def test_a_correct_answer_counts_for_the_answer_and_for_the_question() -> None:
     assert "correct" not in grades["u001"]
     assert "answered_correctly" not in grades["u001"]
     assert (wrong.summary["correct"].mean, wrong.summary["answered_correctly"].mean) == (0.0, 0.0)
-    # An answer that is still to be judged is counted neither way.
+    # An answer that is still to be judged is counted neither way. And while one is
+    # waiting, nothing is said about how many questions got a correct answer: the reply
+    # that declined would be counted and the answer would not, which is half the story.
     assert "correct" not in waiting.summary
-    assert (
-        waiting.summary["answered_correctly"].mean,
-        waiting.summary["answered_correctly"].count,
-    ) == (0.0, 1)
+    assert "answered_correctly" not in waiting.summary
+    assert "answered_correctly" not in other.summary
 
 
 def test_an_assistant_that_does_everything_wrong_scores_zero() -> None:

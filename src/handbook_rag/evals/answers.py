@@ -224,7 +224,11 @@ class AnswerRun:
 
 
 def judged_scores(
-    question: GoldenQuestion, record: AnswerRecord, judged: Mapping[str, Mapping[str, bool]]
+    question: GoldenQuestion,
+    record: AnswerRecord,
+    judged: Mapping[str, Mapping[str, bool]],
+    *,
+    every_answer_ruled_on: bool,
 ) -> dict[str, float]:
     """The scores the judges add for one reply. A score that does not apply is left out.
 
@@ -233,23 +237,23 @@ def judged_scores(
       reference answer.
     - ``answered_correctly``, for every question the handbook answers: the asker got a
       correct answer. A reply that declined counts as 0 here, so this is the one score
-      that joins the search, the decision to answer and the answer itself. It is given
-      once a judge has ruled on correctness in this run, and it means what it says only
-      when that judge has ruled on every answer.
+      that joins the search, the decision to answer and the answer itself.
 
     An answer a judge has not ruled on gets no score from that judge. It is counted
     neither way.
+
+    ``every_answer_ruled_on`` says whether the judge of correctness has ruled on every
+    answer of the run that has a reference answer. Until it has, ``answered_correctly``
+    is not given at all: the replies that declined would all be counted, and only some
+    of the answers, which would make the score too low.
     """
     scores: dict[str, float] = {}
     if record.answered:
         for metric, passed in judged.items():
             if question.id in passed:
                 scores[metric] = float(passed[question.id])
-    if question.type == "answerable" and "correct" in judged:
-        if not record.answered:
-            scores["answered_correctly"] = 0.0
-        elif "correct" in scores:
-            scores["answered_correctly"] = scores["correct"]
+    if question.type == "answerable" and every_answer_ruled_on:
+        scores["answered_correctly"] = scores.get("correct", 0.0) if record.answered else 0.0
     return scores
 
 
@@ -459,13 +463,22 @@ def summarise_answers(
     id: whether the answer passed. These are the scores that code alone cannot compute
     (see :func:`judged_scores`).
     """
+    judged = judged or {}
+    # Whether every answer that has a reference answer has been ruled on for correctness.
+    whole = "correct" in judged and all(
+        question.id in judged["correct"]
+        for question in questions
+        if question.type == "answerable"
+        and question.id in records
+        and records[question.id].answered
+    )
     scored = []
     for question in questions:
         if question.id not in records:
             continue
         record = records[question.id]
         scores = score_answer(question, record)
-        scores.update(judged_scores(question, record, judged or {}))
+        scores.update(judged_scores(question, record, judged, every_answer_ruled_on=whole))
         scored.append(ScoredAnswer(question, record, scores))
     failed = [failure for failure in failures if failure.question_id not in records]
     # A reply made without any passage never reached the model, so it has no timing.

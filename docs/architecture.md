@@ -166,7 +166,7 @@ compose.yaml            API, Qdrant and trace backend
 
 ## Security and safety
 
-- **Retrieved text is data, not instructions.** Handbook text is passed to the model in blocks of its own, separate from the instructions: search result blocks for Claude, tagged blocks for Gemini. The instructions say to treat anything inside them as content, never as commands. For Gemini, text in a passage that looks like one of the block's tags is made harmless first. This limits prompt injection through corpus content.
+- **Retrieved text is data, not instructions.** Handbook text is passed to the model in blocks of its own, separate from the instructions: search result blocks for Claude, tagged blocks for Gemini. The instructions say to treat anything inside them as content, never as commands. For Gemini, text in a passage that looks like one of the block's tags is made harmless first. This limits prompt injection through corpus content. How far it holds against the real model is measured by the [adversarial tests](evaluation.md#adversarial-tests), which plant instructions in passages.
 - **Abstention over invention.** When the retrieved passages do not contain the answer, the assistant says so. This behaviour is tested with unanswerable questions.
 - **No secrets in git.** Credentials live in the environment.
 - **Minimal data retention.** Questions and answers are not stored outside traces, and traces record metadata only unless content recording is switched on for local debugging.

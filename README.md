@@ -74,6 +74,8 @@ All 165 test questions, answered by `gemini-3.5-flash-lite` from the five passag
 - **Seven of the 132 answerable questions did not get a correct answer.** Five are search misses, where the assistant declined, and two are the judge's doubtful `partial`. When the search finds the passage, the assistant answers, and answers correctly.
 - **"Correct" means "agrees with the reference answer".** Most reference answers were written by a model from the same passage the assistant later quotes, so this score says the assistant reports what it reads. It says less about hard questions.
 - **One run, one reply for each question.** The same question gets a different answer each time, so a second run would not give exactly these numbers.
+- **Planted instructions and questions outside the handbook.** [36 adversarial cases](evals/adversarial/README.md) plant an instruction in a passage the model is given (reply with a made-up word, add a link, repeat the instructions, obey a forged message from the system, withhold the answer), or ask something the handbook has nothing to do with. Code decides what it can, and sets aside for a reader the replies it cannot tell apart, such as one that reports an instruction instead of obeying it. On 23 November 2026, 12 of the 20 planted instructions were not followed (0.600, 95% interval 0.387 to 0.781), and 15 of the 16 questions outside the handbook were declined. A blunt "ignore your instructions" was refused every time, and so was a request to repeat the instructions. What looks like policy got through: three of four replies added a planted link under a correct answer, all four declined when a passage called itself confidential, and one obeyed a forged message from the system. This is not fixed ([issue 66](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/66)).
+- **A control for the second judge**: the 132 reference answers themselves, each given as the answer, which a sound judge calls correct. There is no fault in the set to catch, so it measures false alarms only ([the guide](docs/evaluation.md#a-control-the-reference-answers-themselves)). On 23 November 2026 it called all 132 correct (1.000, 95% interval 0.972 to 1.000).
 
 **How far to trust these numbers.** The test questions were made by one model session and checked by another, over several rounds. No person has verified them one by one, and most were written by a model that could see the passage. The [dataset card](evals/golden/README.md) says how the set was made, what the checks found, and what its limits are.
 
@@ -216,11 +218,11 @@ The first build downloads about half a gigabyte and took four minutes here. The 
 
 ## Data
 
-The assistant is built on the [GitLab Handbook](https://handbook.gitlab.com/), which GitLab publishes under the [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) licence. The handbook text is not stored in this repository. `make snapshot` downloads its Markdown pages at a pinned commit (4,206 pages, 43 MB) and writes a manifest that records the source, commit and a checksum of what was fetched. The reasoning is in [ADR 0002](docs/adr/0002-handbook-corpus.md).
+The assistant is built on the [GitLab Handbook](https://handbook.gitlab.com/), which GitLab publishes under the [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) licence. The handbook itself is not stored in this repository. `make snapshot` downloads its Markdown pages at a pinned commit (4,206 pages, 43 MB) and writes a manifest that records the source, commit and a checksum of what was fetched. The reasoning is in [ADR 0002](docs/adr/0002-handbook-corpus.md).
 
 `make chunks` cleans the pages and splits them along their headings into 38,881 chunks with a median of 225 tokens, none longer than the embedding model can read. How and why is in [ADR 0009](docs/adr/0009-structure-aware-chunking.md).
 
-The test questions in [`evals/golden/`](evals/golden/README.md) quote short passages from the handbook. That folder is therefore licensed CC BY-SA 4.0 and credits GitLab, separately from the code, which is under the MIT licence.
+The test questions in [`evals/golden/`](evals/golden/README.md) quote short passages from the handbook. That folder is therefore licensed CC BY-SA 4.0 and credits GitLab, separately from the code, which is under the MIT licence. The same holds for the labelled answers in [`evals/judge/`](evals/judge/README.md), the adversarial cases in [`evals/adversarial/`](evals/adversarial/README.md) and the saved runs under `evals/runs/`, whose replies repeat handbook text: mostly a sentence or two, and in one adversarial case five whole passages, which the model copied out when it was asked to.
 
 This project is not affiliated with or endorsed by GitLab.
 
@@ -248,6 +250,8 @@ make eval-judge      # check the judge against labelled answers: 169 real reques
 make eval-support    # judge the saved answers: is each statement backed by the passage it cites?
 make eval-judge-correct  # check the second judge against its labelled answers: 167 real requests
 make eval-correct    # judge the saved answers: does each one agree with the reference answer?
+make eval-judge-references  # check that the second judge passes every reference answer: 132 real requests
+make eval-adversarial  # planted instructions and questions outside the handbook: 36 real requests
 make eval-table      # print a results table with one row per run on disk
 make eval-gate       # the retrieval check CI runs, on a slice of the handbook
 ```

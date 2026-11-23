@@ -1,6 +1,6 @@
 # Labelled answers for checking the judges
 
-Answers whose verdicts are known. They are what a judge is checked against before any score it gives is reported: `eval-judge` gives the judge these answers and counts how often it reaches the labelled verdict. There are two sets, one for each thing a judge decides. The first is described from here on. The second, for whether an answer agrees with its reference answer, has [a section of its own](#the-second-set-answers-against-their-reference-answers) further down. The reasoning is in [ADR 0014](../../docs/adr/0014-answer-evaluation-in-stages.md), and the commands are in the [evaluation guide](../../docs/evaluation.md).
+Answers whose verdicts are known. They are what a judge is checked against before any score it gives is reported: `eval-judge` gives the judge these answers and counts how often it reaches the labelled verdict. There are two sets, one for each thing a judge decides. The first is described from here on. The second, for whether an answer agrees with its reference answer, has [a section of its own](#the-second-set-answers-against-their-reference-answers) further down, with [a control](#a-control-the-reference-answers-themselves) beside it: the reference answers themselves, given as the answer. The reasoning is in [ADR 0014](../../docs/adr/0014-answer-evaluation-in-stages.md), and the commands are in the [evaluation guide](../../docs/evaluation.md).
 
 > **Status of both sets: labelled by independent model sessions, not by a person.** One model session labelled every statement, a second labelled them again without seeing the first one's labels, and a third settled the cases they left open. No person has labelled any of them. All three sessions were Claude models, which is another model family than the judge, a Gemini model.
 
@@ -117,6 +117,17 @@ The readers decided by [the rubric](correct/rubric.md). That file is, word for w
 - **The kinds are the first reader's own names** for what it changed. A separate review judged three of the five `scope` faults to be faults of another kind (another action, an added item, a wider offering). The verdicts stand, and the counts by kind are approximate.
 - **One planted omission is itself doubtful.** Its reference answer introduces its list as "examples", so an answer with one example fewer could be called correct. All three readers, and the judge, called it partial.
 - **The real answers come from one run of one model.**
+
+### A control: the reference answers themselves
+
+[`correct/references.jsonl`](correct/references.jsonl) holds 132 answers, one for each answerable question of the golden set, in the format of `correct/cases.jsonl`. Each is of the kind `reference`: its answer is the question's reference answer, word for word, and it is labelled `correct`. [Issue 8](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/8) asks that reference answers pass, and this is that check. A judge that does not call the reference answer correct is out of step with the very measure it applies.
+
+- **No reader labelled them.** The label follows from what "correct" means here: agreeing with the reference answer. So no case records readers.
+- **The file cannot drift from the golden set.** The loader refuses a `reference` case whose answer is not its reference answer word for word, or whose label is not `correct`. A test makes the 132 cases again from `evals/golden/questions.jsonl` and compares them with the file.
+- **There is nothing to catch.** The set holds no fault, so it has no recall, and no kappa either, since every label makes the same decision; `eval-judge` says both in place of a number. What it measures is how many of the 132 the judge calls correct. Each one it does not is a false alarm, listed in `disagreements.jsonl` with the judge's reason.
+- **It is the easiest case there is.** The answer and the reference answer are the same words. Passing it shows only that the judge is not out of step with its measure; it says nothing about answers worded otherwise.
+
+Run with `make eval-judge-references`, which costs 132 requests when none fails. Result: `references`, on 23 November 2026, with `gemini-3.5-flash-lite`: the judge called all 132 reference answers correct, so "Same decision" is 1.000 (95% interval 0.972 to 1.000) and there is no false alarm. It took 145 requests: 13 attempts were turned away by an overloaded model and made again. The run is in [`evals/runs/judge-correct/references`](../runs/judge-correct/references).
 
 ## Licence and attribution
 

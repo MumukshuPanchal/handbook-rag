@@ -16,9 +16,11 @@ from handbook_rag.ingest.models import Chunk
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
-# The refusals in the 400s that the SDK itself would send again: the server gave up
-# waiting for the request (408), or for a lock (409). Every other one means that the
-# request, as it was sent, will not be accepted.
+# The refusals in the 400s that the SDK itself would send again by default: the server
+# gave up waiting for the request (408), or for a lock (409). Every other one, 499
+# included, means that the request, as it was sent, will not be accepted. The same rule
+# holds for Gemini, by its own SDK's default list (gemini.py): a refusal in the 400s is
+# worth another attempt only if the provider's SDK would make one.
 _WORTH_REPEATING = frozenset({408, 409})
 _NOT_IN_TIME = "The Claude API did not answer in time."
 

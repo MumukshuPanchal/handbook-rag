@@ -179,7 +179,10 @@ class GeminiGenerator:
             return GenerationError(message, reason="timeout")
         if 400 <= error.code < 500 and error.code != 408:
             # The API refused the request as it was sent. The same request would be
-            # refused again, so trying again only spends another one.
+            # refused again, so trying again only spends another one. Of the refusals in
+            # the 400s, the SDK's own default list of codes worth repeating holds 408 and
+            # 429 only, and a 429 is read above. So 409 and 499 are not repeated here,
+            # where the Claude SDK repeats 409 (claude.py).
             return GenerationError(message, reason="configuration")
         return GenerationError(message)
 

@@ -257,10 +257,12 @@ class Settings(BaseSettings):
         le=600,
         description=(
             "How long one request to the answer model may be silent: to connect, and "
-            "between two pieces of the reply. It is not a limit on the whole reply. The "
-            "default is above the slowest reply of the answer evaluation, 17.1 s for the "
-            "whole of it, and twice the time within which 95% arrived, 10.1 s. An "
-            "evaluation keeps the 60 s its runs were made with (ADR 0018)."
+            "between two pieces of the reply. On our side it limits silence, not the "
+            "whole reply. The Gemini SDK also sends it to the API with each request, and "
+            "whether the API then ends a reply that runs longer in all was not measured. "
+            "The default is above the slowest reply of the answer evaluation, 17.1 s for "
+            "the whole of it, and about twice the time within which 95% arrived, 10.1 s. "
+            "An evaluation keeps the 60 s its runs were made with (ADR 0018)."
         ),
     )
     answer_deadline_seconds: float = Field(
@@ -268,8 +270,9 @@ class Settings(BaseSettings):
         gt=0,
         le=600,
         description=(
-            "How long the answer model may be tried before its first text: no new "
-            "attempt starts after it, and a pause before one is cut short. A request "
+            "How long the answer model may be tried before its first text, counted from "
+            "its first request, after the search: no new attempt starts after it, and a "
+            "pause before one is cut short. A request "
             "already sent is not cut off by it, and ends at its own time limit if it goes "
             "silent. It may be shorter than that limit: then only quick failures are "
             "tried again. The default leaves room for a request that times out and one "

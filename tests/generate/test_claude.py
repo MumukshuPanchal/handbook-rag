@@ -331,6 +331,8 @@ def status_error(code: int, message: str) -> anthropic.APIStatusError:
             None,
         ),
         (status_error(413, "request_too_large"), r"error \(413\)", "configuration", None),
+        # The Claude SDK would not repeat a 499 either.
+        (status_error(499, "client_closed_request"), r"error \(499\)", "configuration", None),
         # What the SDK would send again by itself: worth another attempt.
         (status_error(408, "request_timeout"), r"error \(408\)", "unavailable", None),
         (status_error(409, "conflict"), r"error \(409\)", "unavailable", None),

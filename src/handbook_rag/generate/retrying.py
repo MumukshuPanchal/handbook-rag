@@ -4,15 +4,18 @@ The SDKs can send a failed request again by themselves, but they do it unseen: t
 caller waits without a sign of life, nobody counts the requests, and no trace shows
 them. So for answers their own repeats are switched off (see ``wiring.py``), and the
 wrapper here does the repeating instead. Every request it sends has a span of its own,
-is counted on the answer, and starts before a deadline.
+and is counted on the answer. No new attempt is decided on after a deadline: a pause is
+cut short to end at the deadline, and the attempt after it then starts at the deadline,
+or a moment later, as a real sleep can run a little long.
 
 What happens after a failure is decided by the error's reason (ADR 0018):
 
 - ``unavailable`` and ``timeout``: the same model is asked again, after a pause that
   grows with each attempt and has some randomness in it, so that many callers who failed
   together do not all come back at the same moment.
-- ``rate_limit``: asked again after the wait the provider names, if that wait ends
-  before the deadline. Otherwise the answer model gives up at once.
+- ``rate_limit``: asked again after the wait the provider names, if that wait ends by
+  the deadline, and never sooner than the pause an ``unavailable`` failure would get.
+  Otherwise the answer model gives up at once.
 - ``quota``: never again on the same model today.
 - ``configuration``: never again, and no fallback either. The person who runs the
   service has to fix it, and a fallback would hide it.
@@ -102,7 +105,7 @@ class RetryingGenerator:
 
         ``attempts`` is how often the answer model may be asked for one answer, the first
         time included. ``deadline_seconds`` is how long after the first attempt began a
-        new attempt may still start. ``fallback`` builds the fallback model's generator.
+        new attempt may still be decided on. ``fallback`` builds the fallback model's generator.
         It is called the first time the fallback is needed, and only then. ``chance``
         returns a number from 0 up to 1, which places a pause within its range.
         """
@@ -198,8 +201,13 @@ class RetryingGenerator:
             return min(self._pause(after=attempt), left)
         if failure.reason == "rate_limit" and failure.retry_after is not None:
             # The provider's wait cannot be cut short: a request sent sooner would be
-            # refused again. So it has to end before the deadline, or it is not waited.
-            return failure.retry_after if failure.retry_after <= left else None
+            # refused again. So it has to end by the deadline, or it is not waited.
+            if failure.retry_after > left:
+                return None
+            # A server that has just refused is never asked again at once, even when the
+            # wait it names is nothing: at least our own pause comes first, which the
+            # deadline may cut short as usual.
+            return max(failure.retry_after, min(self._pause(after=attempt), left))
         return None
 
     def _pause(self, *, after: int) -> float:

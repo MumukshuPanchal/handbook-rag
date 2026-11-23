@@ -535,6 +535,13 @@ def test_no_chunks_means_no_model_call_and_no_answer() -> None:
             None,
         ),
         (
+            # Neither 409 nor 499 is on the SDK's own list of codes worth repeating.
+            api_error(409, "ABORTED", message="The operation was aborted."),
+            r"returned an error \(409\)",
+            "configuration",
+            None,
+        ),
+        (
             api_error(499, "CANCELLED", message="The operation was cancelled."),
             r"returned an error \(499\)",
             "configuration",

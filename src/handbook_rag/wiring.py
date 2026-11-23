@@ -47,9 +47,11 @@ EVALUATION_TIMEOUT_SECONDS = 60.0
 GEMINI_ATTEMPTS = 3
 GEMINI_RETRY_STATUS_CODES = [408, 500, 502, 503, 504]
 # How often the answer model may be asked for one answer, the first time included. The
-# same three attempts that the SDKs made by themselves before (ADR 0018). With the four
-# answers the service writes at once, that is at most twelve requests to the answer
-# model, under the fifteen a minute that a free Gemini key allowed.
+# same three attempts that the SDKs made by themselves before (ADR 0018). The four
+# answers the service writes at once can cost at most twelve requests to the answer
+# model between them. That is a count, not a rate: a free Gemini key allowed fifteen
+# requests a minute, and a steady stream of questions that fail quickly, one after
+# another in the four slots, can send more than that in a minute.
 ANSWER_ATTEMPTS = 3
 
 
@@ -202,9 +204,12 @@ def make_generator(settings: Settings, *, attempts: int | None = None) -> Genera
     time limit its saved runs were made with. It then knows how many requests it has
     sent, and it tries a failed question again itself.
 
-    A missing key is found here, for the fallback model too, so that a service finds it
-    when it starts and not at the first failure. Building sends no request, so a key that
-    is present but wrong is found only by a request.
+    A missing key is found here when the settings are the only place it can be: the
+    Gemini key of a Gemini answer model, and the key of the fallback model, whatever its
+    provider. A service then finds it when it starts, not at the first failure. A Claude
+    answer model may find its credential in the SDK's own places, so a missing one is not
+    seen here: its first request fails as a ``configuration`` error instead. Building
+    sends no request, so a key that is present but wrong is found only by a request.
     """
     if attempts is not None and attempts < 1:
         raise ValueError("A request has to be sent at least once.")

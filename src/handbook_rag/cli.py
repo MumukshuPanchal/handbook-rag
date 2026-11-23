@@ -1830,7 +1830,7 @@ def ask(
                 typer.echo("")
             typer.echo(f"error: {error}", err=True)
             if isinstance(error, GenerationError):
-                _show_what_was_found(error)
+                _show_what_was_found(error, broke_off=wrote)
             if traced is not None:
                 typer.echo(f"trace {traced}", err=True)
             raise typer.Exit(code=1) from error
@@ -1856,7 +1856,8 @@ def ask(
         details.insert(3, f"${cost:.5f}")
     if answer.requests > 1:
         # Failed requests were sent first. Each one counts against the key's allowance.
-        details.append(f"{answer.requests} requests")
+        # The tokens and the time above are those of the request that wrote the reply.
+        details.append(f"tokens and time of the last of {answer.requests} requests")
     if answer.fallback:
         details.append("written by the fallback model")
     if answer.stop_reason == "max_tokens":
@@ -1871,11 +1872,12 @@ def ask(
         typer.echo(f"trace {traced}")
 
 
-def _show_what_was_found(error: GenerationError) -> None:
+def _show_what_was_found(error: GenerationError, *, broke_off: bool) -> None:
     """Say what else failed, then show the passages the search found.
 
-    No answer was written, but the search did its job, and its passages may be all the
-    person asking needs. They are the ones the model would have answered from.
+    No whole answer was written, but the search did its job, and its passages may be all
+    the person asking needs. They are the ones the model would have answered from.
+    ``broke_off`` says that part of a reply was printed before the failure.
     """
     if error.before_fallback is not None:
         typer.echo(
@@ -1884,7 +1886,8 @@ def _show_what_was_found(error: GenerationError) -> None:
         )
     if not error.retrieved:
         return
-    typer.echo("\nNo answer was written. The search found these passages:")
+    what = "The reply broke off." if broke_off else "No answer was written."
+    typer.echo(f"\n{what} The search found these passages:")
     for result in error.retrieved:
         typer.echo(f"  {result.chunk.context_header}")
         typer.echo(f"      {result.chunk.url}")

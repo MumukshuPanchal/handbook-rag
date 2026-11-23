@@ -1,9 +1,12 @@
 """The wrapper that asks again, waits, and falls back, tested with stand-in models.
 
-No test waits or sends a request. The clock is a number that the stand-in models and the
-stand-in sleep move on, so every pause and every deadline is exact.
+No test sends a request. The clock is a number that the stand-in models and the stand-in
+sleep move on, so every pause and every deadline is exact. One test waits a twentieth of
+a second for real, to make two threads meet.
 """
 
+import threading
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -240,6 +243,25 @@ def test_a_rate_limit_is_waited_out_when_the_wait_the_provider_names_ends_by_the
     assert answer.requests == 2
 
 
+@pytest.mark.parametrize(
+    ("wait", "slept"),
+    [(0.0, [0.5, 1.0]), (0.3, [0.5, 1.0]), (0.7, [0.7, 1.0])],
+)
+def test_a_server_that_refused_is_never_asked_again_sooner_than_after_the_usual_pause(
+    wait: float, slept: list[float]
+) -> None:
+    clock = Clock()
+    limited = Step(error=failure("rate_limit", retry_after=wait))
+    model = Scripted(limited, limited, ANSWERS, clock=clock)
+
+    answer = wrap(model, clock).generate(QUESTION, [LEAVE])
+
+    # The longer of the provider's wait and the pause an unavailable model would get:
+    # 0.5 s after the first attempt and 1 s after the second, by the chance of 0.
+    assert clock.slept == slept
+    assert answer.requests == 3
+
+
 @pytest.mark.parametrize(("takes", "wait"), [(0.0, 36.0), (25.0, 5.5)])
 def test_a_rate_limit_whose_wait_ends_after_the_deadline_ends_the_attempts_at_once(
     takes: float, wait: float
@@ -284,9 +306,20 @@ def test_a_used_up_allowance_or_a_wrong_setting_is_not_tried_again(reason: Failu
     assert clock.slept == []
 
 
-def test_once_text_has_reached_the_caller_a_failure_is_final() -> None:
+@pytest.mark.parametrize(
+    "error",
+    [
+        failure("unavailable"),
+        failure("timeout"),
+        failure("rate_limit", retry_after=1.0),
+        failure("quota"),
+        failure("configuration"),
+    ],
+    ids=lambda error: error.reason,
+)
+def test_once_text_has_reached_the_caller_a_failure_is_final(error: GenerationError) -> None:
     clock = Clock()
-    broken = Step(text="New parents get", error=failure("unavailable"))
+    broken = Step(text="New parents get", error=error)
     model = Scripted(broken, ANSWERS, clock=clock)
     backup = Factory(Scripted(ANSWERS, clock=clock, model="fallback-model"))
     received: list[str] = []
@@ -429,6 +462,78 @@ def test_the_fallback_is_built_the_first_time_it_is_needed_and_then_kept() -> No
     generator.generate(QUESTION, [LEAVE])
     generator.generate(QUESTION, [LEAVE])
     assert backup.built == 1
+
+
+class Refuses(StandInModel):
+    """A stand-in answer model that has used up its allowance, and says which thread asked."""
+
+    def __init__(self) -> None:
+        self.asked_by: list[str] = []
+
+    def generate(
+        self,
+        question: str,
+        chunks: Sequence[Chunk],
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Answer:
+        self.asked_by.append(threading.current_thread().name)
+        raise failure("quota")
+
+
+def test_two_answers_that_need_the_fallback_at_the_same_time_build_it_once() -> None:
+    building, second_asked = threading.Event(), threading.Event()
+    built: list[str] = []
+    fallback = Scripted(ANSWERS, ANSWERS, clock=Clock(), model="fallback-model")
+
+    class Watching(Refuses):
+        def generate(
+            self,
+            question: str,
+            chunks: Sequence[Chunk],
+            *,
+            on_text: Callable[[str], None] | None = None,
+        ) -> Answer:
+            if threading.current_thread().name == "second":
+                second_asked.set()
+            return super().generate(question, chunks, on_text=on_text)
+
+    def slow_factory() -> Generator:
+        built.append(threading.current_thread().name)
+        if len(built) == 1:
+            building.set()
+            # Held until the second answer has failed too, and a moment longer, so that
+            # it reaches the fallback while the first is still building it.
+            assert second_asked.wait(5), "the second answer never came"
+            time.sleep(0.05)
+        return fallback
+
+    generator = RetryingGenerator(
+        Watching(), attempts=3, deadline_seconds=30.0, fallback=slow_factory, clock=Clock()
+    )
+    answers: dict[str, Answer] = {}
+    failed: list[BaseException] = []
+
+    def ask() -> None:
+        try:
+            answers[threading.current_thread().name] = generator.generate(QUESTION, [LEAVE])
+        except BaseException as error:
+            failed.append(error)
+
+    first = threading.Thread(target=ask, name="first")
+    first.start()
+    assert building.wait(5), "the first answer never reached the fallback"
+    second = threading.Thread(target=ask, name="second")
+    second.start()
+    first.join(5)
+    second.join(5)
+
+    assert failed == []
+    assert built == ["first"], "built once, for both answers"
+    assert {name: answer.fallback for name, answer in answers.items()} == {
+        "first": True,
+        "second": True,
+    }
 
 
 # Declining, the names, and what the wrapper is made with.

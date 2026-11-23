@@ -988,7 +988,9 @@ def test_ask_says_how_many_requests_an_answer_took_when_it_was_more_than_one(
     result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
 
     assert result.exit_code == 0, result.output
-    assert "| 1.2 s | 2 requests\n" in result.output
+    # The time and the tokens come from the request that wrote the reply, and say so.
+    assert "| 3,000 tokens in | 400 out |" in result.output
+    assert "| 1.2 s | tokens and time of the last of 2 requests\n" in result.output
     assert "fallback" not in result.output
 
 
@@ -1003,7 +1005,19 @@ def test_ask_says_when_the_fallback_model_wrote_the_answer(
     result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
 
     assert result.exit_code == 0, result.output
-    assert "| 2 requests | written by the fallback model\n" in result.output
+    assert (
+        "| 1.2 s | tokens and time of the last of 2 requests | written by the fallback model\n"
+        in result.output
+    )
+
+
+# What the search finds in the stand-in handbook, as the ask command lists it.
+FOUND_PASSAGES = (
+    "  Leave > Parental leave\n"
+    "      https://handbook.gitlab.com/handbook/people/leave/\n"
+    "  Laptops > Laptops\n"
+    "      https://handbook.gitlab.com/handbook/finance/expenses/\n"
+)
 
 
 def test_ask_says_what_failed_and_then_shows_what_the_search_found(
@@ -1016,15 +1030,10 @@ def test_ask_says_what_failed_and_then_shows_what_the_search_found(
     result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
 
     assert result.exit_code == 1
-    assert result.output.startswith("error: The Gemini API did not answer in time.\n")
-    assert result.stdout == (
-        "\nNo answer was written. The search found these passages:\n"
-        "  Leave > Parental leave\n"
-        "      https://handbook.gitlab.com/handbook/people/leave/\n"
-        "  Laptops > Laptops\n"
-        "      https://handbook.gitlab.com/handbook/finance/expenses/\n"
+    assert result.output == (
+        "error: The Gemini API did not answer in time.\n"
+        "\nNo answer was written. The search found these passages:\n" + FOUND_PASSAGES
     )
-    assert "Traceback" not in result.output
 
 
 def test_ask_names_the_answer_models_failure_when_the_fallback_failed_too(
@@ -1058,7 +1067,12 @@ def test_ask_starts_the_error_on_a_line_of_its_own_when_the_reply_broke_off(
     result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
 
     assert result.exit_code == 1
-    assert result.output.startswith("New parents get\nerror: Could not reach the Gemini API.")
+    # Some of a reply was written, so "no answer was written" would not be true.
+    assert result.output == (
+        "New parents get\n"
+        "error: Could not reach the Gemini API. Check the network.\n"
+        "\nThe reply broke off. The search found these passages:\n" + FOUND_PASSAGES
+    )
 
 
 # eval-answers: a real run sends one request per question, so these use a stand-in model.

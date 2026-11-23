@@ -978,7 +978,14 @@ def test_a_fallback_model_without_its_key_is_found_when_the_service_starts(
 
     assert health["answering"] is False
     assert (ask.status_code, ask.json()) == (503, {"detail": NOT_CONFIGURED})
-    assert "The fallback model claude-haiku-5-5 needs ANTHROPIC_API_KEY" in caplog.text
+    # The one line logged at start says why answering is off: the fallback's key, not the
+    # answer model's, which is there.
+    (logged,) = [r for r in caplog.records if "answering is not configured" in r.getMessage()]
+    assert logged.levelname == "WARNING"
+    assert logged.getMessage().startswith(
+        "answering is not configured: The fallback model claude-haiku-5-5 needs "
+        "ANTHROPIC_API_KEY, and none was found."
+    )
 
 
 def with_fallback(answer_model: Writing, fallback: Writing) -> RetryingGenerator:

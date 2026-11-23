@@ -900,32 +900,37 @@ def _refuse_the_check_of_another_judge(
     directory of the other one would discard verdicts that took a share of a day's
     requests to make.
 
-    A check says in its summary which criterion it is of. One that does not say, because
-    an older version wrote it or because it never got as far as a summary, is known by
-    its settings: they hold the hash of the judge's instructions.
+    A check says in its summary which criterion it is of. It is also known by its
+    settings, which hold the hash of the judge's instructions: an older version wrote
+    summaries that do not say, and a check that was stopped early has no summary. Either
+    sign is enough to refuse.
+
+    One case is not caught: a check of the other judge that says nothing in its summary
+    and was made under instructions that judge no longer has. Such a check has lapsed
+    already, since its agreement can no longer be quoted for any judge the code builds.
     """
-    held: object = None
+    signs: list[object] = []
     summary = run_dir / "summary.json"
     if summary.is_file():
         try:
             loaded = json.loads(summary.read_text(encoding="utf-8"))
         except ValueError:  # not JSON, or not text at all
             loaded = None
-        held = loaded.get("criterion") if isinstance(loaded, dict) else None
-    if not isinstance(held, str):
-        stage = judge_check_stage(run_dir)
-        try:
-            stored = stage.config() if stage.state_path.is_file() else None
-        except SavedRunError:
-            stored = None
-        for other in CRITERIA:
-            if other is not criterion and stored == wiring.describe_judge(settings, other):
-                held = other.name
-    if isinstance(held, str) and held != criterion.name:
-        raise SavedRunError(
-            f"{run_dir} holds a check of the judge for '{held}', not for "
-            f"'{criterion.name}'. Give this check another --output or --variant."
-        )
+        signs.append(loaded.get("criterion") if isinstance(loaded, dict) else None)
+    stage = judge_check_stage(run_dir)
+    try:
+        stored = stage.config() if stage.state_path.is_file() else None
+    except SavedRunError:
+        stored = None
+    signs.extend(
+        other.name for other in CRITERIA if stored == wiring.describe_judge(settings, other)
+    )
+    for held in signs:
+        if isinstance(held, str) and held != criterion.name:
+            raise SavedRunError(
+                f"{run_dir} holds a check of the judge for '{held}', not for "
+                f"'{criterion.name}'. Give this check another --output or --variant."
+            )
 
 
 def _judge_stopped_badly(run: JudgeRun, max_requests: int | None) -> bool:

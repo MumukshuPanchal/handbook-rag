@@ -2124,7 +2124,9 @@ def test_a_check_of_one_judge_cannot_be_started_over_the_check_of_the_other(
     summary_file = judged_run["checks"] / "baseline" / "summary.json"
     summary = json.loads(summary_file.read_text())
     del summary["criterion"]
-    for content in (json.dumps(summary), "[]", "{not json", None):
+    # Nor does a summary that names this criterion help, beside settings of the other.
+    mislabelled = json.dumps({**summary, "criterion": "correct"})
+    for content in (json.dumps(summary), mislabelled, "[]", "{not json", None):
         if content is None:
             summary_file.unlink()
         else:

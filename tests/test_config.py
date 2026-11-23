@@ -238,3 +238,12 @@ def test_the_fallback_is_named_by_the_same_rule_as_the_answer_model(
 def test_the_fallback_must_be_another_model_than_the_answer_model() -> None:
     with pytest.raises(ValidationError, match="must be another model than answer_model"):
         Settings(answer_model="gemini-3.8-flash", answer_fallback_model="gemini-3.8-flash")
+
+
+def test_the_collection_of_another_commit_has_these_models_and_this_chunking() -> None:
+    settings = Settings(embedding_model="BAAI/bge-base-en-v1.5", chunk_max_tokens=200)
+
+    assert settings.collection_for("c" * 40) == (
+        "handbook-cccccccc-baai-bge-base-en-v1-5-qdrant-bm25-v1-max200-min60-overlap40"
+    )
+    assert settings.collection_for(settings.handbook_commit) == settings.collection_name

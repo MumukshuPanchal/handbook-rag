@@ -1,5 +1,6 @@
 """Helpers shared by tests. Fixtures live in ``conftest.py``; plain helpers live here."""
 
+import hashlib
 import json
 import math
 import re
@@ -79,6 +80,33 @@ class FakeEmbedder:
             vector[zlib.crc32(word.encode()) % self.dimension] += 1.0
         length = math.sqrt(sum(value * value for value in vector)) or 1.0
         return [value / length for value in vector]
+
+
+class ExactEmbedder(FakeEmbedder):
+    """A stand-in embedding model whose vectors the store keeps bit for bit.
+
+    The store divides each dense vector by its length when it is stored, and doing that
+    to a vector that already has length 1 can still change its last bit. So a vector
+    taken from one collection and stored in another can differ from a fresh one by a
+    rounding error, and a test could not demand that they are equal. A vector of four
+    entries of 0.5 has a length of exactly 1 and passes unchanged. Each text gets its
+    own four places, so a vector taken from the wrong text is told apart.
+    """
+
+    name = "exact-embedder"
+    dimension = 1024
+
+    def _vector(self, text: str) -> list[float]:
+        digest = hashlib.sha256(text.encode()).digest()
+        places: list[int] = []
+        for start in range(0, len(digest), 2):
+            place = int.from_bytes(digest[start : start + 2]) % self.dimension
+            if place not in places:
+                places.append(place)
+        vector = [0.0] * self.dimension
+        for place in places[:4]:
+            vector[place] = 0.5
+        return vector
 
 
 class FakeSparseEncoder:

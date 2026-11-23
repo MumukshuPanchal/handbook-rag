@@ -49,5 +49,11 @@ class Chunk:
 
         A chunk such as "Up to 16 weeks, fully paid" means little by itself. Prefixing
         "Leave > Parental leave" tells the embedding model what it is about.
+
+        A stored point holds no copy of this text: it is built again from the point's
+        payload when an update decides whether the point's vectors can be reused. So a
+        change to how it is built must come with a new chunking version
+        (``ChunkingConfig.version``). Otherwise vectors embedded from the old form would
+        be taken for vectors of the new one, by an update and by indexing alike.
         """
         return f"{self.context_header}\n\n{self.text}"

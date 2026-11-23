@@ -1,3 +1,6 @@
+import dataclasses
+from typing import Any
+
 import pytest
 from qdrant_client import QdrantClient
 
@@ -92,3 +95,68 @@ def test_chunks_are_stored_with_keyword_vectors_too(store: QdrantVectorStore) ->
     results = store.search_sparse(sparse.encode_query("laptop"), limit=3)
 
     assert [r.chunk.doc_id for r in results] == ["finance/expenses.md"]
+
+
+def test_a_chunk_stored_under_its_id_with_another_title_is_embedded_again(
+    store: QdrantVectorStore,
+) -> None:
+    # Within one collection the id stays when only the title changes, for example when
+    # the way titles are read is changed. Skipping by id alone would keep the old one.
+    embedder = FakeEmbedder()
+    index_chunks(CHUNKS, embedder=embedder, sparse_encoder=FakeSparseEncoder(), store=store)
+    embedder.embedded.clear()
+    retitled = dataclasses.replace(CHUNKS[0], title="Time off")
+
+    report = index_chunks(
+        [retitled, *CHUNKS[1:]], embedder=embedder, sparse_encoder=FakeSparseEncoder(), store=store
+    )
+
+    assert retitled.chunk_id == CHUNKS[0].chunk_id
+    assert (report.embedded, report.already_indexed, report.replaced, report.removed) == (
+        1,
+        2,
+        1,
+        0,
+    )
+    assert embedder.embedded == [retitled.text_for_embedding]
+    assert store.stored_chunks([retitled.chunk_id]) == {retitled.chunk_id: retitled}
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"url": "https://handbook.example.org/handbook/people/leave/"},
+        {"section": "benefits"},
+        {"heading_path": ("Leave",)},
+        {"source_commit": "b" * 40},
+        {"token_count": 99},
+    ],
+    ids=lambda change: next(iter(change)),
+)
+def test_a_chunk_stored_with_any_other_detail_is_stored_again(
+    store: QdrantVectorStore, change: dict[str, Any]
+) -> None:
+    index_chunks(CHUNKS, embedder=FakeEmbedder(), sparse_encoder=FakeSparseEncoder(), store=store)
+    changed = dataclasses.replace(CHUNKS[0], **change)
+
+    report = index_chunks(
+        [changed, *CHUNKS[1:]],
+        embedder=FakeEmbedder(),
+        sparse_encoder=FakeSparseEncoder(),
+        store=store,
+    )
+
+    assert (report.embedded, report.replaced, report.already_indexed) == (1, 1, 2)
+    assert store.stored_chunks([changed.chunk_id]) == {changed.chunk_id: changed}
+
+
+def test_a_run_without_reuse_reuses_nothing_and_times_its_embedding(
+    store: QdrantVectorStore,
+) -> None:
+    report = index_chunks(
+        CHUNKS, embedder=FakeEmbedder(), sparse_encoder=FakeSparseEncoder(), store=store
+    )
+
+    assert (report.reused, report.replaced) == (0, 0)
+    assert 0 < report.embed_seconds <= report.seconds
+    assert report.reuse_seconds < report.embed_seconds

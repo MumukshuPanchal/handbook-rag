@@ -6,7 +6,7 @@ import os
 import statistics
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Literal, TextIO
 
@@ -65,11 +65,23 @@ from handbook_rag.evals.support import SUPPORT
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.models import Answer
 from handbook_rag.generate.pricing import cost_usd
-from handbook_rag.index.indexer import index_chunks
-from handbook_rag.index.store import VectorStoreError
+from handbook_rag.index.compare import (
+    DEFAULT_VECTOR_TOLERANCE,
+    CollectionComparison,
+    compare_collections,
+)
+from handbook_rag.index.indexer import Reuse, index_chunks
+from handbook_rag.index.reuse import (
+    PageChanges,
+    ReuseError,
+    compare_pages,
+    find_reuse_source,
+    read_previous_index,
+)
+from handbook_rag.index.store import CollectionMissingError, VectorStoreError
 from handbook_rag.ingest.build import CorpusError, build_corpus, chunk_documents, load_snapshot
 from handbook_rag.ingest.models import Chunk
-from handbook_rag.ingest.snapshot import SnapshotError, download_snapshot
+from handbook_rag.ingest.snapshot import SnapshotError, download_snapshot, snapshot_commit
 from handbook_rag.ingest.tokens import token_counter
 from handbook_rag.pipeline import answer_question
 from handbook_rag.retrieve.dense import Retriever
@@ -119,16 +131,38 @@ def main(
 
 
 @app.command()
-def snapshot() -> None:
+def snapshot(
+    replace: Annotated[
+        bool,
+        typer.Option(
+            "--replace",
+            help="Replace a snapshot of another commit that is already in the data directory.",
+        ),
+    ] = False,
+) -> None:
     """Download the handbook at the pinned commit into the data directory."""
     settings = get_settings()
+    dest = settings.data_dir / "handbook"
+    # Downloading a newer commit beside the pinned one is how the index is updated
+    # (ADR 0019). Forgetting to point the data directory elsewhere would replace the
+    # pinned snapshot, which the test questions are checked against, so that takes a flag.
+    on_disk = snapshot_commit(dest)
+    if on_disk is not None and on_disk != settings.handbook_commit and not replace:
+        typer.echo(
+            f"error: {dest} holds the snapshot of commit {on_disk[:12]}. Downloading commit "
+            f"{settings.handbook_commit[:12]} there would replace it. To keep both, set "
+            "HANDBOOK_RAG_DATA_DIR to another directory. To replace it, run again with "
+            "--replace.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     try:
         result = download_snapshot(
             repo_url=settings.handbook_repo_url,
             commit=settings.handbook_commit,
             content_path=settings.handbook_content_path,
             licence=settings.handbook_licence,
-            dest=settings.data_dir / "handbook",
+            dest=dest,
         )
     except SnapshotError as error:
         typer.echo(f"error: {error}", err=True)
@@ -203,24 +237,8 @@ def chunks(
         typer.echo(f"  exported  {export}")
 
 
-@app.command()
-def index() -> None:
-    """Embed every chunk and store it in the vector store. Safe to run again."""
-    settings = get_settings()
-    try:
-        store = wiring.make_store(settings)
-        corpus = build_corpus(settings)
-    except (CorpusError, VectorStoreError) as error:
-        typer.echo(f"error: {error}", err=True)
-        raise typer.Exit(code=1) from error
-
-    embedder = wiring.make_embedder(settings)
-    sparse_encoder = wiring.make_sparse_encoder(settings)
-    typer.echo(f"Indexing {len(corpus.chunks):,} chunks")
-    typer.echo(f"  collection  {store.collection}")
-    typer.echo(f"  dense       {embedder.name} on {embedder.device}")
-    typer.echo(f"  sparse      {sparse_encoder.name}")
-
+def _progress(verb: str) -> Callable[[int, int], None]:
+    """Print a line at every tenth of the way, and at the end."""
     last_reported = 0
 
     def report_progress(done: int, total: int) -> None:
@@ -228,27 +246,228 @@ def index() -> None:
         percent = 100 * done // total
         if percent >= last_reported + 10 or done == total:
             last_reported = percent
-            typer.echo(f"  embedded    {done:,} of {total:,} ({percent}%)")
+            typer.echo(f"  {verb:<10}  {done:,} of {total:,} ({percent}%)")
+
+    return report_progress
+
+
+@app.command()
+def index(
+    reuse_from: Annotated[
+        str | None,
+        typer.Option(
+            help=(
+                "An older commit whose collection lends its vectors: a chunk whose embedded "
+                "text is unchanged takes them instead of being embedded. That collection is "
+                "only read. Its name follows from the commit with these settings' models "
+                "and chunking."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Embed every chunk and store it in the vector store. Safe to run again."""
+    settings = get_settings()
+    try:
+        store = wiring.make_store(settings)
+        source = None if reuse_from is None else find_reuse_source(store, settings, reuse_from)
+        started = time.perf_counter()
+        corpus = build_corpus(settings)
+        chunked = time.perf_counter() - started
+    except (CorpusError, VectorStoreError, ReuseError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    embedder = wiring.make_embedder(settings)
+    sparse_encoder = wiring.make_sparse_encoder(settings)
+    typer.echo(f"Indexing {len(corpus.chunks):,} chunks")
+    typer.echo(f"  collection  {store.collection}")
+    if source is not None:
+        typer.echo(f"  reuse from  {source.collection}, which is only read")
+    typer.echo(f"  dense       {embedder.name} on {embedder.device}")
+    typer.echo(f"  sparse      {sparse_encoder.name}")
 
     try:
+        previous = None if source is None else read_previous_index(source)
+        if previous is not None:
+            typer.echo(
+                f"  read        {previous.chunks:,} stored chunks of {len(previous.pages):,} "
+                f"pages in {previous.seconds:.1f} seconds"
+            )
         report = index_chunks(
             corpus.chunks,
             embedder=embedder,
             sparse_encoder=sparse_encoder,
             store=store,
-            on_progress=report_progress,
+            on_progress=_progress("embedded"),
+            reuse=None if source is None or previous is None else Reuse(source, previous.points),
+            on_reuse_progress=_progress("reused"),
         )
     except VectorStoreError as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=1) from error
 
-    rate = report.embedded / report.seconds if report.seconds > 0 else 0.0
+    # With reuse, the run's time includes copying vectors, which is not embedding.
+    seconds = report.seconds if previous is None else report.embed_seconds
+    rate = report.embedded / seconds if seconds > 0 else 0.0
     typer.echo("Index ready")
     typer.echo(f"  chunks      {report.total:,} in the collection")
+    if previous is not None:
+        _echo_page_changes(compare_pages(previous, corpus.chunks))
+        typer.echo(
+            f"  reused      {report.reused:,} chunks' vectors, in "
+            f"{report.reuse_seconds:.1f} seconds"
+        )
     typer.echo(f"  embedded    {report.embedded:,} new ({rate:.0f} per second)")
     typer.echo(f"  skipped     {report.already_indexed:,} already stored")
     typer.echo(f"  removed     {report.removed:,} no longer produced")
+    if report.replaced:
+        typer.echo(f"  replaced    {report.replaced:,} stored under the same id with other details")
     typer.echo(f"  time        {report.seconds:.1f} seconds")
+    if previous is not None:
+        typer.echo(
+            f"              chunking {chunked:.1f}, reading the older collection "
+            f"{previous.seconds:.1f}, reusing {report.reuse_seconds:.1f}, embedding "
+            f"{report.embed_seconds:.1f}"
+        )
+
+
+def _echo_page_changes(changes: PageChanges) -> None:
+    typer.echo(
+        f"  pages       {len(changes.added):,} added, {len(changes.changed):,} changed, "
+        f"{len(changes.removed):,} removed, {len(changes.unchanged):,} unchanged"
+    )
+
+
+@app.command(name="check-reuse")
+def check_reuse(
+    reuse_from: Annotated[
+        str,
+        typer.Option(help="The older commit whose collection lends its vectors. It is only read."),
+    ],
+    dataset: Annotated[
+        Path, typer.Option(help="Golden set: the pages that hold its evidence are the slice.")
+    ] = Path("evals/golden/questions.jsonl"),
+    config: Annotated[
+        Path, typer.Option(help="The retrieval gate's settings, which say how many pages to add.")
+    ] = Path("evals/gate.json"),
+    tolerance: Annotated[
+        float,
+        typer.Option(
+            help="How far an entry of one vector may be from the same entry of the other."
+        ),
+    ] = DEFAULT_VECTOR_TOLERANCE,
+) -> None:
+    """Show on a slice of the handbook that reusing vectors gives the index a full run gives.
+
+    The slice is the retrieval gate's: the pages that hold the golden set's evidence. It
+    is indexed in memory twice, once by embedding every chunk and once by taking vectors
+    from the older commit's collection where the embedded text is unchanged, and the
+    two are compared. Nothing is written to the vector store server.
+    """
+    settings = get_settings()
+    try:
+        gate = load_gate_config(config)
+        questions = _load_questions(dataset)
+        source = find_reuse_source(wiring.make_store(settings), settings, reuse_from)
+        snapshot = load_snapshot(settings)
+        pages = select_pages(
+            snapshot.documents, questions, distractors=gate.distractor_pages, seed=gate.seed
+        )
+        chunks = chunk_documents(pages, settings)
+        embedder = wiring.make_embedder(settings)
+        sparse_encoder = wiring.make_sparse_encoder(settings)
+        full = wiring.make_memory_store("reuse-check-full")
+        full_report = index_chunks(
+            chunks, embedder=embedder, sparse_encoder=sparse_encoder, store=full
+        )
+        # The older side is read for the same pages, by name, so a page of the slice that
+        # the newer commit no longer has is counted as removed.
+        names = evidence_pages(questions) | {page.doc_id for page in pages}
+        previous = read_previous_index(source, pages=names)
+        changes = compare_pages(previous, chunks)
+        reused = wiring.make_memory_store("reuse-check-reused")
+        reused_report = index_chunks(
+            chunks,
+            embedder=embedder,
+            sparse_encoder=sparse_encoder,
+            store=reused,
+            reuse=Reuse(source, previous.points),
+        )
+        comparison = compare_collections(full, reused, tolerance=tolerance)
+    except (GateError, DatasetError, CorpusError, VectorStoreError, ReuseError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    typer.echo("Reuse check on a slice of the handbook")
+    typer.echo(
+        f"  pages       {len(pages):,} of {len(snapshot.documents):,} at commit "
+        f"{snapshot.source_commit[:12]}, {len(chunks):,} chunks"
+    )
+    typer.echo(
+        f"  full        {full_report.embedded:,} embedded in {full_report.seconds:.1f} seconds"
+    )
+    typer.echo(f"  reuse from  {source.collection}, {previous.chunks:,} chunks of the same pages")
+    _echo_page_changes(changes)
+    typer.echo(
+        f"  reused      {reused_report.reused:,} chunks' vectors, {reused_report.embedded:,} "
+        f"embedded, in {reused_report.seconds:.1f} seconds (reading the older "
+        f"collection {previous.seconds:.1f})"
+    )
+    _echo_comparison(comparison)
+    if not comparison.equal:
+        typer.echo("Reuse check failed: the two indexes differ.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo("Reuse check passed: the two indexes are the same.")
+
+
+@app.command(name="compare-collections")
+def compare_collections_command(
+    reference: Annotated[str, typer.Argument(help="The collection taken as right.")],
+    candidate: Annotated[str, typer.Argument(help="The collection checked against it.")],
+    tolerance: Annotated[
+        float,
+        typer.Option(
+            help="How far an entry of one vector may be from the same entry of the other."
+        ),
+    ] = DEFAULT_VECTOR_TOLERANCE,
+) -> None:
+    """Compare two collections point by point: ids, payloads and vectors. Both are only read."""
+    settings = get_settings()
+    try:
+        store = wiring.make_store(settings)
+        sides = [store.with_collection(reference), store.with_collection(candidate)]
+        for side in sides:
+            if not side.exists():
+                raise CollectionMissingError(f"Collection {side.collection} does not exist.")
+        comparison = compare_collections(sides[0], sides[1], tolerance=tolerance)
+    except VectorStoreError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    typer.echo(f"{candidate} against {reference}")
+    _echo_comparison(comparison)
+    if not comparison.equal:
+        raise typer.Exit(code=1)
+
+
+def _echo_comparison(comparison: CollectionComparison, shown: int = 20) -> None:
+    typer.echo(f"  compared    {comparison.compared:,} points that both collections hold")
+    typer.echo(
+        f"  ids         {len(comparison.missing):,} missing from the second, "
+        f"{len(comparison.extra):,} only in the second"
+    )
+    typer.echo(f"  payloads    {len(comparison.payloads):,} fields differ")
+    typer.echo(
+        f"  vectors     {len(comparison.vectors):,} differ by more than {comparison.tolerance:g}; "
+        f"largest difference {comparison.largest_dense_difference:.3g} (dense), "
+        f"{comparison.largest_sparse_difference:.3g} (keyword); smallest cosine similarity "
+        f"{comparison.smallest_cosine:.7f}"
+    )
+    differences = comparison.differences()
+    for line in differences[:shown]:
+        typer.echo(f"    {line}")
+    if len(differences) > shown:
+        typer.echo(f"    and {len(differences) - shown:,} more")
 
 
 @app.command()

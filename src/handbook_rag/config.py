@@ -367,13 +367,17 @@ class Settings(BaseSettings):
         Changing any of them gives a new collection, so vectors produced under different
         settings are never mixed in one index.
         """
+        return self.collection_for(self.handbook_commit)
 
-        def slug(name: str) -> str:
-            return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    def collection_for(self, commit: str) -> str:
+        """The collection that holds ``commit`` indexed with these models and this chunking.
 
+        Updating the index to a newer commit reads the older commit's collection, and it
+        has to be the one made with the same models and chunking as the new one.
+        """
         return (
-            f"handbook-{self.handbook_commit[:8]}-{slug(self.embedding_model)}"
-            f"-{slug(self.sparse_model)}-{self.chunking.version}"
+            f"handbook-{commit[:8]}-{collection_slug(self.embedding_model)}"
+            f"-{collection_slug(self.sparse_model)}-{self.chunking.version}"
         )
 
 
@@ -389,6 +393,11 @@ def _exact_answer_model(value: str) -> str:
             "model without notice, and results would stop being comparable"
         )
     return value
+
+
+def collection_slug(name: str) -> str:
+    """A model's name as a collection name holds it: lower case, with dashes."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
 @lru_cache

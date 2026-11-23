@@ -1,8 +1,9 @@
+import dataclasses
 from typing import Any, cast
 
 import httpx
 import pytest
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, models
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 
 from handbook_rag.index.sparse import SparseVector
@@ -280,3 +281,120 @@ def test_an_error_that_is_not_the_stores_doing_is_passed_on_unchanged(
     monkeypatch.setattr(client, "collection_exists", second)
     with pytest.raises(TypeError, match="the first failure"):
         store.search(NORTH, limit=1)
+
+
+def test_stored_chunks_come_back_by_id_and_an_unknown_id_is_left_out(
+    store: QdrantVectorStore,
+) -> None:
+    stored = make_chunk("Take 25 days.", heading_path=("Leave", "Annual leave"))
+    store.upsert([stored], [NORTH], [LEAVE])
+
+    found = store.stored_chunks([stored.chunk_id, make_chunk("never stored").chunk_id])
+
+    assert found == {stored.chunk_id: stored}
+
+
+def test_points_come_back_with_their_payload_and_both_vectors(store: QdrantVectorStore) -> None:
+    chunk = make_chunk("laptop expense")
+    store.upsert([chunk], [MOSTLY_NORTH], [SparseVector([7, 3], [0.5, 2.0])])
+
+    (point,) = store.points([chunk.chunk_id, make_chunk("never stored").chunk_id]).values()
+
+    assert point.point_id == chunk.chunk_id
+    assert point.chunk == chunk
+    assert point.payload["text"] == "laptop expense"
+    # The store keeps a dense vector at length 1, and a keyword vector in word order.
+    length = (0.9**2 + 0.1**2) ** 0.5
+    assert point.dense == pytest.approx([0.9 / length, 0.1 / length, 0.0], abs=1e-6)
+    assert point.sparse == SparseVector([3, 7], [2.0, 0.5])
+
+
+def test_a_point_without_words_comes_back_with_an_empty_keyword_vector(
+    store: QdrantVectorStore,
+) -> None:
+    chunk = make_chunk("the of a")
+    store.upsert([chunk], [NORTH], [NO_WORDS])
+
+    assert store.points([chunk.chunk_id])[chunk.chunk_id].sparse == NO_WORDS
+
+
+def record(vector: Any) -> models.Record:
+    chunk = make_chunk("north")
+    payload = {key: value for key, value in dataclasses.asdict(chunk).items() if key != "chunk_id"}
+    return models.Record(id=chunk.chunk_id, payload=payload, vector=vector)
+
+
+def test_a_keyword_vector_the_store_leaves_out_is_read_as_empty(
+    store: QdrantVectorStore, client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(client, "retrieve", lambda *_a, **_k: [record({"dense": NORTH})])
+
+    (point,) = store.points([make_chunk("north").chunk_id]).values()
+
+    assert (point.dense, point.sparse) == (NORTH, NO_WORDS)
+
+
+@pytest.mark.parametrize(
+    "vector", [None, NORTH, {"sparse": models.SparseVector(indices=[], values=[])}]
+)
+def test_a_point_without_a_named_dense_vector_is_reported(
+    store: QdrantVectorStore, client: QdrantClient, monkeypatch: pytest.MonkeyPatch, vector: Any
+) -> None:
+    monkeypatch.setattr(client, "retrieve", lambda *_a, **_k: [record(vector)])
+
+    with pytest.raises(VectorStoreError, match="has no dense vector named 'dense'"):
+        store.points([make_chunk("north").chunk_id])
+
+
+@pytest.fixture
+def small_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read two points at a time, so that reading has to go on from batch to batch."""
+    monkeypatch.setattr("handbook_rag.index.store._BATCH", 2)
+
+
+@pytest.mark.usefixtures("small_batches")
+def test_every_point_and_chunk_is_read_across_batches(store: QdrantVectorStore) -> None:
+    chunks = [make_chunk(f"chunk {n}", doc_id=f"page{n % 2}.md") for n in range(5)]
+    store.upsert(chunks, [NORTH] * 5, [NO_WORDS] * 5)
+    ids = [chunk.chunk_id for chunk in chunks]
+
+    assert sorted(store.point_ids()) == sorted(ids)
+    assert sorted(store.scroll_chunks(), key=lambda c: c.text) == chunks
+    assert set(store.stored_chunks(ids)) == set(ids)
+    assert set(store.points(ids)) == set(ids)
+
+
+@pytest.mark.usefixtures("small_batches")
+def test_reading_chunks_can_be_limited_to_some_pages(store: QdrantVectorStore) -> None:
+    chunks = [make_chunk(f"chunk {n}", doc_id=f"page{n % 3}.md") for n in range(6)]
+    store.upsert(chunks, [NORTH] * 6, [NO_WORDS] * 6)
+
+    some = list(store.scroll_chunks({"page0.md", "page2.md"}))
+
+    assert sorted(c.text for c in some) == ["chunk 0", "chunk 2", "chunk 3", "chunk 5"]
+    assert list(store.scroll_chunks(set())) == []
+
+
+def test_another_collection_is_reached_through_the_same_connection(
+    store: QdrantVectorStore, client: QdrantClient
+) -> None:
+    other = store.with_collection("other-collection")
+
+    assert other.collection == "other-collection"
+    assert not other.exists()
+    other.ensure_collection(dimension=3)
+    assert other.exists()
+    assert store.collection_names() == ["other-collection", "test-collection"]
+    assert QdrantVectorStore(client, "other-collection").count() == 0
+
+
+def test_reading_the_chunks_of_no_page_asks_the_store_nothing(
+    store: QdrantVectorStore, client: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A filter that matches any of no values is not something every store accepts.
+    def no_call(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("the store was asked")
+
+    monkeypatch.setattr(client, "scroll", no_call)
+
+    assert list(store.scroll_chunks(set())) == []

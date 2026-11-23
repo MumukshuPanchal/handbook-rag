@@ -4,10 +4,10 @@ The vector store keeps, for every chunk, its vector and its metadata (the *paylo
 Searching means finding the stored vectors closest to a question's vector.
 """
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from contextlib import suppress
 from dataclasses import asdict, dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from opentelemetry.trace import SpanKind
 from qdrant_client import QdrantClient, models
@@ -38,12 +38,46 @@ class ScoredChunk:
     score: float
 
 
+@dataclass(frozen=True, slots=True)
+class StoredPoint:
+    """One point as the store holds it: its payload and both of its vectors."""
+
+    point_id: str
+    payload: dict[str, Any]
+    dense: list[float]
+    sparse: SparseVector
+
+    @property
+    def chunk(self) -> Chunk:
+        """The chunk the payload describes, which says what the vectors were made from."""
+        return _from_payload(self.point_id, self.payload)
+
+
+class ReadableStore(Protocol):
+    """Reading a collection and nothing else.
+
+    Code that only has to read a collection, such as the older index that an update
+    takes vectors from, is given this, so it cannot write to that collection by mistake.
+    """
+
+    @property
+    def collection(self) -> str: ...
+
+    def point_ids(self) -> Iterator[str]: ...
+
+    def scroll_chunks(self, pages: Collection[str] | None = None) -> Iterator[Chunk]: ...
+
+    def points(self, ids: Sequence[str]) -> dict[str, StoredPoint]: ...
+
+
 class VectorStore(Protocol):
     """What the rest of the pipeline needs from a vector store."""
 
     def ensure_collection(self, dimension: int) -> None: ...
 
     def existing_ids(self, chunk_ids: Sequence[str]) -> set[str]: ...
+
+    def stored_chunks(self, chunk_ids: Sequence[str]) -> dict[str, Chunk]: ...
 
     def upsert(
         self,
@@ -75,6 +109,17 @@ class QdrantVectorStore:
     @property
     def collection(self) -> str:
         return self._collection
+
+    def with_collection(self, collection: str) -> "QdrantVectorStore":
+        """Another collection in the same store, reached through the same connection."""
+        return QdrantVectorStore(self._client, collection)
+
+    def exists(self) -> bool:
+        return self._client.collection_exists(self._collection)
+
+    def collection_names(self) -> list[str]:
+        """Every collection in the store, this one or not, in alphabetical order."""
+        return sorted(item.name for item in self._client.get_collections().collections)
 
     def ensure_collection(self, dimension: int) -> None:
         """Create the collection if it is missing, or check that it fits the model."""
@@ -115,6 +160,91 @@ class QdrantVectorStore:
             found.update(str(record.id) for record in records)
         return found
 
+    def stored_chunks(self, chunk_ids: Sequence[str]) -> dict[str, Chunk]:
+        """The chunks stored under these ids, as their payloads describe them."""
+        found: dict[str, Chunk] = {}
+        for batch in _batches(list(chunk_ids), _BATCH):
+            records = self._client.retrieve(
+                self._collection, ids=batch, with_payload=True, with_vectors=False
+            )
+            for record in records:
+                found[str(record.id)] = _from_payload(str(record.id), record.payload or {})
+        return found
+
+    def point_ids(self) -> Iterator[str]:
+        """The id of every point in the collection."""
+        offset: Any = None
+        while True:
+            records, offset = self._client.scroll(
+                self._collection,
+                limit=_BATCH,
+                offset=offset,
+                with_payload=False,
+                with_vectors=False,
+            )
+            yield from (str(record.id) for record in records)
+            if offset is None:
+                break
+
+    def scroll_chunks(self, pages: Collection[str] | None = None) -> Iterator[Chunk]:
+        """Every stored chunk, or only those of these pages, without their vectors.
+
+        Vectors are left out because they are most of what a point weighs: reading a
+        whole collection's payloads is quick, and its vectors are fetched only for the
+        points that are needed, a batch at a time.
+        """
+        if pages is not None and not pages:
+            return
+        query_filter = None
+        if pages is not None:
+            query_filter = models.Filter(
+                must=[models.FieldCondition(key="doc_id", match=models.MatchAny(any=sorted(pages)))]
+            )
+        offset: Any = None
+        while True:
+            records, offset = self._client.scroll(
+                self._collection,
+                scroll_filter=query_filter,
+                limit=_BATCH,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for record in records:
+                yield _from_payload(str(record.id), record.payload or {})
+            if offset is None:
+                break
+
+    def points(self, ids: Sequence[str]) -> dict[str, StoredPoint]:
+        """These points with their payloads and vectors. An id that is not stored is left out."""
+        found: dict[str, StoredPoint] = {}
+        for batch in _batches(list(ids), _BATCH):
+            records = self._client.retrieve(
+                self._collection, ids=batch, with_payload=True, with_vectors=True
+            )
+            for record in records:
+                found[str(record.id)] = self._to_point(record)
+        return found
+
+    def _to_point(self, record: models.Record) -> StoredPoint:
+        vectors = record.vector
+        dense = vectors.get(_DENSE) if isinstance(vectors, dict) else None
+        if not isinstance(dense, list):
+            raise VectorStoreError(
+                f"Point {record.id} in {self._collection} has no dense vector named {_DENSE!r}."
+            )
+        # A text with no word worth keeping has an empty keyword vector, which a store
+        # may leave out of its answer altogether.
+        sparse = vectors.get(_SPARSE) if isinstance(vectors, dict) else None
+        if not isinstance(sparse, models.SparseVector):
+            sparse = models.SparseVector(indices=[], values=[])
+        return StoredPoint(
+            point_id=str(record.id),
+            payload=record.payload or {},
+            dense=[float(value) for value in cast(list[float], dense)],
+            sparse=SparseVector(list(sparse.indices), list(sparse.values)),
+        )
+
     def upsert(
         self,
         chunks: Sequence[Chunk],
@@ -140,19 +270,9 @@ class QdrantVectorStore:
 
     def delete_except(self, keep: set[str]) -> int:
         """Remove every stored chunk whose id is not in ``keep``. Returns how many."""
-        stale: list[str] = []
-        offset: Any = None
-        while True:
-            records, offset = self._client.scroll(
-                self._collection,
-                limit=_BATCH,
-                offset=offset,
-                with_payload=False,
-                with_vectors=False,
-            )
-            stale.extend(str(r.id) for r in records if str(r.id) not in keep)
-            if offset is None:
-                break
+        # Every id is read before anything is deleted, so deleting cannot disturb the
+        # reading.
+        stale = [point_id for point_id in self.point_ids() if point_id not in keep]
         for batch in _batches(stale, _BATCH):
             self._client.delete(
                 self._collection, points_selector=models.PointIdsList(points=list(batch)), wait=True

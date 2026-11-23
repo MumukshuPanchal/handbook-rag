@@ -19,8 +19,10 @@ dist/
 htmlcov/
 .ipynb_checkpoints/
 
-# Downloaded corpus and other local data
+# Downloaded corpus and other local data, and a newer snapshot downloaded beside it to
+# update the index (ADR 0019)
 data/
+data-*/
 
 # Evaluation output that is bulky or derived. Scores and summaries are committed.
 evals/runs/**/traces/

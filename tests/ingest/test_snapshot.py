@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from handbook_rag.ingest.snapshot import Snapshot, SnapshotError, download_snapshot
+from handbook_rag.ingest.snapshot import (
+    Snapshot,
+    SnapshotError,
+    download_snapshot,
+    snapshot_commit,
+)
 from tests.support import Upstream, git
 
 
@@ -150,3 +155,11 @@ def test_refuses_to_overwrite_a_non_empty_directory(upstream: Upstream, tmp_path
         download(upstream, tmp_path / "data")
 
     assert (occupied / "notes.txt").read_text() == "keep me"
+
+
+def test_the_commit_of_a_snapshot_on_disk_can_be_read(upstream: Upstream, tmp_path: Path) -> None:
+    assert snapshot_commit(tmp_path / "data") is None
+
+    download(upstream, tmp_path / "data", commit=upstream.second_commit)
+
+    assert snapshot_commit(tmp_path / "data") == upstream.second_commit

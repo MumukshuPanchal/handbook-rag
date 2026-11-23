@@ -98,6 +98,15 @@ def download_snapshot(
     return Snapshot(content_dir=content_dir, manifest_path=manifest_path, manifest=manifest)
 
 
+def snapshot_commit(dest: Path) -> str | None:
+    """The commit of the snapshot already in ``dest``, or ``None`` when there is none."""
+    manifest_path = dest / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    commit: str = json.loads(manifest_path.read_text(encoding="utf-8"))["commit"]
+    return commit
+
+
 def _prepare_clone(repo_dir: Path, repo_url: str, content_path: str) -> None:
     """Create the local clone if needed and configure what it checks out."""
     git_dir = repo_dir / ".git"

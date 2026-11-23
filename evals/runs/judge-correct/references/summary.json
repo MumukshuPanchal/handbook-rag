@@ -1,0 +1,63 @@
+{
+  "description": "gemini-3.5-flash-lite judging the labelled answers in evals/judge/correct/references.jsonl.",
+  "criterion": "correct",
+  "config": {
+    "judge_model": "gemini-3.5-flash-lite",
+    "judge_max_tokens": 2000,
+    "judge_instructions": "8e5cb3fe001720d7",
+    "judge_request": "2c1d89b574507235"
+  },
+  "answers_labelled": 132,
+  "answers_judged": 132,
+  "answers_failed": 0,
+  "attempts": 145,
+  "left_out_as_unclear": 0,
+  "agreement": {
+    "statements": 132,
+    "same_decision": {
+      "mean": 1.0,
+      "low": 0.9717210127678851,
+      "high": 1.0,
+      "count": 132
+    },
+    "recall": null,
+    "precision": null,
+    "kappa": null,
+    "caught": {},
+    "matrix": {
+      "correct": {
+        "correct": 132,
+        "partial": 0,
+        "incorrect": 0
+      },
+      "partial": {
+        "correct": 0,
+        "partial": 0,
+        "incorrect": 0
+      },
+      "incorrect": {
+        "correct": 0,
+        "partial": 0,
+        "incorrect": 0
+      }
+    },
+    "answers": 132,
+    "same_answer": {
+      "mean": 1.0,
+      "low": 0.9717210127678851,
+      "high": 1.0,
+      "count": 132
+    },
+    "answer_recall": null,
+    "answer_precision": null,
+    "same_verdict": {
+      "mean": 1.0,
+      "low": 0.9717210127678851,
+      "high": 1.0,
+      "count": 132
+    }
+  },
+  "input_tokens": 118329,
+  "output_tokens": 5665,
+  "median_seconds": 3.0286428953986615
+}

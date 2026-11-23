@@ -1,0 +1,116 @@
+# ADR 0018: Time limits, repeats of our own, and a fallback model
+
+- Status: Accepted
+- Date: 2026-11-23
+
+## Context
+
+On the evening of 23 November 2026 the free answer model was overloaded. Asked through the service, the same kind of question waited 25, 40, 56 and 64 seconds for its first text, with no sign of life in the meantime, because the SDK was trying again by itself. The median reply of the evaluation took 2.4 seconds. One reply broke off halfway, after a silence of 25 seconds, with the provider's "high demand" error. And nobody could say how many requests those silent repeats had spent, on a key that allowed 15 a minute and 500 a day ([ADR 0015](0015-answers-over-http.md)).
+
+Overload is not rare on this tier. When the first judge was checked on 22 November, on the same model, 32 of its 201 requests failed, 31 of them because the model was overloaded ([the evaluation guide](../evaluation.md#checking-the-judge-first)).
+
+How an answer was sent until now ([issue 42](https://github.com/MumukshuPanchal/handbook-rag/issues/42)):
+
+- **The SDKs repeated requests themselves, unseen.** The Gemini client was given three attempts. It sent a request again after a server error (408, 500, 502, 503 or 504) or a connection that failed or timed out before the reply began, with pauses of about one and two seconds plus up to one more at random. The Claude client kept its SDK's default of three attempts, which waits as long as the server's `retry-after` header says, however long that is. No span showed a repeat, and no count included it.
+- **One time limit, 60 seconds**, for each phase of a request: to connect, and between two pieces of the reply. With three attempts, a model that stayed silent before its reply began could hold a question for three minutes.
+- **No deadline for the whole answer and no fallback.** ADR 0015 lists both under what is still missing.
+- **A request the provider refused as it was sent counted as "unavailable"**, such as a 400 for a request it would not accept. Under a policy of repeats, that would be sent again and refused again.
+
+What the SDKs' time limits mean for a streamed request, read in the installed packages (`google-genai` 3.6.1, `anthropic` 2.12.0):
+
+- **Both limit silence, not the whole reply.** Each passes the limit to its HTTP library as one number, which becomes the same limit for connecting, sending and each read of the stream. A read waits for the next bytes, so the limit is the longest silence allowed, before the first piece and between two pieces. A reply that keeps sending something is never cut off by it.
+- **The Gemini SDK also tells the server.** It sends the limit with every request as an `X-Server-Timeout` header, in whole seconds. Whether the Gemini API then cuts off a stream that runs longer than that in total was not measured.
+- **The bytes that count are not only text.** A Claude stream can carry `ping` events, which its SDK reads and skips, and they reset the clock like any other bytes. Whether a Gemini stream sends anything before the model's first words was not measured.
+- **Both can be set for one request**: Gemini through `http_options` in the request's configuration, Claude through `timeout=` on `messages.stream`. This change does not use that: see the alternatives.
+- **The Claude SDK lets a failed connection through unwrapped once the stream is open.** It turns a timeout or a broken connection into its own error only while the request is sent. In the middle of a stream the HTTP library's own error came through, which the Claude generator did not catch. That is fixed here.
+
+Three numbers frame the limits. In the answer evaluation the median reply took 2.4 s, 95% arrived within 10.1 s, and the slowest took 17.1 s, each for the whole model call ([the evaluation guide](../evaluation.md#the-first-run)).
+
+## Decision
+
+1. **The repeats become ours.** For answers, the SDKs send each request once: the Gemini client gets one attempt, the Claude client no retries. A wrapper of our own, `RetryingGenerator` in `generate/retrying.py`, does the repeating. It is itself a generator, so the pipeline, the API and the command line need no other change to use it. Every request it sends is:
+   - **counted**: the answer says how many requests it took, and so do `POST /ask` and the `ask` command;
+   - **traced**: each request has a span of its own;
+   - **bounded**: by a number of attempts, by the deadline, and each by its time limit.
+
+   The answer model is asked at most three times for one answer, the three attempts the SDKs made before. With the four answers the service writes at once, that is at most twelve requests, under the fifteen a minute of a free key.
+
+2. **What is tried again is decided by the error's reason.**
+
+   | Reason | What it means | What happens |
+   |---|---|---|
+   | `unavailable` | The provider is overloaded or failed, or the network did | The same model again, after a pause. Then the fallback |
+   | `timeout` | The model was silent for longer than the time limit. New | As for `unavailable` |
+   | `rate_limit` | Too many requests in the last minute | Again after the wait the provider names, if that wait ends by the deadline. Otherwise the answer model gives up at once. Then the fallback |
+   | `quota` | The day's allowance is used up | Never again on the same model. The fallback |
+   | `configuration` | A missing or rejected key, an unknown model, or a request the provider refuses as it was sent | Never again, and no fallback |
+
+   - The pause after the first failed attempt is between half a second and one second, and each later one may be twice as long, up to 8 seconds, the longest pause of the Claude SDK too. Where it falls in its range is chosen at random, so that many callers who failed together do not all come back at the same moment. With three attempts there are at most two pauses.
+   - A pause is ours, so the deadline may cut it short; an attempt still follows it, at the deadline. The provider's wait is not ours: a request sent sooner would be refused again, so it has to end by the deadline, or the answer model gives up. This changes one rule of [ADR 0013](0013-gemini-free-tier-with-marker-citations.md), that a rate limit is reported and never repeated: a limit whose wait ends by the deadline is now waited out. Any other ends the answer model's attempts at once: the fallback is asked if there is one, and otherwise the limit is reported with its wait, as before.
+   - A Gemini 504, the API or a gateway giving up while waiting for the model, is a `timeout`. A refusal in the 400s other than 408 and 429 (and 409 for Claude) is now `configuration`, so it is not sent again. The SDKs themselves retried 408 and the Claude SDK 409, and they stay `unavailable`.
+
+3. **Never after text.** Once a piece of the answer has been passed to the caller, a failure is final for that question, with no further attempt and no fallback. Trying again would send the beginning of the answer twice: in a stream, the caller has already read it. Text that reached nobody, because the caller passed no `on_text`, does not count.
+
+4. **Two time limits, both settings.**
+   - `HANDBOOK_RAG_ANSWER_TIMEOUT_SECONDS`, 20 by default: how long one request may be silent. It replaces the fixed 60 seconds for answers. 20 seconds is above the slowest reply of the evaluation, 17.1 s, and a reply's longest silence is no longer than the whole of it, so no reply measured would have been cut off. It is about twice the time within which 95% arrived. A silent request now costs 20 seconds instead of 60.
+   - `HANDBOOK_RAG_ANSWER_DEADLINE_SECONDS`, 30 by default: how long the answer model may be tried before its first text. No new attempt starts after it, and a pause is cut short by it. A request that was already sent is not cut off, and ends at its own time limit if it goes silent. 30 seconds leaves room for one request that times out and one more attempt: 20 s, a pause of under a second, and a second attempt that starts well before 30. Three quick refusals take a few seconds: their two pauses add up to between 1.5 and 3.
+   - What a person waits, with the defaults: three quick refusals end within a few seconds. A model that stays silent is asked twice, and the answer ends after about 42 seconds, search included: 42.45 s were measured (see the real runs below), against the 64 that evening. When requests fail or go silent, the first text or a failure comes at the latest after the deadline plus one time limit, 50 seconds, and one more time limit, 70, when a fallback model is set and asked too.
+   - Both must be more than 0 and at most 600 seconds: nobody waits ten minutes for an answer, and the bound turns away a value written in milliseconds by mistake. A deadline shorter than the time limit is allowed. It means that only quick failures are tried again, while a silent request still has its whole time limit.
+
+5. **An optional fallback model.** `HANDBOOK_RAG_ANSWER_FALLBACK_MODEL` is unset by default. It is named by the same rule as the answer model, the name selecting the provider, and it must be another model. When the answer model has given up for any reason but `configuration`, and no text has been passed on, the fallback model gets one attempt, with the normal time limit, also when the deadline has passed: the deadline is for the answer model's attempts. On a free Gemini key each model has a daily allowance of its own, so another Gemini model can answer when the first has used its allowance up.
+   - **Not after a configuration error.** A wrong key, an unknown model or a refused request is for the person who runs the service to fix. A fallback that answered instead would hide it, and the service would run on the second model without anyone noticing.
+   - **Built only when it is needed**, once, for all the answers being written. Its provider's key is checked when the generator is built, so a service finds a missing one when it starts: it then starts without answering, as it does without a key for the answer model, and its log says why. A Claude fallback needs `ANTHROPIC_API_KEY` in the settings: whether the SDK would find a credential in its other places cannot be known without building its client.
+   - **When it fails too**, its failure is the one the caller sees, because it is the latest news about whether an answer can be had. The answer model's failure goes with it, and the service's log and the `ask` command show both.
+
+6. **The answer says what it took.** `Answer` records `requests`, how many requests to a model it took, failed ones included, and `fallback`, whether the fallback model wrote it. `POST /ask` returns both in its JSON object, and so in the `answer` event of a stream. The `ask` command prints them when there was more than one request, and the demo page shows them under "About this request" when there was more than one request or the fallback model wrote the answer. The model that served the reply was already recorded. When nothing was found to answer from, `requests` is 0.
+
+7. **The trace shows every attempt, and no request twice.** Each request is one span, the existing span of a model call, now with `handbook_rag.attempt`, its place among the answer's requests counted from 1 across both models, and `handbook_rag.fallback`. A failed one is marked failed, as before, and also carries `handbook_rag.failure`, the reason in its fixed word, which says why it was or was not followed by another. The `answer` span records `handbook_rag.requests` and `handbook_rag.fallback`, also when no answer could be written. When the answer ends for another reason, a caller who went away or a fault in the code, the count is left to the model-call spans, which are there all the same.
+   - **Who opens the spans.** The wrapper opens the span of each request it sends, because only it knows how many it sends. The pipeline opens the one span around a generator that is not wrapped, such as the evaluation's. It never opens one around the wrapper. Both go through one function, `traced_request`.
+   - **No span claims a request that was never sent**: none for a pause, none for an attempt the deadline or a provider's wait prevented, none for a fallback that was not asked or could not be built, and none when the search found nothing.
+   - **The Claude SDK's own span is switched off for answers.** The installed SDK opens a span of its own for each call, with the conventions' token counts, and it would sit inside ours and count the tokens a second time. [ADR 0008](0008-opentelemetry-tracing.md) planned to rely on it. The project has since opened a span of its own for every model call, for both providers ([the observability guide](../observability.md#the-trace-of-an-answer)), so the SDK's would be a second one.
+
+8. **When nothing worked.** `POST /ask` answers 503 with fixed words, as before, with a sentence of its own when the model did not answer in time: "The answer model did not answer in time. Try again later." It has no `Retry-After` header. The `ask` command says what failed, then lists the passages the search found, by title, headings and address: the search did its job, and its passages may be all that the person needed. `answer_question` hands them over on the error, so nothing is searched twice.
+
+9. **The evaluation is untouched.** It builds its generator with one attempt, as before, and gets the model's own generator, as before: no wrapper, no fallback and no deadline, its SDK sending each request once, and the 60-second time limit its saved runs were made with, so that a slow reply is measured and not cut off. It counts and spaces its own requests and tries a failed question again itself ([ADR 0014](0014-answer-evaluation-in-stages.md)). A test checks this for both providers, with every new setting changed.
+
+## What the real runs showed
+
+The same evening, after this change, with the model still overloaded, three questions were asked on the command line. The timings of the first and the third come from their traces.
+
+1. **The default settings**, `handbook-rag ask "How do I expense a laptop?"`. Attempt 1 of `generate_content gemini-3.5-flash-lite` took 20.16 s and failed with the reason `timeout`. Attempt 2 started 0.8 s later, took 20.10 s and failed with `timeout`. No third attempt was made, because the deadline of 30 s had passed. The `answer` span took 42.45 s, of which the search 1.37 s, and is marked failed, with 2 requests and no fallback. The command said "error: The Gemini API did not answer in time.", then "No answer was written. The search found these passages:" with the five passages and their addresses, then the trace id.
+2. **The same question a minute later, with `gemini-3.8-flash` set as the fallback.** The first model answered at once, in 2.7 s, with one request. The fallback was not needed, and not asked.
+3. **`gemini-4-hydrogen` as the answer model and `gemini-3.5-flash-lite` as the fallback**, with another question. Three attempts on the first model failed in 0.71, 0.75 and 0.76 s, each with the reason `unavailable`, the provider's "high demand", with pauses of about 0.9 and 1.4 s between them. Then the fallback got its one attempt, numbered 4 and marked as the fallback, and failed too, after 17.63 s, with `unavailable`. The `answer` span took 23.13 s and is marked failed, with 4 requests and the fallback marked as used. The command reported the failure and listed the passages the search had found.
+
+So the time limit, the deadline, the pauses and their growth, the cap of three attempts, the fallback's one attempt and its failure reported to the caller, the counts on the answer's span, one span for each request, and the passages shown when nothing worked were all seen for real. A fallback that succeeds was not: in the one run where it was asked, it failed too. Where a run differs from what was expected above, the text above has been corrected: a silent model was given up after 42.45 s, search included, where about 41 had been reckoned for the model alone.
+
+## Alternatives considered
+
+- **Keep the SDKs' repeats and only lower their number.** The cheapest change, and the requests would still be unseen: not counted, not traced, and not bounded by a deadline for the whole answer.
+- **A circuit breaker**, which stops asking a model that keeps failing for a while, and fails fast or goes straight to the fallback. Under a long outage it would save each question its three requests. It needs shared state across answers and a rule for when to try the model again, and with four answers at most in flight and a person behind each, the saving is small. Worth it once the service has more traffic than one person.
+- **Hedged requests**, which ask two models at once and keep the first reply. They cut the wait when one model is slow, and double the requests in every case, on a key whose daily allowance is the scarcest thing the service has.
+- **Repeating after text by asking the model to continue** from what it had written. The reply would be stitched from two requests, with the risk of a seam in the middle of a statement and of citations that do not line up. A clear error is honest, and a caller of a stream keeps what had arrived.
+- **A queue** that holds questions until the model has capacity. A person waiting for an answer is better served by a clear "try again later" than by a wait of unknown length, and the service already turns away a fifth question at once.
+- **Cutting each attempt's time limit to the time left before the deadline.** Both SDKs allow a time limit for one request, so the deadline could be a hard bound. The shorter limit would also apply after the first text, and cut off a reply that paused near the end of an attempt, which the deadline is not meant to do. And the generator interface has no place for a time limit, so every generator and every stand-in in the tests would change.
+- **Making the number of attempts and the pauses settings.** No one has needed to change them, and every setting is one more thing to document and test. They are constants in `wiring.py` and `generate/retrying.py`.
+
+## What is still missing
+
+- **A fallback that succeeds has not been seen for real.** In the runs below the fallback was asked once and failed, and once was not needed. Rate limits, a used-up allowance, a wrong setting and a failure after text did not occur in them either: those paths are covered by tests with stand-in models only.
+- **Three runs on one evening are not a measurement of the defaults.** They show the rules at work, not how often a question now gets an answer on an overloaded evening.
+- **The fallback model's answers are not evaluated.** The evaluation measures the answer model only. A fallback model answers with the instructions of its own provider, and nothing measures whether it answers as well or cites as reliably.
+- **The deadline is not a bound on the whole wait.** A request that was already sent runs to its own time limit, so the first text or a failure can come up to one time limit after the deadline, and one more when the fallback is asked. A stream that keeps sending something other than text, such as Claude's pings, is bounded by neither.
+- **A caller who goes away before the first text does not stop the attempts.** The stop is noticed at the next piece of text, as before ([ADR 0015](0015-answers-over-http.md), point 7), so the attempts and their pauses go on for nobody until then. A caller of the JSON form is not noticed at all, as before.
+- **Nothing is sent while the attempts go on.** A stream begins with the first text, so a caller sees no sign of life during the pauses either.
+- **Whether the Gemini API cuts a stream at the time limit it is sent** in `X-Server-Timeout` was not measured.
+- **No circuit breaker** (see above): in a long outage every question still spends up to three requests, and four with a fallback.
+- **Docker Compose does not pass the new settings.** As before, it takes only the Gemini key from `.env`; a fallback model has to be added to `compose.yaml` as a line of its own.
+- **The Claude path, a fallback to Claude included, has never been run.** Its new error handling is tested against the SDK's own error types only.
+
+## Consequences
+
+- A question costs one request when the model is well, as before, and at most four when it is not: three to the answer model and one to the fallback. Every one of them is in the answer, the response and the trace.
+- A silent model ends a question after about 42 seconds, with a clear message and, on the command line, the passages the search found. A refusal that would be refused again is not repeated.
+- A trace of an answer can hold several model-call spans. A backend that sums model calls now counts every request, failed ones included.
+- The JSON object of `POST /ask` has two more fields. A caller that ignores unknown fields is not affected.
+- The `ask` command can fail and still be useful: it shows what the search found.
+- The evaluation's numbers stay comparable with the saved runs, because its generator did not change.

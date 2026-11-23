@@ -38,14 +38,14 @@ search                           336 ms
 
 ## The trace of an answer
 
-An answer is one trace with three of our spans at its top: the answer as a whole, the search, and the request to the language model. The pipeline opens them itself, so `handbook-rag ask` and `POST /ask` leave the same trace. The evaluation calls the same function, and would too, but it does not switch tracing on.
+An answer is one trace with our spans at its top: the answer as a whole, the search, and one span for each request to the language model. Most answers take one request. The pipeline opens them itself, so `handbook-rag ask` and `POST /ask` leave the same trace. The evaluation calls the same function, and would too, but it does not switch tracing on.
 
 ```
 answer                                    the question as a whole
   search                                  the passages found, with their ids and scores
     retrieve.hybrid                       the search's own spans, as in the trace above
       ...
-  generate_content gemini-3.5-flash-lite  the request to the model, at the provider
+  generate_content gemini-3.5-flash-lite  a request to the model, at the provider, one span for each
 ```
 
 A real answer, streamed through `POST /ask` on 23 November 2026, as Jaeger showed it. The trace has 13 spans. The first three are the web framework's own:
@@ -68,6 +68,20 @@ POST /ask                                 1788 ms   the HTTP request, until the 
 
 The model call is 1,671 of the 1,788 milliseconds, and the search 109. In a streamed answer the endpoint's own span ends when the stream begins, here after 1,472 ms. The `answer` span was opened inside it and goes on in the worker thread until the answer is complete, so it is the longer of the two.
 
+An answer that takes more than one request has a span for each, in the order they were sent ([ADR 0018](adr/0018-time-limits-retries-and-a-fallback.md)). Here is a real one, asked on the command line on the evening of 23 November 2026, with `gemini-4-hydrogen` as the answer model and `gemini-3.5-flash-lite` as the fallback, while the answer model was overloaded. Nothing worked. Asked from the command line, the trace has no spans of the web framework, and the search's own spans are left out here:
+
+```
+answer                                    23.13 s   failed: 4 requests, the fallback used
+  search                                            the passages found
+    ...
+  generate_content gemini-4-hydrogen       0.71 s   attempt 1, failed: unavailable
+  generate_content gemini-4-hydrogen       0.75 s   attempt 2, 0.9 s after attempt 1 ended, failed: unavailable
+  generate_content gemini-4-hydrogen       0.76 s   attempt 3, 1.4 s after attempt 2 ended, failed: unavailable
+  generate_content gemini-3.5-flash-lite  17.63 s   attempt 4, the fallback, failed: unavailable
+```
+
+The answer model said "high demand" three times, each within a second, and the pause before each new attempt grew, from about 0.9 to about 1.4 s. Three attempts are the most it is given, so the fallback got its one attempt, and failed too, with `unavailable`, after 17.63 s. There is no span for a pause, for an attempt that the deadline or a provider's wait prevented, or for a fallback that was not asked: a span is always a request that was sent. A model that stays silent looks different: two spans of about 20 seconds, each failed with `timeout`, and no third, because the deadline of 30 seconds has passed by then. In the run that showed it, they took 20.16 and 20.10 s, 0.8 s apart.
+
 The span of the model call is named and described as OpenTelemetry's conventions for generative AI say: its name is the operation (`generate_content` for Gemini, `chat` for Claude) and the model asked for, and it is a client span, the kind for a call to another system. A backend built for language-model applications reads those names; Jaeger shows them like any other attribute.
 
 | Attribute | What it says |
@@ -80,8 +94,11 @@ The span of the model call is named and described as OpenTelemetry's conventions
 | `handbook_rag.answered` | Whether the reply counts as an answer. Also on the `answer` span |
 | `handbook_rag.passages.given`, `handbook_rag.passages.cited` | How many passages the model was given, and how many different ones the reply cites |
 | `handbook_rag.passages.cited_chunk_ids` | The passages the reply cites, in the order the answer numbers them |
+| `handbook_rag.attempt` | The request's place among the answer's requests, counted from 1, across the answer model and the fallback |
+| `handbook_rag.fallback` | Whether the request went to the fallback model |
+| `handbook_rag.failure` | On a failed request only: why it failed, in one fixed word, `unavailable`, `timeout`, `rate_limit`, `quota` or `configuration`. It decides whether another attempt followed |
 
-Token counts, model names and passage ids are always recorded. A model call that fails is marked as failed with the kind of error, `handbook_rag.generate.base.GenerationError`, and so is the `answer` span around it. When the search finds nothing, there is no model call, and no span for one: the assistant declines without asking the model.
+Token counts, model names and passage ids are always recorded. A model call that fails is marked as failed with the kind of error, `handbook_rag.generate.base.GenerationError`, and with the reason in `handbook_rag.failure`. The `answer` span is marked failed only when no answer could be written. It records `handbook_rag.requests` and `handbook_rag.fallback`, how many requests the answer took and whether the fallback model was asked, whether it was written or the model failed. When a caller went away, or the code itself failed, only the model-call spans show the requests. When the search finds nothing, there is no model call, and no span for one: the assistant declines without asking the model.
 
 The `ask` command and `/ask` count tokens read from the cache apart from the others, because they are billed at another price. The trace counts them in, so the two can differ when the provider served part of a prompt from its cache.
 
@@ -89,7 +106,7 @@ The `ask` command and `/ask` count tokens read from the cache apart from the oth
 
 A request to the API is traced the same way. Its response carries the trace id in `trace_id` and in the `X-Trace-Id` header, and the header is also on a failed request, which is the one a caller most needs an id for. The web framework adds its own spans around ours: the trace starts with `POST /search` or `POST /ask`, which records the method, the route and the status code, and our spans sit inside it.
 
-An answer is written in a worker thread, which starts with a copy of the request's context, so its spans stay in the request's trace. A streamed answer carries the trace id in the header and in its `answer` event; an `error` event carries only its `detail`, and the header is sent all the same. A request to `/ask` that is turned away before an answer starts, because the service is full or answering is not configured, carries no trace id. A caller who leaves in the middle of a stream stops the model call; the spans of that answer end as failed, with the kind `handbook_rag.streaming.CallerGone`.
+An answer is written in a worker thread, which starts with a copy of the request's context, so its spans stay in the request's trace. A streamed answer carries the trace id in the header and in its `answer` event; an `error` event carries only its `detail`, and the header is sent all the same. A request to `/ask` that is turned away before an answer starts, because the service is full or answering is not configured, carries no trace id. A caller who leaves in the middle of a stream stops the model call; the spans of that answer end as failed, with the kind `handbook_rag.streaming.CallerGone`. A caller who leaves before the first text does not stop the attempts: the stop is noticed at the next piece of text, so the attempts and their pauses go on until then.
 
 Requests to `/health` are not traced. Something asks for it every few seconds, and those traces would bury the ones made by people. Neither is any request to the demo page's three addresses, `/`, `/static/demo.js` and `/static/demo.css`, whatever its method, and also while the page is switched off: a page load is not a question. A question asked on the page is a request to `/ask`, traced like any other ([ADR 0016](adr/0016-a-demo-page-without-a-build-step.md)).
 
@@ -99,8 +116,8 @@ Start the service with `HANDBOOK_RAG_TRACING=true make serve`.
 
 | Span | What it covers | Worth looking at |
 |---|---|---|
-| `answer` | One question, from search to answer | `answered`, `query.chars` |
-| `generate_content <model>` or `chat <model>` | The request to the language model | The table in the section above |
+| `answer` | One question, from search to answer | `answered`, `query.chars`, `requests`, `fallback` |
+| `generate_content <model>` or `chat <model>` | One request to the language model; an answer can have several | The table in the section above |
 | `search` | The whole search: the request to `/search`, or the search inside an answer | `mode` (for `/search`), and the ids, pages and scores of what was returned |
 | `retrieve.reranked` | Search plus reranking, when reranking is on | The final order |
 | `retrieve.hybrid` | Both searches and the merge | `candidates`: how many each search was asked for |
@@ -138,7 +155,7 @@ One trace is one measurement, and on a busy laptop they vary: the search part of
 - `query.terms` is 0: the question contained only stop words, so keyword search had nothing to match on.
 - `fuse.in_both` is low: the two searches disagree, and each result rests on one of them. In the trace above they share 6 of their 30 candidates.
 
-**"It failed."** The failing span is marked as an error with the kind of exception, and so is every span around it. A search against a collection that was never built fails in `vector_store.query` with a `CollectionMissingError`; the command line prints the message, "Collection ... does not exist yet". The span of a failed store call also records, in `error.type`, the kind of error the store's client raised underneath. A failed model call is a `GenerationError` on the model call's span. Which kind of failure it was, such as a rate limit or a used-up daily allowance, is in the service's log next to the trace id, and in the trace itself only with content switched on.
+**"It failed."** The failing span is marked as an error with the kind of exception, and so is every span around it. A search against a collection that was never built fails in `vector_store.query` with a `CollectionMissingError`; the command line prints the message, "Collection ... does not exist yet". The span of a failed store call also records, in `error.type`, the kind of error the store's client raised underneath. A failed model call is a `GenerationError` on the model call's span, and `handbook_rag.failure` says which kind of failure it was, such as `timeout` or `quota`, in a fixed word that is always recorded. The error's own message is in the service's log next to the trace id, and in the trace only with content switched on. Several failed model calls in a row, under a failed `answer` span, mean that every attempt failed; the last one is what the caller was told about.
 
 **"The answer is wrong."** Read the trace from the top down, and stop at the first stage that looks wrong.
 

@@ -40,7 +40,7 @@ from handbook_rag.evals.stage import (
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.models import Answer
 from handbook_rag.index.store import VectorStoreError
-from handbook_rag.ingest.models import Document
+from handbook_rag.ingest.models import Chunk, Document
 
 # The headline comes first. Each score is 1 or 0 for one question, and a score that does
 # not apply to a question is left out, so every mean says how many questions it rests on.
@@ -139,6 +139,28 @@ def record_answer(
     question: GoldenQuestion, answer: Answer, spans: Sequence[EvidenceSpan]
 ) -> AnswerRecord:
     """Reduce a reply to what scoring needs, with citations as passage numbers."""
+    return record_reply(
+        question.id,
+        question.fingerprint,
+        answer,
+        covers=lambda chunk: tuple(sorted(covered_evidence(chunk, spans))),
+    )
+
+
+def record_reply(
+    reply_to: str,
+    fingerprint: str,
+    answer: Answer,
+    *,
+    covers: Callable[[Chunk], tuple[int, ...]],
+) -> AnswerRecord:
+    """Reduce any reply to the passages it was given and what it said, by passage number.
+
+    ``reply_to`` and ``fingerprint`` name what was asked, as it was when it was asked.
+    ``covers`` says which pieces of the known evidence a passage holds. The answer
+    evaluation and the adversarial tests both keep their replies in this one form, so
+    that they are saved, read back and scored by the same code.
+    """
     numbers = {
         scored.chunk.chunk_id: number for number, scored in enumerate(answer.retrieved, start=1)
     }
@@ -146,19 +168,19 @@ def record_answer(
         for citation in segment.citations:
             if citation.chunk.chunk_id not in numbers:
                 raise ReplyError(
-                    f"The reply to {question.id} cites a passage the model was not given "
+                    f"The reply to {reply_to} cites a passage the model was not given "
                     f"({citation.chunk.chunk_id}). That is a fault in the generator."
                 )
     return AnswerRecord(
-        question_id=question.id,
-        fingerprint=question.fingerprint,
+        question_id=reply_to,
+        fingerprint=fingerprint,
         passages=tuple(
             Passage(
                 number=number,
                 chunk_id=scored.chunk.chunk_id,
                 doc_id=scored.chunk.doc_id,
                 context_header=scored.chunk.context_header,
-                covers=tuple(sorted(covered_evidence(scored.chunk, spans))),
+                covers=covers(scored.chunk),
             )
             for number, scored in enumerate(answer.retrieved, start=1)
         ),

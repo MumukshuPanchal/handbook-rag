@@ -187,7 +187,7 @@ def describe_generation(settings: Settings) -> dict[str, object]:
     system, and two runs are comparable only if they name the same one.
     """
     gemini = settings.answer_model.startswith("gemini-")
-    instructions = MARKER_SYSTEM_PROMPT if gemini else SYSTEM_PROMPT
+    instructions = answer_instructions(settings)
     described: dict[str, object] = {
         "answer_model": settings.answer_model,
         "answer_max_tokens": settings.answer_max_tokens,
@@ -198,6 +198,16 @@ def describe_generation(settings: Settings) -> dict[str, object]:
     if not gemini:
         described["answer_effort"] = settings.answer_effort
     return described
+
+
+def answer_instructions(settings: Settings) -> str:
+    """The instructions the configured answer model is sent with every question.
+
+    A Gemini model cites by numbered markers, so its instructions say how to write them.
+    """
+    if settings.answer_model.startswith("gemini-"):
+        return MARKER_SYSTEM_PROMPT
+    return SYSTEM_PROMPT
 
 
 def _make_gemini_generator(settings: Settings, attempts: int) -> GeminiGenerator:

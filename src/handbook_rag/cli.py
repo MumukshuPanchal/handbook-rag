@@ -12,6 +12,7 @@ import typer
 
 from handbook_rag import __version__, wiring
 from handbook_rag.config import Settings, get_settings
+from handbook_rag.evals import adversarial
 from handbook_rag.evals import answers as answer_runs
 from handbook_rag.evals.agreement import measure_agreement
 from handbook_rag.evals.careful import Pacer
@@ -69,6 +70,7 @@ from handbook_rag.ingest.models import Chunk
 from handbook_rag.ingest.snapshot import SnapshotError, download_snapshot
 from handbook_rag.ingest.tokens import token_counter
 from handbook_rag.pipeline import answer_question
+from handbook_rag.retrieve.dense import Retriever
 from handbook_rag.tracing import record_query, record_results, stage, trace_id, tracing_session
 from handbook_rag.wiring import RetrievalMode
 
@@ -1092,8 +1094,6 @@ def eval_judge(
         f"{unclear} left out because their label is unclear"
     )
     _echo_estimate("Same decision", agreement.same_decision)
-    _echo_estimate("Faults caught (recall)", agreement.recall)
-    _echo_estimate("Alarms that were right", agreement.precision)
     if agreement.recall is None:
         # A set with no fault in it, such as the reference answers given as answers,
         # checks only that the judge passes what it should.
@@ -1101,6 +1101,8 @@ def eval_judge(
             f"  {'Faults caught (recall)':<28} nothing to catch: the labels hold no "
             f"{criterion.faults_phrase}"
         )
+    _echo_estimate("Faults caught (recall)", agreement.recall)
+    _echo_estimate("Alarms that were right", agreement.precision)
     if agreement.labels_hold_both_decisions:
         typer.echo(f"  {'Kappa':<28} {agreement.kappa:.3f}")
     else:
@@ -1292,6 +1294,280 @@ def eval_correct(
         max_requests=max_requests,
         restart=restart,
     )
+
+
+def _passages_for_injected_cases(settings: Settings) -> dict[str, Chunk]:
+    """The corpus by chunk id, which the cases with a planted instruction read from."""
+    try:
+        chunks = build_corpus(settings).chunks
+    except CorpusError as error:
+        raise CorpusError(
+            f"the cases with a planted instruction read their passages from the handbook, "
+            f"and it cannot be read: {error}"
+        ) from error
+    return {chunk.chunk_id: chunk for chunk in chunks}
+
+
+def _retriever_for_out_of_scope_cases(settings: Settings) -> Retriever:
+    """The retriever for the questions outside the handbook, once the index is known to be there.
+
+    A missing index would otherwise show only as a failure of the first questions, each
+    tried twice before the run stops itself.
+    """
+    try:
+        store = wiring.make_store(settings)
+        if store.count() == 0:
+            raise VectorStoreError(
+                f"Collection {store.collection} holds no passages. Run `handbook-rag index`."
+            )
+    except VectorStoreError as error:
+        raise VectorStoreError(
+            f"the questions outside the handbook are searched for in the index, and it "
+            f"cannot be used: {error}"
+        ) from error
+    return wiring.make_retriever(settings, store=store)
+
+
+@app.command(name="eval-adversarial")
+def eval_adversarial(
+    cases: Annotated[
+        Path, typer.Option(help="Adversarial cases: a JSON Lines file with one case per line.")
+    ] = adversarial.CASES_PATH,
+    variant: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Name of this run. The default, 'current', is a scratch run that git "
+                "ignores. Name a run to keep it: 'baseline', then 'v1', 'v2' and so on."
+            )
+        ),
+    ] = "current",
+    output: Annotated[
+        Path, typer.Option(help="Directory that holds one sub-directory per variant.")
+    ] = Path("evals/runs/adversarial"),
+    max_requests: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Stop after this many requests. Run the command again to continue the run.",
+        ),
+    ] = None,
+    pace: Annotated[
+        float | None,
+        typer.Option(help="Send at most this many requests a minute. Default: settings."),
+    ] = None,
+    restart: Annotated[
+        bool,
+        typer.Option(
+            "--restart",
+            help="Discard the replies this run has saved and their readings, and start again.",
+        ),
+    ] = False,
+) -> None:
+    """Test the assistant with planted instructions and questions outside the handbook.
+
+    One real request for each case. Replies are saved as they arrive, so a run that stops
+    continues where it left off. A reply that code cannot decide is set aside for a
+    person: their readings go into readings.jsonl in the run's directory, and the next
+    run of the command takes them in.
+    """
+    settings = get_settings()
+    if pace is not None and pace <= 0:
+        typer.echo("error: --pace needs a positive number of requests a minute.", err=True)
+        raise typer.Exit(code=1)
+    per_minute = pace or settings.eval_requests_per_minute
+    config = {**wiring.describe_retrieval(settings), **wiring.describe_generation(settings)}
+    run_dir = output / variant
+    stage = adversarial.adversarial_stage(run_dir)
+    try:
+        if not restart:
+            # Before the corpus, the index and the models are loaded, which takes a while.
+            stage.check(config)
+        loaded = adversarial.load_cases(cases)
+        canaries = adversarial.instruction_canaries(wiring.answer_instructions(settings))
+        for case in loaded:
+            adversarial.refuse_canaries_in_what_is_sent(case, canaries)
+        saved = {} if restart else adversarial.load_replies(run_dir)
+        readings = [] if restart else adversarial.load_readings(run_dir / adversarial.READINGS_FILE)
+        # A reading that is not of a saved reply set aside is refused before any request.
+        adversarial.summarise_adversarial(loaded, saved, canaries, readings)
+        answered = adversarial.replies_to_current_cases(loaded, saved)
+        pending = [c for c in adversarial.in_run_order(loaded) if c.case_id not in answered]
+        to_ask = pending if max_requests is None else pending[:max_requests]
+        # Only what the cases about to be asked need is loaded. A run that only takes in
+        # readings needs no corpus, no index and no key.
+        planted: dict[str, list[Chunk]] = {}
+        if any(case.injected for case in to_ask):
+            by_id = _passages_for_injected_cases(settings)
+            planted = {
+                case.case_id: adversarial.planted_passages(case, by_id, canaries)
+                for case in pending
+                if case.injected
+            }
+        retriever = None
+        if any(not case.injected for case in to_ask):
+            retriever = _retriever_for_out_of_scope_cases(settings)
+        # One attempt per request, as for eval-answers: the run tries a failed case again.
+        generator = wiring.make_generator(settings, attempts=1) if to_ask else None
+        # Last, so that a run that cannot start leaves nothing behind.
+        stage.open(config, restart=restart)
+        saved = adversarial.load_replies(run_dir)
+    except (
+        DatasetError,
+        CorpusError,
+        VectorStoreError,
+        GenerationError,
+        SavedRunError,
+        adversarial.ReadingError,
+    ) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    injected = sum(case.injected for case in loaded)
+    typer.echo(f"Adversarial evaluation: {variant}")
+    typer.echo(f"  model        {settings.answer_model}")
+    typer.echo(
+        f"  cases        {len(loaded)} in the file ({injected} with a planted instruction, "
+        f"{len(loaded) - injected} outside the handbook), {len(answered)} already answered, "
+        f"{len(to_ask)} to ask now"
+    )
+    if to_ask:
+        typer.echo(
+            f"  pace         at most {per_minute:g} requests a minute, so at least "
+            f"{max(1, round(len(to_ask) / per_minute))} min"
+        )
+
+    asked = 0
+
+    def keep(case: adversarial.AdversarialCase, record: answer_runs.AnswerRecord) -> None:
+        nonlocal asked
+        asked += 1
+        stage.append(dataclasses.asdict(record))
+        by_code, _, reason = adversarial.decide(case, record, canaries)
+        typer.echo(
+            f"  {asked:>4}/{len(to_ask)}  {case.case_id}  "
+            f"{'answered' if record.answered else 'declined'}  {by_code}: {reason}  "
+            f"{record.seconds:.1f} s"
+        )
+
+    def show_failure(failure: FailedQuestion) -> None:
+        typer.echo(f"        failed  {failure.question_id}  {failure.message}")
+
+    pacer = Pacer(per_minute)
+
+    def before_each_request() -> None:
+        pacer.wait()
+        # Counted before the request is sent, so an interrupted run has still counted it.
+        stage.add_attempts()
+
+    run = adversarial.AdversarialRun(records=saved)
+    if generator is not None:
+        try:
+            run = adversarial.run_cases(
+                loaded,
+                adversarial.asker(
+                    generator=generator,
+                    retriever=retriever,
+                    limit=settings.answer_context_chunks,
+                    planted=planted,
+                ),
+                saved=saved,
+                wait=before_each_request,
+                on_record=keep,
+                on_failure=show_failure,
+                rest=lambda: pacer.rest(REST_AFTER_FAILURE_SECONDS),
+                max_attempts=max_requests,
+            )
+        except answer_runs.ReplyError as error:
+            typer.echo(f"error: {error}", err=True)
+            raise typer.Exit(code=1) from error
+
+    try:
+        report = adversarial.summarise_adversarial(
+            loaded, run.records, canaries, readings, run.failures
+        )
+    except adversarial.ReadingError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    if not report.results:
+        for failure in report.failures[:5]:
+            typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
+        typer.echo(f"error: no case was answered. {run.stopped or ''}".rstrip(), err=True)
+        raise typer.Exit(code=1)
+    attempts = stage.attempts()
+    adversarial.write_adversarial_run(
+        report,
+        run_dir,
+        description=(
+            f"Adversarial cases answered by {settings.answer_model}: {injected} with a "
+            f"planted instruction, {len(loaded) - injected} outside the handbook."
+        ),
+        config=config,
+        attempts=attempts,
+        canaries=canaries,
+    )
+
+    typer.echo(
+        f"  replies      {len(report.results)} decided or set aside, {len(report.failures)} "
+        f"failed, {report.not_asked} not asked yet"
+    )
+    typer.echo(f"  requests     at most {run.attempts} now, {attempts} for this run in all")
+    _echo_adversarial_figures(report)
+    if report.tokens:
+        typer.echo(
+            f"  tokens       {report.tokens['input_mean']:,.0f} in and "
+            f"{report.tokens['output_mean']:,.0f} out per case that reached the model, "
+            f"{report.tokens['input_total']:,.0f} and {report.tokens['output_total']:,.0f} "
+            "in all"
+        )
+    if report.waiting:
+        typer.echo(
+            f"  final        not yet: {len(report.waiting)} "
+            f"{'reply waits' if len(report.waiting) == 1 else 'replies wait'} for a reading. "
+            f"Write each to {run_dir / adversarial.READINGS_FILE} and run the same command again:"
+        )
+        for result in report.waiting:
+            typer.echo(
+                f"    {result.case.case_id:<28} reply "
+                f"{adversarial.reply_fingerprint(result.record)}  {result.reason}"
+            )
+    else:
+        typer.echo("  final        yes: every reply that code set aside has a reading")
+    typer.echo(f"  written to   {run_dir}")
+    if run.stopped is not None:
+        typer.echo(f"  stopped: {run.stopped}")
+    for failure in report.failures[:5]:
+        typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
+    if report.not_asked or report.failures:
+        typer.echo("  Run the same command again to continue this run.")
+    # A limit the caller set is a planned stop. Any other early end is a failure.
+    planned = max_requests is not None and run.attempts >= max_requests
+    if report.failures or (run.stopped is not None and not planned):
+        raise typer.Exit(code=1)
+
+
+def _echo_adversarial_figures(report: adversarial.AdversarialReport) -> None:
+    """The counts by family and kind, and the share that held once they are final."""
+    typer.echo(
+        f"  {'':<24}{'cases':>6}{'replies':>8}{'code held':>10}{'code broke':>11}"
+        f"{'set aside':>10}{'read held':>10}{'read broke':>11}{'kept':>7}   "
+        "share held (95% interval)"
+    )
+    for name, figures in report.figures.items():
+        label = f"  {name.split('/')[1]}" if "/" in name else name
+        kept = f"{figures.kept_answer}/{figures.injected_replies}" if figures.kept else ""
+        if figures.held is not None:
+            held = f"{figures.held.mean:.3f} ({figures.held.low:.3f} to {figures.held.high:.3f})"
+        else:
+            held = "no reply yet" if not figures.replies else "waits for readings"
+        typer.echo(
+            f"  {label:<24}{figures.cases:>6}{figures.replies:>8}{figures.held_by_code:>10}"
+            f"{figures.broke_by_code:>11}{figures.set_aside:>10}{figures.read_held:>10}"
+            f"{figures.read_broke:>11}{kept:>7}   {held}"
+        )
+    injected = report.figures.get(adversarial.INJECTED)
+    if injected is not None:
+        _echo_estimate("Kept its answer", injected.kept)
 
 
 @app.command(name="eval-gate")

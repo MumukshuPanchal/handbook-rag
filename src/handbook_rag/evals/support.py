@@ -97,7 +97,7 @@ def load_labelled_cases(path: Path, chunks: Mapping[str, Chunk]) -> list[Labelle
                         "is not in the corpus. The labels were made for another snapshot or "
                         "chunking."
                     )
-                if _text_hash(chunk.text) != passage["text_sha256"]:
+                if passage_hash(chunk.text) != passage["text_sha256"]:
                     raise DatasetError(
                         f"{path}:{number}: the text of passage {passage['chunk_id']} has "
                         f"changed since {case_id} was labelled."
@@ -180,7 +180,12 @@ def _fault_in_case(
     return None
 
 
-def _text_hash(text: str) -> str:
+def passage_hash(text: str) -> str:
+    """The short hash by which a committed file names the exact words of a passage.
+
+    Committed files hold no handbook text. They name a passage by its chunk id and keep
+    this hash, and the text is read from the corpus when the file is loaded.
+    """
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 

@@ -1,4 +1,5 @@
 import dataclasses
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
 from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT
+from handbook_rag.generate.prompt import SYSTEM_PROMPT
 from handbook_rag.wiring import describe_generation, describe_judge, make_generator, make_judge
 
 CLAUDE = "claude-haiku-5-5"
@@ -193,6 +195,18 @@ def test_a_claude_run_records_its_own_instructions_and_effort() -> None:
     assert claude["answer_effort"] == "high"
     assert claude["instructions"] != gemini["instructions"]
     assert "answer_effort" not in gemini
+
+
+def test_the_instructions_of_the_answer_model_are_those_its_generator_sends() -> None:
+    gemini, claude = Settings(), Settings(answer_model=CLAUDE)
+
+    # A Gemini model cites by numbered markers, and is told how to write them.
+    assert wiring.answer_instructions(gemini) == MARKER_SYSTEM_PROMPT
+    assert wiring.answer_instructions(claude) == SYSTEM_PROMPT
+    # What is recorded with a run is a hash of exactly these.
+    for settings in (gemini, claude):
+        expected = hashlib.sha256(wiring.answer_instructions(settings).encode("utf-8"))
+        assert describe_generation(settings)["instructions"] == expected.hexdigest()[:16]
 
 
 def test_the_judge_is_built_for_the_configured_model_with_the_key_passed_directly() -> None:

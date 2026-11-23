@@ -69,6 +69,17 @@ class Agreement:
     answer_precision: Estimate | None
     """Of the answers the judge failed, the share with a statement labelled with a fault."""
 
+    @property
+    def labels_hold_both_decisions(self) -> bool:
+        """Whether some statements are labelled with a fault and some are not.
+
+        Kappa measures agreement beyond chance on a decision that the labels make both
+        ways. Where every label makes it the same way, as in a set of reference answers
+        that are all correct, kappa is 1 for a judge that agrees throughout and 0 for one
+        that raises a single alarm, and neither figure says anything.
+        """
+        return self.recall is not None and self.recall.count < self.statements
+
 
 def measure_agreement(
     pairs: Sequence[Pair], *, verdicts: Sequence[str], faults: Collection[str]

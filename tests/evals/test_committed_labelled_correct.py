@@ -11,6 +11,7 @@ from handbook_rag.evals.correctness import (
     NOT_CORRECT,
     PLANTED_KINDS,
 )
+from handbook_rag.evals.dataset import load_golden_set
 from handbook_rag.evals.judging import UNCLEAR
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
 
@@ -79,6 +80,41 @@ def test_every_label_records_who_decided_it() -> None:
         if not against_two:
             assert case["expected"] == readers["third"], case["case"]
     assert settled_by_third == 8
+
+
+REFERENCES = CASES.with_name("references.jsonl")
+GOLDEN = Path(__file__).parents[2] / "evals" / "golden" / "questions.jsonl"
+
+
+def test_the_reference_answers_are_every_reference_answer_of_the_golden_set_as_its_answer() -> None:
+    # Derived again here, so that the file cannot drift from the golden set.
+    derived = [
+        {
+            "case": f"{question.id}-ref",
+            "question_id": question.id,
+            "kind": "reference",
+            "question": question.question,
+            "reference": question.reference_answer,
+            "answer": question.reference_answer,
+            "expected": "correct",
+        }
+        for question in load_golden_set(GOLDEN)
+        if question.type == "answerable"
+    ]
+    committed = [
+        json.loads(line) for line in REFERENCES.read_text(encoding="utf-8").split("\n") if line
+    ]
+
+    assert committed == derived
+    assert len(committed) == 132
+
+
+def test_the_reference_answers_load_as_a_check_with_nothing_to_catch() -> None:
+    labelled = CORRECT.load_labelled(REFERENCES, {})
+
+    assert len(labelled) == 132
+    assert {case.kind for case in labelled} == {"reference"}
+    assert all(case.expected == {1: "correct"} and not case.planted for case in labelled)
 
 
 def test_no_answer_is_the_sentence_that_code_takes_for_a_decline() -> None:

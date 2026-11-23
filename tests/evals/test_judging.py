@@ -145,6 +145,26 @@ def test_kappa_is_quoted_to_four_places() -> None:
     assert quoted == 0.3636
 
 
+@pytest.mark.parametrize(
+    "judged",
+    [
+        ["correct", "correct", "correct"],
+        # One alarm on labels that are all correct makes kappa 0, which says nothing either.
+        ["correct", "partial", "correct"],
+    ],
+)
+def test_kappa_is_not_quoted_for_labels_that_all_make_the_same_decision(
+    judged: list[str],
+) -> None:
+    pairs = [Pair(case, 1, "correct", verdict) for case, verdict in zip("abc", judged, strict=True)]
+    agreement = measure_agreement(pairs, verdicts=CORRECT.verdicts, faults=CORRECT.faults)
+
+    headline = agreement_headline(agreement)
+
+    assert headline["kappa"] is None
+    assert headline["recall"] is None
+
+
 def test_a_fingerprint_is_of_the_text_as_it_reads_in_any_script() -> None:
     # Pinned values. Saved verdicts are found by them, so they must not move.
     german = CorrectnessCase(

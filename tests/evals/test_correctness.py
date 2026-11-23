@@ -451,6 +451,58 @@ def test_a_labelled_answer_that_cannot_be_trusted_stops_the_check(
         load_labelled_correctness(write_cases(tmp_path, row), {})
 
 
+# A reference answer needs no reader: it is correct by what "correct" means here.
+REFERENCE_ROW = {
+    field: value
+    for field, value in labelled_row(
+        "q001-ref", kind="reference", answer="Sixteen weeks, fully paid."
+    ).items()
+    if field != "readers"
+}
+
+
+def test_a_reference_answer_given_as_the_answer_is_a_case_with_nothing_planted(
+    tmp_path: Path,
+) -> None:
+    (reference,) = load_labelled_correctness(write_cases(tmp_path, REFERENCE_ROW), {})
+
+    assert reference.case == dataclasses.replace(
+        CASE, case_id="q001-ref", answer="Sixteen weeks, fully paid."
+    )
+    assert (reference.kind, reference.expected, reference.planted) == (
+        "reference",
+        {1: "correct"},
+        {},
+    )
+    # Counted as an answer without a planted fault, wherever faults are counted by kind.
+    judged = Judgement("q001-ref", (StatementVerdict(1, "correct", ""),), MODEL)
+    (pair,) = labelled_pairs([reference], {"q001-ref": judged})
+    assert (pair.expected, pair.judged, pair.kind) == ("correct", "correct", "real")
+
+
+@pytest.mark.parametrize(
+    ("changes", "problem"),
+    [
+        ({"expected": "partial"}, "q001-ref is a reference answer and is labelled partial"),
+        ({"expected": "incorrect"}, "is labelled incorrect, not correct"),
+        ({"expected": "unclear"}, "is labelled unclear, not correct"),
+        (
+            {"answer": "Sixteen weeks, fully paid"},
+            "q001-ref is of the kind reference, and its answer is not the reference answer",
+        ),
+        ({"answer": "sixteen weeks, fully paid."}, "not the reference answer word for word"),
+        ({"answer": "Sixteen weeks, fully paid. "}, "not the reference answer word for word"),
+    ],
+)
+def test_a_reference_case_that_is_not_the_reference_labelled_correct_is_refused(
+    tmp_path: Path, changes: dict[str, Any], problem: str
+) -> None:
+    row = {**REFERENCE_ROW, **changes}
+
+    with pytest.raises(DatasetError, match=rf"cases\.jsonl:1: .*{re.escape(problem)}"):
+        load_labelled_correctness(write_cases(tmp_path, row), {})
+
+
 def test_other_faults_in_the_file_of_labelled_answers_are_reported(tmp_path: Path) -> None:
     twice = write_cases(tmp_path, labelled_row(), labelled_row())
     with pytest.raises(DatasetError, match=r"cases\.jsonl:2: the id q001 is used twice"):

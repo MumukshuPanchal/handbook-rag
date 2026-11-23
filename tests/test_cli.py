@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 from handbook_rag import __version__, wiring
 from handbook_rag.cli import app
 from handbook_rag.config import Settings, get_settings
+from handbook_rag.evals.careful import Pacer
 from handbook_rag.evals.correctness import CORRECT, CorrectnessCase
 from handbook_rag.evals.judge import JudgeError, Judgement, StatementVerdict, SupportCase
 from handbook_rag.evals.judging import Criterion
@@ -2177,3 +2178,106 @@ def test_eval_correct_scores_a_wrong_answer_as_not_correct(
     assert "Gets a correct answer        0.000" in result.output
     assert "Right call                   1.000" in result.output
     assert "read 1 answers: 0 correct, 0 partial, 1 incorrect" in result.output
+
+
+# The control for the correctness judge: the reference answers given as answers.
+
+
+def reference_cases(tmp_path: Path, *references: str) -> list[str]:
+    """A file of reference answers, each given as the answer, and the check that reads it."""
+    rows = [
+        {
+            "case": f"q{number:03d}-ref",
+            "question_id": f"q{number:03d}",
+            "kind": "reference",
+            "question": f"Question {number}?",
+            "reference": reference,
+            "answer": reference,
+            "expected": "correct",
+        }
+        for number, reference in enumerate(references, start=1)
+    ]
+    path = tmp_path / "references.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    return [
+        "eval-judge",
+        "--criterion",
+        "correct",
+        "--cases",
+        str(path),
+        "--output",
+        str(tmp_path / "judge-correct"),
+        "--variant",
+        "references",
+    ]
+
+
+def no_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the pace of a real run without waiting for it."""
+    monkeypatch.setattr(
+        "handbook_rag.cli.Pacer", lambda per_minute: Pacer(per_minute, sleep=lambda _s: None)
+    )
+
+
+def test_a_check_on_reference_answers_says_there_was_nothing_to_catch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    no_waiting(monkeypatch)
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+
+    result = runner.invoke(app, reference_cases(tmp_path, "Sixteen weeks.", "Form B."))
+
+    assert result.exit_code == 0, result.output
+    assert sorted(judge.asked) == ["q001-ref", "q002-ref"]
+    assert "judged       2 of 2 answers, 0 failed" in result.output
+    assert "Same decision                1.000  (95% interval 0.342 to 1.000, n=2)" in result.output
+    assert (
+        "Faults caught (recall)       nothing to catch: the labels hold no answers labelled "
+        "not correct" in result.output
+    )
+    # Agreement beyond chance means nothing on labels that all make the same decision.
+    assert "Kappa                        not measured: every label makes the same decision" in (
+        result.output
+    )
+    assert "Kappa                        1.000" not in result.output
+    assert "Alarms that were right" not in result.output
+    assert "Caught," not in result.output
+    run_dir = tmp_path / "judge-correct" / "references"
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["criterion"] == "correct"
+    assert (summary["answers_labelled"], summary["answers_judged"]) == (2, 2)
+    agreement = summary["agreement"]
+    assert (agreement["recall"], agreement["precision"], agreement["kappa"]) == (None, None, None)
+    assert agreement["same_decision"]["mean"] == 1.0
+    assert agreement["caught"] == {}
+    assert (run_dir / "disagreements.jsonl").read_text() == ""
+
+
+def test_a_reference_answer_the_judge_does_not_call_correct_is_a_false_alarm(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    no_waiting(monkeypatch)
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", FakeJudge().build)
+
+    # The stand-in judge faults whatever says "eighteen", the reference answer too.
+    result = runner.invoke(app, reference_cases(tmp_path, "Sixteen weeks.", "Eighteen days."))
+
+    assert result.exit_code == 0, result.output
+    assert "q002-ref  NOT CORRECT" in result.output
+    assert "Same decision                0.500" in result.output
+    assert "nothing to catch" in result.output
+    assert "Alarms that were right       0.000  (95% interval 0.000 to 0.793, n=1)" in (
+        result.output
+    )
+    # A single alarm on labels that are all correct makes kappa 0, which says nothing.
+    assert "Kappa                        not measured" in result.output
+    run_dir = tmp_path / "judge-correct" / "references"
+    (alarm,) = map(json.loads, (run_dir / "disagreements.jsonl").read_text().splitlines())
+    assert (alarm["case"], alarm["kind"], alarm["expected"], alarm["judged"]) == (
+        "q002-ref",
+        "real",
+        "correct",
+        "incorrect",
+    )
+    assert json.loads((run_dir / "summary.json").read_text())["agreement"]["kappa"] is None

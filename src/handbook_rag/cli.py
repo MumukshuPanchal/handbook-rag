@@ -1094,7 +1094,17 @@ def eval_judge(
     _echo_estimate("Same decision", agreement.same_decision)
     _echo_estimate("Faults caught (recall)", agreement.recall)
     _echo_estimate("Alarms that were right", agreement.precision)
-    typer.echo(f"  {'Kappa':<28} {agreement.kappa:.3f}")
+    if agreement.recall is None:
+        # A set with no fault in it, such as the reference answers given as answers,
+        # checks only that the judge passes what it should.
+        typer.echo(
+            f"  {'Faults caught (recall)':<28} nothing to catch: the labels hold no "
+            f"{criterion.faults_phrase}"
+        )
+    if agreement.labels_hold_both_decisions:
+        typer.echo(f"  {'Kappa':<28} {agreement.kappa:.3f}")
+    else:
+        typer.echo(f"  {'Kappa':<28} not measured: every label makes the same decision")
     for kind, (caught, total) in agreement.caught.items():
         typer.echo(f"  Caught, {kind}: {caught} of {total}")
     _echo_estimate("Same verdict on the answer", agreement.same_answer)

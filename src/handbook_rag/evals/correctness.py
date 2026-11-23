@@ -46,6 +46,10 @@ PLANTED_KINDS = (
 )
 """The kinds of fault that are planted in copies of real answers, to check the judge."""
 
+REFERENCE = "reference"
+"""The kind of a labelled answer that is the reference answer itself, word for word. A
+judge that does not call such an answer correct is out of step with its own measure."""
+
 CORRECTNESS_INSTRUCTIONS = """\
 You check answers that an assistant gave to questions about a company handbook. For each \
 question there is a reference answer, which is taken to be right. You decide one thing: \
@@ -259,9 +263,11 @@ def load_labelled_correctness(
     """Read answers whose verdict is known. Each line holds everything the judge reads.
 
     A line gives the question, the reference answer, the answer and the labelled verdict.
-    Its ``kind`` is ``real`` for an answer as the assistant wrote it, or names the fault
-    that was planted in a copy. A copy with a planted fault cannot be labelled
-    ``correct``: the fault would not be one.
+    Its ``kind`` is ``real`` for an answer as the assistant wrote it, ``reference`` for
+    the reference answer given as the answer, or names the fault that was planted in a
+    copy. A copy with a planted fault cannot be labelled ``correct``: the fault would not
+    be one. A reference answer can be labelled nothing else, and has to be the reference
+    answer word for word: anything else would be a label that no reader made.
     """
     if not path.is_file():
         raise DatasetError(f"labelled answers not found: {path}")
@@ -286,11 +292,21 @@ def load_labelled_correctness(
             raise DatasetError(
                 f"{path}:{number}: {case.case_id} has an unknown verdict: {expected!r}"
             )
-        if kind not in {REAL, *PLANTED_KINDS}:
+        if kind not in {REAL, REFERENCE, *PLANTED_KINDS}:
             raise DatasetError(f"{path}:{number}: {case.case_id} is of an unknown kind: {kind!r}")
-        if kind != REAL and expected == "correct":
+        if kind in PLANTED_KINDS and expected == "correct":
             raise DatasetError(
                 f"{path}:{number}: {case.case_id} has a planted fault and is labelled correct"
+            )
+        if kind == REFERENCE and expected != "correct":
+            raise DatasetError(
+                f"{path}:{number}: {case.case_id} is a reference answer and is labelled "
+                f"{expected}, not correct"
+            )
+        if kind == REFERENCE and case.answer != case.reference:
+            raise DatasetError(
+                f"{path}:{number}: {case.case_id} is of the kind reference, and its answer is "
+                "not the reference answer word for word"
             )
         if case.case_id in seen:
             raise DatasetError(f"{path}:{number}: the id {case.case_id} is used twice")
@@ -302,7 +318,7 @@ def load_labelled_correctness(
                 f"{same_words[case.fingerprint]} says"
             )
         same_words[case.fingerprint] = case.case_id
-        planted = {} if kind == REAL else {1: kind}
+        planted = {1: kind} if kind in PLANTED_KINDS else {}
         cases.append(LabelledCase(case, kind, {1: expected}, planted))
     if not cases:
         raise DatasetError(f"{path} holds no labelled answer")

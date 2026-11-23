@@ -131,6 +131,35 @@ def test_without_any_fault_or_any_alarm_there_is_no_recall_or_precision_to_repor
     assert agreement.kappa == 1.0
 
 
+@pytest.mark.parametrize(
+    ("rows", "both"),
+    [
+        # A fault and a sound statement among the labels: kappa can say something.
+        (
+            (
+                ("a", 1, "unsupported", "supported", "number"),
+                ("b", 1, "supported", "supported", "real"),
+            ),
+            True,
+        ),
+        # Only sound statements, whatever the judge said.
+        (
+            (
+                ("a", 1, "supported", "unsupported", "real"),
+                ("b", 1, "no_claim", "supported", "real"),
+            ),
+            False,
+        ),
+        # Only faults.
+        ((("a", 1, "unsupported", "unsupported", "number"),), False),
+    ],
+)
+def test_it_is_known_whether_the_labels_make_the_decision_both_ways(
+    rows: tuple[tuple[str, int, str, str, str], ...], both: bool
+) -> None:
+    assert measure_agreement(pairs(*rows)).labels_hold_both_decisions is both
+
+
 def test_a_judge_that_never_raises_an_alarm_is_no_better_than_chance() -> None:
     agreement = measure_agreement(
         pairs(

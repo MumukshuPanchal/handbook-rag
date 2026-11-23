@@ -355,7 +355,8 @@ def agreement_headline(agreement: Agreement) -> dict[str, object]:
         "same_decision": figures(agreement.same_decision),
         "recall": figures(agreement.recall),
         "precision": figures(agreement.precision),
-        "kappa": round(agreement.kappa, 4),
+        # Left out where it would say nothing (see Agreement.labels_hold_both_decisions).
+        "kappa": round(agreement.kappa, 4) if agreement.labels_hold_both_decisions else None,
         "caught": {kind: list(counts) for kind, counts in agreement.caught.items()},
         "matrix": agreement.matrix,
         "answers": agreement.answers,

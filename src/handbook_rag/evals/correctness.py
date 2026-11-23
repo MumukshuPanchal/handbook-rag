@@ -34,6 +34,18 @@ CORRECT_VERDICTS: tuple[str, ...] = ("correct", "partial", "incorrect")
 NOT_CORRECT = frozenset({"partial", "incorrect"})
 """The verdicts that count against an answer. The score is the share judged ``correct``."""
 
+PLANTED_KINDS = (
+    "number",
+    "name",
+    "negation",
+    "scope",
+    "contradiction",
+    "other_question",
+    "no_answer",
+    "omission",
+)
+"""The kinds of fault that are planted in copies of real answers, to check the judge."""
+
 CORRECTNESS_INSTRUCTIONS = """\
 You check answers that an assistant gave to questions about a company handbook. For each \
 question there is a reference answer, which is taken to be right. You decide one thing: \
@@ -255,6 +267,7 @@ def load_labelled_correctness(
         raise DatasetError(f"labelled answers not found: {path}")
     cases: list[LabelledCase[CorrectnessCase]] = []
     seen: set[str] = set()
+    same_words: dict[str, str] = {}
     for number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
         if not line.strip():
             continue
@@ -273,6 +286,8 @@ def load_labelled_correctness(
             raise DatasetError(
                 f"{path}:{number}: {case.case_id} has an unknown verdict: {expected!r}"
             )
+        if kind not in {REAL, *PLANTED_KINDS}:
+            raise DatasetError(f"{path}:{number}: {case.case_id} is of an unknown kind: {kind!r}")
         if kind != REAL and expected == "correct":
             raise DatasetError(
                 f"{path}:{number}: {case.case_id} has a planted fault and is labelled correct"
@@ -280,6 +295,13 @@ def load_labelled_correctness(
         if case.case_id in seen:
             raise DatasetError(f"{path}:{number}: the id {case.case_id} is used twice")
         seen.add(case.case_id)
+        if case.fingerprint in same_words:
+            # The judge would rule once, and that one verdict would be held against two labels.
+            raise DatasetError(
+                f"{path}:{number}: {case.case_id} says word for word what "
+                f"{same_words[case.fingerprint]} says"
+            )
+        same_words[case.fingerprint] = case.case_id
         planted = {} if kind == REAL else {1: kind}
         cases.append(LabelledCase(case, kind, {1: expected}, planted))
     if not cases:
@@ -288,8 +310,12 @@ def load_labelled_correctness(
 
 
 def _text(value: object) -> str:
-    """A field as it must be written: text that says something."""
-    if not isinstance(value, str) or not value.strip():
+    """A field as it must be written: text that says something.
+
+    Text of nothing but punctuation is refused as well. As an answer the judge would
+    refuse it, and the check would spend its attempts on a case that can only fail.
+    """
+    if not isinstance(value, str) or not _says_something(value):
         raise TypeError(f"expected text, not {value!r}")
     return value
 

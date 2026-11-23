@@ -5,21 +5,16 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from handbook_rag.evals.correctness import CORRECT, CORRECT_VERDICTS, NOT_CORRECT
+from handbook_rag.evals.correctness import (
+    CORRECT,
+    CORRECT_VERDICTS,
+    NOT_CORRECT,
+    PLANTED_KINDS,
+)
 from handbook_rag.evals.judging import UNCLEAR
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
 
 CASES = Path(__file__).parents[2] / "evals" / "judge" / "correct" / "cases.jsonl"
-FAULTS = {
-    "number",
-    "name",
-    "negation",
-    "scope",
-    "contradiction",
-    "other_question",
-    "no_answer",
-    "omission",
-}
 
 
 def cases() -> list[dict[str, Any]]:
@@ -37,7 +32,7 @@ def test_real_answers_and_planted_faults_are_in_the_stated_numbers() -> None:
     kinds = Counter(case["kind"] for case in cases())
 
     assert kinds.pop("real") == 127
-    assert kinds == dict.fromkeys(FAULTS, 5)
+    assert kinds == dict.fromkeys(PLANTED_KINDS, 5)
 
 
 def test_the_verdicts_are_in_the_numbers_the_dataset_card_gives() -> None:

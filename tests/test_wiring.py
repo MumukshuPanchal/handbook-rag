@@ -270,8 +270,6 @@ def test_the_saved_checks_are_of_the_judges_the_code_builds_today() -> None:
     criteria: tuple[Criterion[Any], ...] = (SUPPORT, CORRECT)
     for criterion in criteria:
         check = root / criterion.checks_dir.name / "baseline" / "run.json"
-        if not check.is_file():
-            continue
         saved = json.loads(check.read_text(encoding="utf-8"))["config"]
         assert saved == describe_judge(Settings(), criterion), criterion.name
         scored = root / "answers" / "baseline" / criterion.state_file

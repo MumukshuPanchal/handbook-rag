@@ -2100,6 +2100,26 @@ def test_eval_correct_uses_a_check_of_its_own_judge_and_refuses_the_other_ones(
     assert summary["judges"]["correct"]["check"]["answers"] == {"labelled": 2, "judged": 2}
 
 
+def test_a_check_of_one_judge_cannot_be_started_over_the_check_of_the_other(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    assert runner.invoke(app, [*judged_run["judge"], "--variant", "baseline"]).exit_code == 0
+    kept = (judged_run["checks"] / "baseline" / "judgements.jsonl").read_text()
+    # The second judge's check is pointed at the first one's directory, and told to restart.
+    command = [*judged_run["judge_correct"][:-1], str(judged_run["checks"])]
+
+    result = runner.invoke(app, [*command, "--variant", "baseline", "--restart"])
+
+    assert result.exit_code == 1
+    assert "holds a check of the judge for 'support', not for 'correct'" in result.output
+    assert "Give this check another --output or --variant." in result.output
+    # Nothing of the first judge's check was discarded, and nothing was asked.
+    assert (judged_run["checks"] / "baseline" / "judgements.jsonl").read_text() == kept
+    assert judge.built_for == ["support"]
+
+
 def test_eval_correct_scores_a_wrong_answer_as_not_correct(
     monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
 ) -> None:

@@ -891,6 +891,27 @@ def _judge_check_to_quote(
     return load_judgements(check_stage.rows_path, criterion.verdicts), check
 
 
+def _refuse_the_check_of_another_judge(criterion: Criterion[Any], run_dir: Path) -> None:
+    """Refuse a directory that holds a check of the judge of another criterion.
+
+    The two checks use the same file names. Without this, restarting a check with the
+    directory of the other one would discard verdicts that took a share of a day's
+    requests to make.
+    """
+    summary = run_dir / "summary.json"
+    if not summary.is_file():
+        return
+    try:
+        held = json.loads(summary.read_text(encoding="utf-8")).get("criterion")
+    except (json.JSONDecodeError, AttributeError):
+        return
+    if isinstance(held, str) and held != criterion.name:
+        raise SavedRunError(
+            f"{run_dir} holds a check of the judge for '{held}', not for "
+            f"'{criterion.name}'. Give this check another --output or --variant."
+        )
+
+
 def _judge_stopped_badly(run: JudgeRun, max_requests: int | None) -> bool:
     """Whether a judge run ended in a way the caller did not plan."""
     planned = max_requests is not None and run.attempts >= max_requests
@@ -962,6 +983,7 @@ def eval_judge(
     run_dir = (output or criterion.checks_dir) / variant
     stage = judge_check_stage(run_dir)
     try:
+        _refuse_the_check_of_another_judge(criterion, run_dir)
         if not restart:
             stage.check(config)
         # Only a judge that is shown passages needs the handbook to be read and cut up.

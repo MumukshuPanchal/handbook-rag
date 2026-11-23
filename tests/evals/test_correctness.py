@@ -175,6 +175,11 @@ def test_a_reply_that_is_not_in_the_agreed_form_is_refused(reply: str) -> None:
         read_verdict(reply)
 
 
+def test_the_refusal_of_a_reply_says_what_is_wrong_with_it() -> None:
+    with pytest.raises(JudgeError, match="not in the agreed form: Field required"):
+        read_verdict('{"verdict": "correct"}')
+
+
 # The request
 
 
@@ -432,6 +437,8 @@ def test_labelled_answers_hold_everything_the_judge_reads(tmp_path: Path) -> Non
         (labelled_row(expected="mostly"), "q001 has an unknown verdict: 'mostly'"),
         (labelled_row(kind="number"), "q001 has a planted fault and is labelled correct"),
         (labelled_row(answer="  "), "not a labelled answer: expected text, not '  '"),
+        (labelled_row(answer="..."), "not a labelled answer: expected text, not '...'"),
+        (labelled_row(kind="numbr", expected="incorrect"), "q001 is of an unknown kind: 'numbr'"),
         (labelled_row(reference=None), "not a labelled answer: expected text, not None"),
         (labelled_row(question=["How long?"]), "not a labelled answer: expected text"),
         ({"case": "q001", "question": "How long?"}, "not a labelled answer: 'reference'"),
@@ -448,6 +455,11 @@ def test_other_faults_in_the_file_of_labelled_answers_are_reported(tmp_path: Pat
     twice = write_cases(tmp_path, labelled_row(), labelled_row())
     with pytest.raises(DatasetError, match=r"cases\.jsonl:2: the id q001 is used twice"):
         load_labelled_correctness(twice, {})
+
+    # The same words under two labels: the judge would rule once, for both.
+    same = write_cases(tmp_path, labelled_row(), labelled_row("q009", expected="partial"))
+    with pytest.raises(DatasetError, match=r"cases\.jsonl:2: q009 says word for word what q001"):
+        load_labelled_correctness(same, {})
 
     broken = tmp_path / "broken.jsonl"
     broken.write_text("{not json\n")

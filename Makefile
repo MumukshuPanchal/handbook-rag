@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve eval-retrieval eval-answers eval-judge eval-support eval-correct eval-compare eval-table eval-gate golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve eval-retrieval eval-answers eval-judge eval-judge-correct eval-support eval-correct eval-compare eval-table eval-gate golden-check golden-review
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -65,6 +65,9 @@ eval-answers: ## Answer every golden question and score what code can check (one
 
 eval-judge: ## Check the judge against labelled answers (one real request for each answer)
 	uv run handbook-rag eval-judge
+
+eval-judge-correct: ## Check the correctness judge against its labelled answers (one real request for each answer)
+	uv run handbook-rag eval-judge --criterion correct
 
 eval-support: ## Judge the saved answers of the scratch run: is each statement backed by its passage?
 	uv run handbook-rag eval-support

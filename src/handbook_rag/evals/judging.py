@@ -164,11 +164,14 @@ def load_judgements(path: Path, verdicts: Collection[str]) -> dict[str, Judgemen
     """Read saved judgements, by the fingerprint of what was judged. The latest one wins.
 
     ``verdicts`` are the verdicts the criterion allows. A row with any other is reported:
-    it was edited, or it belongs to another criterion.
+    it was edited, or it belongs to another criterion. So is a row with no verdict at
+    all, which would otherwise pass as an answer that nothing counts against.
     """
     judgements: dict[str, Judgement] = {}
     for number, row in load_rows(path):
         try:
+            if not row["verdicts"]:
+                raise ValueError("it holds no verdict")
             judgements[str(row["fingerprint"])] = Judgement(
                 case_id=str(row["case"]),
                 verdicts=tuple(

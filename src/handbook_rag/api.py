@@ -1,33 +1,51 @@
 """The HTTP API: the assistant as a service that other programs can call.
 
-Two endpoints so far: ``POST /search`` returns the passages most relevant to a question,
-and ``GET /health`` says whether the service can do its job. ``POST /ask``, which
-answers with citations, arrives with the answering step.
+Three endpoints: ``POST /ask`` answers a question with citations, as one JSON response
+or as server-sent events while the model writes; ``POST /search`` returns the passages
+most relevant to a question; and ``GET /health`` says whether the service can do its job.
+Why ``/ask`` works the way it does is in ADR 0015.
 
 The application is built by :func:`create_app`, a factory. Tests build one with stand-in
 parts; ``handbook-rag serve`` builds the real one.
 """
 
+import json
 import logging
+import math
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, MutableMapping
 from contextlib import asynccontextmanager, suppress
 from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from starlette.types import Receive, Scope, Send
 
 from handbook_rag import __version__, wiring
 from handbook_rag.config import Settings, get_settings
+from handbook_rag.generate.base import GenerationError, Generator
+from handbook_rag.generate.models import Answer
 from handbook_rag.index.store import (
     CollectionMissingError,
     ScoredChunk,
     VectorStore,
     VectorStoreError,
 )
+from handbook_rag.ingest.models import Chunk
+from handbook_rag.pipeline import answer_question
 from handbook_rag.retrieve.dense import Retriever
+from handbook_rag.streaming import (
+    AnswerRun,
+    Failed,
+    Finished,
+    OnText,
+    OnTrace,
+    Slots,
+    Text,
+    server_sent_event,
+)
 from handbook_rag.tracing import configure_tracing, record_query, record_results, stage, trace_id
 
 # Limits on what a caller may send. A question longer than this is not a question, and
@@ -43,10 +61,25 @@ WARM_UP_QUERY = "warm up"
 # Where a caller finds the id of the request's trace, on success and on failure.
 TRACE_HEADER = "X-Trace-Id"
 
+# What a caller who is turned away because answers are full should wait, in seconds. A
+# typical answer took two to three seconds when measured, and 95% took under ten.
+BUSY_RETRY_AFTER_SECONDS = 5
+# The headers of a stream. A proxy that holds a response back until it is complete
+# would hold back every event; these two ask caches and proxies not to.
+STREAM_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
 UNAVAILABLE = "The search index is unavailable. Try again later."
 NOT_BUILT = "The index has not been built. Run `handbook-rag index`."
 EMPTY = "The index is empty. Run `handbook-rag index`."
 UNREACHABLE = "The vector store cannot be reached."
+# What a caller of /ask is told when no answer can be given. Fixed words: the messages
+# of the errors behind them name files, settings and the provider's own wording.
+NOT_CONFIGURED = "Answering is not configured on this server."
+BUSY = "The service is writing as many answers as it can. Try again in a few seconds."
+MODEL_RATE_LIMITED = "The answer model's rate limit was reached. Try again shortly."
+MODEL_QUOTA = "The answer model's allowance for today is used up. Try again tomorrow."
+MODEL_UNAVAILABLE = "The answer model is unavailable. Try again later."
+NOT_FINISHED = "The answer could not be finished."
 
 logger = logging.getLogger(__name__)
 
@@ -118,13 +151,293 @@ class SearchResponse(BaseModel):
     )
 
 
+class AskRequest(BaseModel):
+    """A question to answer from the handbook."""
+
+    # A misspelt field is rejected instead of being ignored without a word.
+    model_config = ConfigDict(extra="forbid")
+
+    query: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_QUERY_CHARS),
+    ] = Field(description="The question, in plain language.")
+    section: str | None = Field(
+        default=None,
+        max_length=100,
+        description="Answer only from one handbook section, such as 'engineering'.",
+    )
+    stream: bool = Field(
+        default=False,
+        # Strict: "true" and 1 are mistakes by the caller, not yes.
+        strict=True,
+        description=(
+            "Send the answer as server-sent events while the model writes it, instead of "
+            "one JSON response at the end."
+        ),
+    )
+
+
+class Source(BaseModel):
+    """A passage the answer cites, under the number the answer gives it."""
+
+    number: int = Field(description="The number in the answer's markers: 1 for [1].")
+    doc_id: str = Field(description="The page, as its path in the handbook.")
+    title: str
+    url: str = Field(description="Where the page can be read.")
+    section: str
+    heading_path: list[str] = Field(description="The headings above the passage, outermost first.")
+    text: str
+
+    @classmethod
+    def from_chunk(cls, number: int, chunk: Chunk) -> "Source":
+        return cls(
+            number=number,
+            doc_id=chunk.doc_id,
+            title=chunk.title,
+            url=chunk.url,
+            section=chunk.section,
+            heading_path=list(chunk.heading_path),
+            text=chunk.text,
+        )
+
+
+class AnswerSegment(BaseModel):
+    """A run of the answer's text, with the sources it rests on."""
+
+    text: str
+    sources: list[int] = Field(
+        description="The numbers of the sources this text rests on. Empty when it cites none."
+    )
+
+
+class Usage(BaseModel):
+    """The tokens of the request to the model."""
+
+    input_tokens: int = Field(
+        description="Tokens the model read, not counting any served from the provider's cache."
+    )
+    output_tokens: int = Field(description="Tokens the model wrote, its reasoning included.")
+
+
+class AskResponse(BaseModel):
+    """An answer, with the passages it cites."""
+
+    answer: str = Field(
+        description=(
+            "The answer, with a numbered marker such as [1] after each statement a source "
+            "supports. A reply that is not an answer carries no markers."
+        )
+    )
+    answered: bool = Field(
+        description=(
+            "False when the assistant declined, the provider withheld the reply, or the "
+            "reply did not come to a proper end."
+        )
+    )
+    segments: list[AnswerSegment] = Field(description="The answer in order, piece by piece.")
+    sources: list[Source] = Field(
+        description="The cited passages, numbered as in the answer. Empty when it is not an answer."
+    )
+    model: str = Field(description="The model that wrote the reply.")
+    stop_reason: str = Field(
+        description="Why the model stopped: end_turn, max_tokens, refusal, no_context or another."
+    )
+    usage: Usage
+    took_ms: float = Field(description="Time from the request to the whole answer, in ms.")
+    first_text_ms: float | None = Field(
+        description=(
+            "Time from the request to the first words of the answer, in milliseconds. "
+            "Null when no text came."
+        )
+    )
+    trace_id: str | None = Field(
+        description=(
+            "The id of this request's trace, when tracing is on. Quote it in a bug report. "
+            f"It is also sent in the {TRACE_HEADER} header, on failures too."
+        )
+    )
+
+
+class Problem(BaseModel):
+    """Why a request could not be served, in fixed words."""
+
+    detail: str
+
+
 class Health(BaseModel):
     """Whether the service can answer requests."""
 
     status: Literal["ok", "unavailable"]
     version: str
     chunks: int | None = Field(description="How many chunks the index holds, if it can be reached.")
+    answering: bool = Field(
+        description=(
+            "Whether an answer model is configured, so that POST /ask can answer. Found out "
+            "from the settings, without a request to the model."
+        )
+    )
     detail: str | None = None
+
+
+# How /ask describes its two forms of success in the API's documentation.
+ASK_SUCCESS = (
+    "The answer. By default one JSON object, described below. With `stream` true, a "
+    "stream of server-sent events (`text/event-stream`): each piece of text as the model "
+    'writes it, as `event: text` with `data: {"text": "..."}`, then one `event: answer` '
+    "whose data is the same JSON object. If the answer fails after it has begun, the "
+    'stream ends with one `event: error` with `data: {"detail": "..."}` instead.'
+)
+ASK_STREAM_EXAMPLE = (
+    "event: text\n"
+    'data: {"text":"New parents get sixteen weeks of paid leave."}\n'
+    "\n"
+    "event: answer\n"
+    'data: {"answer":"New parents get sixteen weeks of paid leave.[1]","answered":true,'
+    '"segments":[{"text":"New parents get sixteen weeks of paid leave.","sources":[1]}],'
+    '"sources":[{"number":1,"doc_id":"people/leave.md","title":"Leave",'
+    '"url":"https://handbook.example.com/handbook/people/leave/","section":"people",'
+    '"heading_path":["Parental leave"],"text":"New parents get sixteen weeks of paid leave."}],'
+    '"model":"gemini-3.5-flash-lite","stop_reason":"end_turn",'
+    '"usage":{"input_tokens":1200,"output_tokens":20},"took_ms":1500.0,"first_text_ms":1300.0,'
+    '"trace_id":null}\n'
+    "\n"
+)
+ASK_UNAVAILABLE = (
+    "No answer could be started, or none could be finished before anything was sent: the "
+    "vector store or the answer model is unavailable, the model's limit was reached, "
+    "answering is not configured, or the service is writing as many answers as it can. "
+    "The body says which, in fixed words. This is also the response when `stream` is true "
+    "and the failure came before the first text."
+)
+
+
+def _json_line(value: object) -> str:
+    """JSON on one line, as compact as the framework writes it, with text left in UTF-8."""
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+
+
+def _respond(answer: Answer, *, started: float, run: AnswerRun) -> AskResponse:
+    """The response to a question, from the answer and the run that wrote it."""
+    # A reply that is not an answer lists no sources, even if the model attached one to
+    # it. The command line does the same. Its markers would then point at nothing.
+    sources = answer.sources if answer.answered else ()
+    numbers = {chunk.chunk_id: number for number, chunk in enumerate(sources, start=1)}
+    first_text = None if run.first_text_at is None else _milliseconds(run.first_text_at - started)
+    return AskResponse(
+        answer=answer.text_with_markers if answer.answered else answer.text,
+        answered=answer.answered,
+        segments=[
+            AnswerSegment(
+                text=segment.text,
+                sources=sorted(
+                    {
+                        numbers[citation.chunk.chunk_id]
+                        for citation in segment.citations
+                        if citation.chunk.chunk_id in numbers
+                    }
+                ),
+            )
+            for segment in answer.segments
+        ],
+        sources=[Source.from_chunk(number, chunk) for number, chunk in enumerate(sources, 1)],
+        model=answer.model,
+        stop_reason=answer.stop_reason,
+        usage=Usage(
+            input_tokens=answer.usage.input_tokens, output_tokens=answer.usage.output_tokens
+        ),
+        took_ms=_milliseconds(time.perf_counter() - started),
+        first_text_ms=first_text,
+        trace_id=run.trace_id,
+    )
+
+
+def _milliseconds(seconds: float) -> float:
+    return round(seconds * 1000, 1)
+
+
+def _refusal(error: BaseException) -> tuple[str, dict[str, str]] | None:
+    """What a caller is told about a failure: fixed words and any headers to go with them.
+
+    ``None`` means a fault in this service, which a caller is not told about in words.
+    """
+    if isinstance(error, VectorStoreError):
+        return UNAVAILABLE, {}
+    if not isinstance(error, GenerationError):
+        return None
+    if error.reason == "rate_limit":
+        if error.retry_after is None:
+            return MODEL_RATE_LIMITED, {}
+        # The header takes whole seconds. Rounded up, so a caller who waits that long
+        # does not come back a moment too early.
+        return MODEL_RATE_LIMITED, {"Retry-After": str(max(1, math.ceil(error.retry_after)))}
+    if error.reason == "quota":
+        return MODEL_QUOTA, {}
+    return MODEL_UNAVAILABLE, {}
+
+
+def _trace_headers(run: AnswerRun) -> dict[str, str]:
+    return {TRACE_HEADER: run.trace_id} if run.trace_id is not None else {}
+
+
+class EventStream(StreamingResponse):
+    """A stream of server-sent events that stops its answer when it ends, however it ends.
+
+    When the caller goes away, the server's next attempt to send fails, or the work of
+    sending is cancelled. Either way the ``finally`` below runs and asks the worker to
+    stop, so the model does not go on writing an answer that nobody reads. The event
+    source itself is not relied on for this: a generator that stops being iterated is
+    closed only when it is garbage-collected.
+    """
+
+    media_type = "text/event-stream"
+
+    def __init__(
+        self,
+        content: AsyncIterator[bytes],
+        *,
+        on_close: Callable[[], None],
+        headers: Mapping[str, str],
+    ) -> None:
+        super().__init__(content, headers=headers)
+        self._on_close = on_close
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._on_close()
+
+
+async def _events(run: AnswerRun, first: Text | Finished, started: float) -> AsyncIterator[bytes]:
+    """The events of a stream that has begun: text, then the answer or an error."""
+    event: Text | Finished | Failed = first
+    while isinstance(event, Text):
+        yield server_sent_event("text", _json_line({"text": event.text}))
+        event = await run.next()
+    if isinstance(event, Finished):
+        body = _respond(event.answer, started=started, run=run)
+        yield server_sent_event("answer", _json_line(body.model_dump(mode="json")))
+        return
+    refusal = _refusal(event.error)
+    if refusal is None:
+        logger.error("answer failed after it began, trace %s", run.trace_id, exc_info=event.error)
+        detail = NOT_FINISHED
+    else:
+        logger.warning("answer failed after it began, trace %s: %s", run.trace_id, event.error)
+        detail = refusal[0]
+    yield server_sent_event("error", _json_line({"detail": detail}))
+
+
+def _answer_model(settings: Settings) -> Generator | None:
+    """The answer model, or ``None`` when the settings do not allow one, such as without a key.
+
+    Searching needs no answer model, so the service starts without one and says so.
+    """
+    try:
+        return wiring.make_generator(settings)
+    except GenerationError as error:
+        logger.warning("answering is not configured: %s", error)
+        return None
 
 
 def _is_health_check(scope: MutableMapping[str, Any]) -> bool:
@@ -141,11 +454,12 @@ def create_app(
     *,
     retriever: Retriever | None = None,
     store: VectorStore | None = None,
+    generator: Generator | None = None,
 ) -> FastAPI:
     """Build the application.
 
     Whatever is not passed is built from the settings when the application starts.
-    Tests pass a ``retriever`` and a ``store`` made of stand-in parts.
+    Tests pass a ``retriever``, a ``store`` and a ``generator`` made of stand-in parts.
     """
     settings = settings or get_settings()
     # A service embeds one question at a time. For that a CPU is as fast as a GPU, and
@@ -174,6 +488,10 @@ def create_app(
         )
         with suppress(VectorStoreError), stage("warm_up"):
             app.state.retriever.retrieve(WARM_UP_QUERY, limit=1)
+        # Building the answer model sends no request. So a missing key is found out here,
+        # and a wrong one only by the first question.
+        app.state.generator = generator if generator is not None else _answer_model(settings)
+        app.state.answer_slots = Slots(settings.api_max_answers_in_flight)
         try:
             yield
         finally:
@@ -183,7 +501,7 @@ def create_app(
     app = FastAPI(
         title="Handbook assistant",
         version=__version__,
-        summary="Search a company handbook by meaning and by keyword.",
+        summary="Answer questions from a company handbook with cited passages, and search it.",
         lifespan=lifespan,
         telemetry={
             "exclude": _is_health_check,
@@ -235,10 +553,18 @@ def create_app(
             problem = UNREACHABLE
         if chunks == 0:
             problem = EMPTY
+        # Without an answer model the service still searches, so it is not unhealthy.
+        answering = app.state.generator is not None
         if problem is not None:
             response.status_code = 503
-            return Health(status="unavailable", version=__version__, chunks=chunks, detail=problem)
-        return Health(status="ok", version=__version__, chunks=chunks)
+            return Health(
+                status="unavailable",
+                version=__version__,
+                chunks=chunks,
+                answering=answering,
+                detail=problem,
+            )
+        return Health(status="ok", version=__version__, chunks=chunks, answering=answering)
 
     @app.post("/search", responses={503: {"description": "The vector store is unavailable."}})
     def search(request: SearchRequest, response: Response) -> SearchResponse:
@@ -273,5 +599,104 @@ def create_app(
             took_ms=round((time.perf_counter() - started) * 1000, 1),
             trace_id=traced,
         )
+
+    @app.post(
+        "/ask",
+        response_model=AskResponse,
+        responses={
+            200: {
+                "description": ASK_SUCCESS,
+                "content": {
+                    "text/event-stream": {
+                        "schema": {"type": "string"},
+                        "example": ASK_STREAM_EXAMPLE,
+                    }
+                },
+            },
+            503: {
+                "model": Problem,
+                "description": ASK_UNAVAILABLE,
+                "headers": {
+                    "Retry-After": {
+                        "description": (
+                            "Seconds to wait before asking again, when that is known: the "
+                            "service was full, or the model's per-minute limit was reached."
+                        ),
+                        "schema": {"type": "integer"},
+                    },
+                    TRACE_HEADER: {
+                        "description": "The id of the request's trace, when it was traced.",
+                        "schema": {"type": "string"},
+                    },
+                },
+            },
+        },
+    )
+    async def ask(request: AskRequest) -> Response:
+        """Answer a question from the handbook, citing the passages the answer rests on.
+
+        The answer is written in a worker thread. The request waits for the first thing
+        that happens there, and only then decides what to send: a failure before any
+        text is an HTTP error, also when a stream was asked for.
+        """
+        started = time.perf_counter()
+        generator: Generator | None = app.state.generator
+        if generator is None:
+            raise HTTPException(status_code=503, detail=NOT_CONFIGURED)
+        slots: Slots = app.state.answer_slots
+        if not slots.take():
+            raise HTTPException(
+                status_code=503,
+                detail=BUSY,
+                headers={"Retry-After": str(BUSY_RETRY_AFTER_SECONDS)},
+            )
+        retriever: Retriever = app.state.retriever
+
+        def write(on_text: OnText, on_trace: OnTrace) -> Answer:
+            return answer_question(
+                request.query,
+                retriever=retriever,
+                generator=generator,
+                limit=settings.answer_context_chunks,
+                section=request.section,
+                on_text=on_text,
+                on_trace=on_trace,
+            )
+
+        run = AnswerRun.start(write, slots)
+        try:
+            event = await run.next()
+            if request.stream and not isinstance(event, Failed):
+                # From here the stream owns the run, and stops it when it ends.
+                return EventStream(
+                    _events(run, event, started),
+                    on_close=run.stop,
+                    headers={**STREAM_HEADERS, **_trace_headers(run)},
+                )
+            while isinstance(event, Text):
+                event = await run.next()
+        except BaseException:
+            # Cancelled while waiting, as when the server shuts down: nobody will read
+            # the answer, so the model need not finish it.
+            run.stop()
+            raise
+        if isinstance(event, Finished):
+            body = _respond(event.answer, started=started, run=run)
+            return Response(
+                content=_json_line(body.model_dump(mode="json")),
+                media_type="application/json",
+                headers=_trace_headers(run),
+            )
+        refusal = _refusal(event.error)
+        if refusal is None:
+            # A fault in this service: raised again, so the server answers 500 and logs it.
+            raise event.error
+        detail, headers = refusal
+        # The cause goes to the log, not to the caller: it can name files, settings and
+        # internal addresses. The trace records the kind of error.
+        logger.warning("answer failed, trace %s: %s", run.trace_id, event.error)
+        raise HTTPException(
+            status_code=503, detail=detail, headers={**headers, **_trace_headers(run)} or None
+        ) from event.error
 
     return app

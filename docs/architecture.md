@@ -58,7 +58,9 @@ flowchart LR
 5. **Generate** an answer. The kept chunks are sent to a language model as search results. The instructions tell the model to answer only from them, to say which search result supports each statement, and to reply with one fixed sentence when they do not contain the answer. The model's name selects the provider:
    - **Gemini, the default.** The passages are numbered, the model writes the numbers as markers such as `[2]`, and our code turns the markers into citations. Details: [ADR 0013](adr/0013-gemini-free-tier-with-marker-citations.md).
    - **Claude.** The API's built-in citations return the quoted words with each statement. Details: [ADR 0010](adr/0010-search-result-blocks-and-declining.md). This generator has not been run against the Claude API yet.
-6. **Return** the answer, its citations (page, section, URL, and the quoted text when the provider reports it), whether the assistant answered or abstained, and a trace ID.
+6. **Return** the answer, its citations (page, section, URL and the passage's text; the words a Claude citation quotes are kept in the pipeline's answer but not returned yet), whether the assistant answered or abstained, and a trace ID. `POST /ask` returns them as one JSON object, or, when the request asks for a stream, sends the text as server-sent events while the model writes and the same object at the end. Details: [ADR 0015](adr/0015-answers-over-http.md).
+
+Steps 2 to 6 are one function, `answer_question` in `pipeline.py`, which the command line, the API and the evaluation all call. It also opens the spans of the answer, so every caller leaves the same trace. The API runs it in a worker thread for each answer, because the generators block while the model writes, and a setting caps how many run at once.
 
 The first working version (the baseline) used dense search only and skipped steps 3 and 4. Hybrid search is now the default, and reranking is available but switched off. Both decisions, with the measurements and the judgement behind them, are in [ADR 0011](adr/0011-hybrid-retrieval-by-default.md).
 
@@ -73,7 +75,7 @@ The first working version (the baseline) used dense search only and skipped step
 | Fusion | Merge dense and sparse rankings | Our own code (reciprocal rank fusion) | [ADR 0003](adr/0003-own-pipeline-code-instead-of-a-framework.md) |
 | Reranker | Re-score candidates against the question | sentence-transformers cross-encoder | [ADR 0005](adr/0005-local-embedding-and-reranking-models.md) |
 | Generator | Write a grounded, cited answer | Gemini through Google's API by default, or Claude through the Anthropic API | [ADR 0013](adr/0013-gemini-free-tier-with-marker-citations.md), [ADR 0006](adr/0006-claude-with-native-citations-for-generation.md), [ADR 0010](adr/0010-search-result-blocks-and-declining.md) |
-| API | HTTP interface: `POST /search` and `GET /health` today, `POST /ask` with streaming next | FastAPI | This document |
+| API | HTTP interface: `POST /ask` (JSON or server-sent events), `POST /search` and `GET /health` | FastAPI | [ADR 0015](adr/0015-answers-over-http.md) |
 | Evaluation | Measure retrieval and answer quality | Our own harness | [ADR 0007](adr/0007-evaluation-strategy.md) |
 | Tracing | Record every stage of every request | OpenTelemetry | [ADR 0008](adr/0008-opentelemetry-tracing.md) |
 
@@ -129,7 +131,7 @@ Each request produces one trace with a span per stage: dense search, sparse sear
 
 Spans are exported over OTLP to a local trace backend, and to any other OTLP-compatible backend by changing configuration.
 
-The retrieval stages are traced today, and [the observability guide](observability.md) shows how to read a trace. The model call is not traced yet: its span, with the token counts, is the next step.
+The retrieval stages and the model call are traced, and [the observability guide](observability.md) shows how to read a trace. The span of the model call uses the names of OpenTelemetry's conventions for generative AI, so a backend built for language-model applications that follows them should read it without a mapping. None has been tried.
 
 Details and reasoning: [ADR 0008](adr/0008-opentelemetry-tracing.md).
 
@@ -138,6 +140,7 @@ Details and reasoning: [ADR 0008](adr/0008-opentelemetry-tracing.md).
 - All settings come from environment variables with defaults in one settings module: model names, retrieval depth, chunk size, endpoints.
 - `.env.example` documents every variable. A real `.env` is ignored by git.
 - A model API key is read from the environment or the `.env` file and handed to its client directly. It is never exported into the process environment, and nothing in the repository contains a secret.
+- In Docker Compose, the API container gets the Gemini key from the project's `.env` file and nothing else from it: Compose fills in `${GEMINI_API_KEY}` in `compose.yaml` when it starts the container. The key is not written into that file or the image, but `docker compose config` prints it in clear text.
 
 ## Repository layout (planned)
 
@@ -167,7 +170,8 @@ compose.yaml            API, Qdrant and trace backend
 - **Abstention over invention.** When the retrieved passages do not contain the answer, the assistant says so. This behaviour is tested with unanswerable questions.
 - **No secrets in git.** Credentials live in the environment.
 - **Minimal data retention.** Questions and answers are not stored outside traces, and traces record metadata only unless content recording is switched on for local debugging.
-- **Not in scope for the first version.** User authentication, rate limiting and per-document permissions. The corpus is public, so no access control is needed to read it.
+- **Fixed words for callers.** A failure is reported to a caller of the API in words chosen in advance. The error's own message, which can name files, settings and internal addresses, goes to the log with the trace ID.
+- **Not in scope for the first version.** User authentication, rate limiting for each caller and per-document permissions. The corpus is public, so no access control is needed to read it. The API caps how many answers it writes at once, which protects the model's allowance from a burst, not from one caller who keeps asking.
 
 ## Deliberately left out
 

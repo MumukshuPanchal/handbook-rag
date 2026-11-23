@@ -2,15 +2,15 @@
 
 A knowledge assistant that answers questions from a company handbook, built the way a production team would build it: answers grounded in retrieved passages and cited, quality measured by an evaluation suite, and every request traced for latency and cost.
 
-**Status: the assistant answers real questions with citations, and its answers are measured: by code, and by two judges that were themselves checked first. Search is built, measured, served and traced.**
+**Status: the assistant answers real questions with citations, on the command line and over HTTP, and its answers are measured: by code, and by two judges that were themselves checked first. Search and answers are served and traced.**
 
 - The handbook is indexed, and hybrid search is the default, chosen on a checked set of test questions.
-- It runs as a service: an HTTP API, and `docker compose up` for the whole system.
-- Every request is traced, stage by stage.
+- It runs as a service: an HTTP API that answers with citations, in one response or streamed while the model writes, and `docker compose up` for the whole system.
+- Every request is traced, stage by stage, the request to the language model included.
 - CI fails when retrieval breaks.
 - `ask` retrieves passages and has a language model write an answer that cites them, or says the handbook does not cover the question. It runs on Gemini with a free API key, and ran for real on 22 November 2026.
 - All 165 test questions were put to it on 22 November 2026. It made the right call, to answer or to decline, on 0.958 of them. Of its answers, 0.984 were fully backed by the passages they cite, and 0.984 agreed with the reference answer.
-- Not done yet: `ask` is a command and not an HTTP endpoint, the model call is not traced, and no person has checked the labels the judges were tested against.
+- Not done yet: no person has checked the labels the judges were tested against, and the API has no authentication.
 
 This README is updated as each milestone lands.
 
@@ -79,11 +79,11 @@ All 165 test questions, answered by `gemini-3.5-flash-lite` from the five passag
 
 ## HTTP API
 
-`make serve` runs the assistant as a service. It needs the index (`make qdrant`, `make index`).
+`make serve` runs the assistant as a service. It needs the index (`make qdrant`, `make index`), and for answers the Gemini key in `.env` (see [Answers](#answers)).
 
 ```bash
 curl -s localhost:8000/health
-# {"status":"ok","version":"0.1.0","chunks":38881,"detail":null}
+# {"status":"ok","version":"0.1.0","chunks":38881,"answering":true,"detail":null}
 
 curl -s -X POST localhost:8000/search \
   -H 'Content-Type: application/json' \
@@ -92,19 +92,90 @@ curl -s -X POST localhost:8000/search \
 
 `POST /search` returns the passages most relevant to a question, best first. Each has its text, its page, the headings above it, a link to the page and a score. The response also says how the passages were found and how long that took, and carries the id of the request's trace when tracing is on.
 
+`POST /ask` answers a question, citing the passages the answer rests on. By default the answer comes as one JSON object:
+
+```bash
+curl -s -X POST localhost:8000/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "how do I expense a laptop"}'
+```
+
+Real output from 23 November 2026, laid out for reading. The segments and the texts of the passages are cut short where there is a `…`:
+
+```json
+{
+  "answer": "All laptops are purchased through GitLab unless you are in a region where GitLab cannot deliver one.[1] If your laptop hasn't arrived by your first day, you may use a personal laptop temporarily and postpone hardware-related security setup tasks until it arrives.[2] \n\nIf you purchased a laptop for work, you can submit your receipts for reimbursement through Navan (the expense system) during your first week.[2] If you need a replacement laptop due to damage, you must reach out to IT via an issue before purchasing a new one.[1]",
+  "answered": true,
+  "segments": [
+    {"text": "All laptops are purchased through GitLab unless…", "sources": [1]},
+    {"text": "If your laptop hasn't arrived by your first day,…", "sources": [2]},
+    {"text": "If you purchased a laptop for work, you can subm…", "sources": [2]},
+    {"text": "If you need a replacement laptop due to damage,…", "sources": [1]}
+  ],
+  "sources": [
+    {"number": 1, "doc_id": "finance/expenses.md", "title": "Global Travel and Expense Policy",
+     "url": "https://handbook.gitlab.com/handbook/finance/expenses/",
+     "section": "finance", "heading_path": ["Approved WFH Equipment List", "Laptops, insurance and repairs"],
+     "text": "### Laptops, insurance and repairs - All laptops are purchased through…"},
+    {"number": 2, "doc_id": "people-group/general-onboarding/tanewki-tips.md", "title": "TaNewKi Tips",
+     "url": "https://handbook.gitlab.com/handbook/people-group/general-onboarding/tanewki-tips/",
+     "section": "people-group", "heading_path": ["Your Onboarding Journey", "New Hire FAQ: Everything You Need to Know", "Equipment and Expenses"],
+     "text": "#### Equipment and Expenses **Q: Can I purchase work items before my s…"}
+  ],
+  "model": "gemini-3.5-flash-lite",
+  "stop_reason": "end_turn",
+  "usage": {"input_tokens": 1767, "output_tokens": 112},
+  "took_ms": 4593.4,
+  "first_text_ms": 4526.8,
+  "trace_id": "2e64d104fd523f20a47f46a29bce18ad"
+}
+```
+
+The object holds the answer with a numbered marker such as `[1]` after each supported statement, whether it counts as an answer, the answer in segments with the numbers of their sources, the cited passages under those numbers, the model, why it stopped, the tokens, how long the whole answer and its first words took, and the trace id. A reply that is not an answer lists no sources.
+
+With `"stream": true`, the answer comes as server-sent events while the model writes: an `event: text` for each piece of text, then one `event: answer` whose data is exactly the JSON object above. `-N` makes `curl` print each event as it arrives:
+
+```bash
+curl -sN -X POST localhost:8000/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "how do I expense a laptop", "stream": true}'
+```
+
+Real output from 23 November 2026, shortened where there is a `…`. The first text arrived after 1.5 seconds and the whole answer after 1.8. It is worded differently from the answer above: the model does not write the same reply twice.
+
+```text
+event: text
+data: {"text":"L"}
+
+event: text
+data: {"text":"aptops are normally purchased directly through the company unless you are in a region where the"}
+
+event: text
+data: {"text":" company cannot deliver one. All laptops are provided by the company, and they are excluded from the yearly refresh stipend"}
+
+… (4 more `text` events)
+
+event: answer
+data: {"answer":"Laptops are normally purchased directly through the company…","answered":true,"segments":[…],"sources":[…],"model":"gemini-3.5-flash-lite","stop_reason":"end_turn","usage":{"input_tokens":1767,"output_tokens":133},"took_ms":1781.3,"first_text_ms":1471.8,"trace_id":"a2549758b7116cd8ba1b846a279b833f"}
+```
+
 | Endpoint | What it does |
 |---|---|
+| `POST /ask` | `query` (1 to 500 characters), optional `section`, and `stream` (`true` or `false`, the default) |
 | `POST /search` | `query` (1 to 500 characters), optional `limit` (1 to 20) and `section` |
-| `GET /health` | 200 with the number of chunks in the index. 503 if the vector store cannot be reached, the index has not been built, or it is empty, and it says which |
+| `GET /health` | 200 with the number of chunks in the index, and whether answering is configured. 503 if the vector store cannot be reached, the index has not been built, or it is empty, and it says which |
 | `GET /docs` | Interactive documentation, generated from the code |
 
 - **Bad requests.** A request that breaks a limit gets a 422 that names the field, without repeating what was sent. A body over 8 KB gets a 413.
 - **A vector store that is down** gets a 503 with a fixed message, not a 500. The cause goes to the service's log, because it can name internal addresses. The service starts without the store and works as soon as the store is there.
-- **Trace id.** With tracing on, every response to `/search` carries the id of its trace in the `X-Trace-Id` header, a failed one too.
+- **An answer that cannot be given** gets a 503 with fixed words that say why: the vector store or the answer model is unavailable, the model's per-minute limit was reached, its allowance for the day is used up, answering is not configured, or the service is writing as many answers as it can. A per-minute limit and a full service add a `Retry-After` header when the wait is known. It is 503 and not 429 because the limits are the service's own with its model provider, not the caller's. The reason is in [ADR 0015](docs/adr/0015-answers-over-http.md).
+- **Streams fail the same way until the first text.** The service waits for the first piece of text before it starts a stream, so an early failure is still a status with a JSON body. A failure after that ends the stream with one `event: error`.
+- **Without a key** the service still starts and searches. `/ask` answers 503 and says that answering is not configured, and `/health` reports `"answering": false`. No request is sent to the model to find that out, so a key that is present but wrong shows up only at the first question.
+- **Answers in flight.** The service writes at most four answers at once (`HANDBOOK_RAG_API_MAX_ANSWERS_IN_FLIGHT`), because each holds a thread while the model writes. A caller who leaves in the middle of a stream stops the model call at its next piece of text.
+- **Trace id.** With tracing on, every response to `/search`, and every response to `/ask` once its answer has started, carries the id of its trace in the `X-Trace-Id` header, a failed one too. A stream also carries it in its last event.
 - **Speed.** The models are loaded and run once when the service starts. Measured on the full index, searches one after another took 77 to 88 ms, and 124 to 169 ms after 20 to 60 idle seconds.
 - **The embedding model runs on the CPU here**, also on a machine with a GPU. A service embeds one question at a time, which a CPU does as fast and more steadily: on an Apple GPU, the first search after a few idle seconds took over a second. `HANDBOOK_RAG_EMBEDDING_DEVICE` changes it.
-- **Not built for the open internet.** There is no authentication, no rate limit and no limit on requests in flight. The service listens on this machine only unless `HANDBOOK_RAG_API_HOST` says otherwise.
-- `POST /ask`, which answers with citations and streams the answer, is the next step.
+- **Not built for the open internet.** There is no authentication and no rate limit for each caller; only the answers in flight are capped. Anyone who reaches the port can spend the key's allowance. The service listens on this machine only unless `HANDBOOK_RAG_API_HOST` says otherwise.
 
 ## Tracing
 
@@ -112,7 +183,9 @@ Every request is one trace, with a span for each stage, so a slow or wrong resul
 
 ![One search as a trace: the request, both searches, the embedding model, each call to the vector store, the merge and the reranker, each with its duration](docs/images/trace-reranked-search.png)
 
-`make traces` starts the viewer. [docs/observability.md](docs/observability.md) explains how to read a trace, what is deliberately left out of one, and what the first traces showed.
+The trace of an answer adds the request to the language model, under the names OpenTelemetry's conventions for generative AI give its parts: the model, the tokens, why it stopped. Next to them are whether the reply counts as an answer and which passages it cites.
+
+`make traces` starts the viewer. [docs/observability.md](docs/observability.md) explains how to read a trace, how to use one when an answer is wrong, what is deliberately left out of one, and what the first traces showed.
 
 ## Run it with Docker
 
@@ -136,7 +209,8 @@ The first build downloads about half a gigabyte and took four minutes here. The 
 - **Indexing is the slow step.** In a container the embedding model runs on the CPU: at the speed measured in CI that is 45 to 56 minutes for the whole handbook. Indexing can be stopped and started again; it skips what is already stored.
 - **Wait for `Index ready`.** Before the first chunks are stored, `/health` answers 503 and says the index has not been built. It turns 200 as soon as some chunks are stored, while indexing is still running, and searches then see only part of the handbook.
 - **Indexed already with `make index`?** The containers use the same Qdrant, so there is nothing to do again, as long as the settings that name the index (the handbook commit, the models, the chunk sizes) are the defaults.
-- **Settings.** The containers do not read a `.env` file. They use the defaults, plus what `compose.yaml` lists under `environment:`.
+- **Settings.** The application in the container does not read a `.env` file. It uses the defaults, plus what `compose.yaml` lists under `environment:`.
+- **The Gemini key** is the one value taken from the project's `.env` file: Compose fills it in when it starts the API container, so it is written neither in `compose.yaml` nor in the image. Without it, `/ask` answers 503 and searches still work. `docker compose config` prints the key in clear text, so do not paste its output anywhere.
 - **Port 8000.** The API container holds it, so stop it with `docker compose stop api` before running `make serve`.
 - Everything listens on this machine only. Nothing here has authentication.
 
@@ -163,10 +237,10 @@ make qdrant     # start the Qdrant vector store in Docker
 make index      # embed the chunks and store them; safe to run again
 make search q="how do I expense a laptop"
 make traces     # start the trace backend; see docs/observability.md
-make serve      # run the HTTP API at http://127.0.0.1:8000
+make serve      # run the HTTP API at http://127.0.0.1:8000; POST /ask answers, POST /search searches
 uv run handbook-rag search "what is compa-ratio" --rerank
 make ask q="how do I expense a laptop"   # answer with citations; needs a free Gemini API key
-make test-live       # send two real requests to the answer model
+make test-live       # send three real requests to the answer model, one of them through the API
 make golden-check    # verify every test question against the handbook
 make eval-retrieval  # score the default search, as a scratch run named "current"
 make eval-answers    # answer every test question and score what code can check: 165 real requests

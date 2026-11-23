@@ -160,6 +160,16 @@ class Settings(BaseSettings):
         ),
     )
     api_port: int = Field(default=8000, gt=0, lt=65536, description="Port of the HTTP API.")
+    api_max_answers_in_flight: int = Field(
+        default=4,
+        gt=0,
+        description=(
+            "How many answers the HTTP API writes at once. Each one holds a thread while "
+            "the model writes. A request beyond the limit gets 503 with a Retry-After "
+            "header. Kept small: a free Gemini key allowed 15 requests a minute when this "
+            "was written, so more answers at once would mostly wait on that limit."
+        ),
+    )
     tracing: bool = Field(
         default=False,
         description=(

@@ -25,7 +25,7 @@ test: ## Run the fast tests with coverage
 test-slow: ## Run the tests that download a model
 	uv run pytest -m slow
 
-test-live: ## Send two real requests to the answer model (needs its key in .env)
+test-live: ## Send three real requests to the answer model, one through the API (needs its key in .env)
 	uv run pytest -m live
 
 check: lint typecheck test ## Run everything CI runs

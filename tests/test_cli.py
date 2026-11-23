@@ -2119,6 +2119,27 @@ def test_a_check_of_one_judge_cannot_be_started_over_the_check_of_the_other(
     assert (judged_run["checks"] / "baseline" / "judgements.jsonl").read_text() == kept
     assert judge.built_for == ["support"]
 
+    # A check that does not say which criterion it is of is known by its settings: an
+    # older version wrote such summaries, and a check that was stopped early has none.
+    summary_file = judged_run["checks"] / "baseline" / "summary.json"
+    summary = json.loads(summary_file.read_text())
+    del summary["criterion"]
+    for content in (json.dumps(summary), "[]", "{not json", None):
+        if content is None:
+            summary_file.unlink()
+        else:
+            summary_file.write_text(content)
+        again = runner.invoke(app, [*command, "--variant", "baseline", "--restart"])
+        assert again.exit_code == 1, content
+        assert "holds a check of the judge for 'support'" in again.output, content
+    assert (judged_run["checks"] / "baseline" / "judgements.jsonl").read_text() == kept
+
+    # A check of this very judge is restarted as asked, whatever its settings were.
+    own = [*judged_run["judge_correct"], "--variant", "baseline"]
+    assert runner.invoke(app, own).exit_code == 0
+    assert runner.invoke(app, [*own, "--restart"]).exit_code == 0
+    assert judge.built_for == ["support", "correct", "correct"]
+
 
 def test_eval_correct_scores_a_wrong_answer_as_not_correct(
     monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path

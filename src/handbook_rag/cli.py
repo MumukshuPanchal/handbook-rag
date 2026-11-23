@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal
 import typer
 
 from handbook_rag import __version__, wiring
-from handbook_rag.config import get_settings
+from handbook_rag.config import Settings, get_settings
 from handbook_rag.evals import answers as answer_runs
 from handbook_rag.evals.agreement import measure_agreement
 from handbook_rag.evals.careful import Pacer
@@ -891,20 +891,36 @@ def _judge_check_to_quote(
     return load_judgements(check_stage.rows_path, criterion.verdicts), check
 
 
-def _refuse_the_check_of_another_judge(criterion: Criterion[Any], run_dir: Path) -> None:
+def _refuse_the_check_of_another_judge(
+    criterion: Criterion[Any], run_dir: Path, settings: Settings
+) -> None:
     """Refuse a directory that holds a check of the judge of another criterion.
 
     The two checks use the same file names. Without this, restarting a check with the
     directory of the other one would discard verdicts that took a share of a day's
     requests to make.
+
+    A check says in its summary which criterion it is of. One that does not say, because
+    an older version wrote it or because it never got as far as a summary, is known by
+    its settings: they hold the hash of the judge's instructions.
     """
+    held: object = None
     summary = run_dir / "summary.json"
-    if not summary.is_file():
-        return
-    try:
-        held = json.loads(summary.read_text(encoding="utf-8")).get("criterion")
-    except (json.JSONDecodeError, AttributeError):
-        return
+    if summary.is_file():
+        try:
+            loaded = json.loads(summary.read_text(encoding="utf-8"))
+        except ValueError:  # not JSON, or not text at all
+            loaded = None
+        held = loaded.get("criterion") if isinstance(loaded, dict) else None
+    if not isinstance(held, str):
+        stage = judge_check_stage(run_dir)
+        try:
+            stored = stage.config() if stage.state_path.is_file() else None
+        except SavedRunError:
+            stored = None
+        for other in CRITERIA:
+            if other is not criterion and stored == wiring.describe_judge(settings, other):
+                held = other.name
     if isinstance(held, str) and held != criterion.name:
         raise SavedRunError(
             f"{run_dir} holds a check of the judge for '{held}', not for "
@@ -983,7 +999,7 @@ def eval_judge(
     run_dir = (output or criterion.checks_dir) / variant
     stage = judge_check_stage(run_dir)
     try:
-        _refuse_the_check_of_another_judge(criterion, run_dir)
+        _refuse_the_check_of_another_judge(criterion, run_dir, settings)
         if not restart:
             stage.check(config)
         # Only a judge that is shown passages needs the handbook to be read and cut up.

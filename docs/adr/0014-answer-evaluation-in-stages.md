@@ -117,6 +117,6 @@ What it cost: 167 requests to check the judge, 3 for a trial, and none to score 
 What remains weak, beside what the first update lists:
 
 - **Omissions.** The judge missed one planted omission in five, and called two complete answers partial for leaving out a step that was not asked for. Nothing here measures how it does on omissions that are less plain.
-- **The labelled set has no real fault and no subtle one.** Three readers agreed on all 167 answers, so the check measures the judge on plain cases only.
+- **The labelled set has no real fault and no subtle one.** The two readers who labelled all 167 answers gave the same verdict on every one, and the third agreed on the eight it read, so the check measures the judge on plain cases only.
 - **The reference answers come from the passages.** Most were written by a model that was shown the passage the assistant later finds, so this score moves with the search and says little about questions that need more than reading one passage back.
 - **A person's check** of a sample of both judges' labels is what [issue 8](https://github.com/MumukshuPanchal/production-rag-pipeline/issues/8) still asks for.

@@ -323,7 +323,7 @@ The judge's instructions are [the rubric](../evals/judge/correct/rubric.md), wor
 
 ### Checking this judge
 
-The judge was given [167 labelled answers](../evals/judge/README.md#the-second-set-answers-against-their-reference-answers): the 127 answers of the first run that have a reference answer, which three readers all called correct, and 40 copies with one planted fault, five of each of eight kinds. The check, `baseline`, on 23 November 2026, with `gemini-3.5-flash-lite` as the judge:
+The judge was given [167 labelled answers](../evals/judge/README.md#the-second-set-answers-against-their-reference-answers): the 127 answers of the first run that have a reference answer, which two readers working separately each called correct, and 40 copies with one planted fault, five of each of eight kinds. The check, `baseline`, on 23 November 2026, with `gemini-3.5-flash-lite` as the judge:
 
 | | Result (95% interval) | Out of |
 |---|---|---|
@@ -341,7 +341,7 @@ The judge was given [167 labelled answers](../evals/judge/README.md#the-second-s
 How far this goes:
 
 - **39 of 40 is a small sample.** The interval reaches down to 0.871.
-- **The planted faults are plain by design**, and the three readers agreed on every one of the 167 answers. That shows the cases are easy for readers of that kind. A wrong answer as subtle as a real slip is not in the set.
+- **The planted faults are plain by design**, and the two readers who labelled all 167 answers gave the same verdict on every one. A third read the eight borderline cases and agreed. That shows the cases are easy for readers of that kind. A wrong answer as subtle as a real slip is not in the set.
 - **The real answers held no fault** for the judge to find, by the readers' labels.
 - **The judge is the answer model**, and no person has checked a label.
 

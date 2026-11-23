@@ -109,7 +109,7 @@ The readers decided by [the rubric](correct/rubric.md). That file is, word for w
 
 ### Known limits
 
-- **No person has labelled anything**, and all three readers are models of one family. Complete agreement between them shows that the cases are easy for such readers. It does not show that the labels are right.
+- **No person has labelled anything**, and all three readers are models of one family. The two who labelled every answer agreed on every one, and the third agreed on the eight it read. That shows the cases are easy for such readers. It does not show that the labels are right.
 - **The planted faults are plain by design.** The readers were asked for faults that a careful reader would certainly call a fault. A fault as subtle as a real slip is not in the set, so the check says nothing about those.
 - **No real fault at all.** The readers found every real answer correct. How a judge does on wrong answers that arise naturally cannot be told from this set.
 - **"Correct" means "agrees with the reference answer".** Most reference answers were written by a model from the same passage the assistant later quotes, which makes agreement likely once the passage is found. And if a reference answer is wrong, an answer that repeats it counts as correct.

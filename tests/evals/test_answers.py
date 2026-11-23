@@ -912,6 +912,25 @@ def test_the_judged_score_is_given_only_to_answers_the_judge_has_ruled_on() -> N
     assert "answered_correctly" not in partly.summary
 
 
+def test_how_many_got_a_correct_answer_waits_for_the_last_verdict() -> None:
+    # Both answerable questions are answered. The judge has ruled on one of them.
+    records = run_answers(QUESTIONS, DOCUMENTS, careful).records
+
+    half = summarise_answers(QUESTIONS, records, judged={"correct": {"q001": True}})
+    whole = summarise_answers(QUESTIONS, records, judged={"correct": {"q001": True, "q002": False}})
+
+    # One verdict is not the whole story, however good it is.
+    assert (half.summary["correct"].mean, half.summary["correct"].count) == (1.0, 1)
+    assert "answered_correctly" not in half.summary
+    assert (
+        whole.summary["answered_correctly"].mean,
+        whole.summary["answered_correctly"].count,
+    ) == (
+        0.5,
+        2,
+    )
+
+
 def test_a_correct_answer_counts_for_the_answer_and_for_the_question() -> None:
     def ask(question_text: str) -> Answer:
         question = BY_TEXT[question_text]

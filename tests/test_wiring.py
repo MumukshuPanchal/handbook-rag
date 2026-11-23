@@ -61,8 +61,10 @@ def test_gemini_requests_have_a_time_limit_and_retry_only_what_a_retry_can_fix()
 
 @pytest.mark.parametrize("key", [None, SecretStr("")])
 def test_a_gemini_model_without_a_key_is_a_clear_error(key: SecretStr | None) -> None:
-    with pytest.raises(GenerationError, match="GEMINI_API_KEY"):
+    with pytest.raises(GenerationError, match="GEMINI_API_KEY") as raised:
         make_generator(Settings(gemini_api_key=key))
+    # The HTTP API starts without an answer model on this, and serves searches.
+    assert raised.value.reason == "configuration"
 
 
 def test_an_empty_key_copied_from_the_example_file_is_a_clear_error(

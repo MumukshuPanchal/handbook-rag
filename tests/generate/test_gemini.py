@@ -15,7 +15,7 @@ import pytest
 from google import genai
 from google.genai import errors, types
 
-from handbook_rag.generate.base import GenerationError
+from handbook_rag.generate.base import FailureReason, GenerationError
 from handbook_rag.generate.gemini import GeminiGenerator
 from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
@@ -411,29 +411,48 @@ def test_no_chunks_means_no_model_call_and_no_answer() -> None:
 
 
 @pytest.mark.parametrize(
-    ("error", "expected"),
+    ("error", "expected", "reason", "retry_after"),
     [
-        (api_error(400, "INVALID_ARGUMENT", KEY_INVALID), "rejected the credential"),
-        (api_error(401, "UNAUTHENTICATED"), "rejected the credential"),
+        (
+            api_error(400, "INVALID_ARGUMENT", KEY_INVALID),
+            "rejected the credential",
+            "configuration",
+            None,
+        ),
+        (api_error(401, "UNAUTHENTICATED"), "rejected the credential", "configuration", None),
         (
             api_error(403, "PERMISSION_DENIED", message="Not enabled for this project."),
             f"not allowed to use {MODEL}: Not enabled for this project.",
+            "configuration",
+            None,
         ),
-        (api_error(404, "NOT_FOUND", message=MODEL_NOT_FOUND), f"The model {MODEL} was not found"),
+        (
+            api_error(404, "NOT_FOUND", message=MODEL_NOT_FOUND),
+            f"The model {MODEL} was not found",
+            "configuration",
+            None,
+        ),
         (
             api_error(429, "RESOURCE_EXHAUSTED", [quota(PER_MINUTE, "15"), RETRY_IN_36S]),
             f"The per-minute limit for {MODEL} was reached for this key's Google project. "
             "Try again in 36s.",
+            "rate_limit",
+            36.0,
         ),
         (
             api_error(429, "RESOURCE_EXHAUSTED", [quota(PER_MINUTE, "15")]),
             f"The per-minute limit for {MODEL} was reached for this key's Google project. "
             "Try again shortly.",
+            "rate_limit",
+            None,
         ),
         (
+            # The wait the API names is left out: it does not bring back a day's allowance.
             api_error(429, "RESOURCE_EXHAUSTED", [quota(PER_DAY, "20"), RETRY_IN_36S]),
             f"Today's limit for {MODEL} is used up for this key's Google project. "
             "Try again tomorrow",
+            "quota",
+            None,
         ),
         (
             # Both limits reported at once: the day's limit is the one that decides.
@@ -443,49 +462,125 @@ def test_no_chunks_means_no_model_call_and_no_answer() -> None:
                 [quota(PER_MINUTE, "15"), quota(PER_DAY, "20"), RETRY_IN_36S],
             ),
             f"Today's limit for {MODEL} is used up",
+            "quota",
+            None,
         ),
         (
             api_error(429, "RESOURCE_EXHAUSTED", [RETRY_IN_36S]),
             "The Gemini API rate limit was reached. Try again in 36s.",
+            "rate_limit",
+            36.0,
+        ),
+        (
+            api_error(
+                429,
+                "RESOURCE_EXHAUSTED",
+                [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "0.5s"}],
+            ),
+            "The Gemini API rate limit was reached. Try again in 0.5s.",
+            "rate_limit",
+            0.5,
+        ),
+        (
+            # A wait in a form the API does not use is not guessed at.
+            api_error(
+                429,
+                "RESOURCE_EXHAUSTED",
+                [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "36"}],
+            ),
+            "The Gemini API rate limit was reached. Try again in 36.",
+            "rate_limit",
+            None,
+        ),
+        (
+            api_error(
+                429,
+                "RESOURCE_EXHAUSTED",
+                [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": 36}],
+            ),
+            "The Gemini API rate limit was reached. Try again shortly.",
+            "rate_limit",
+            None,
         ),
         (
             api_error(429, "RESOURCE_EXHAUSTED"),
             "The Gemini API rate limit was reached. Try again shortly.",
+            "rate_limit",
+            None,
         ),
         (
             api_error(429, "RESOURCE_EXHAUSTED", "not a list"),
             "The Gemini API rate limit was reached. Try again shortly.",
+            "rate_limit",
+            None,
         ),
         (
             api_error(429, "RESOURCE_EXHAUSTED", [{"violations": "not a list"}, "not a dict"]),
             "The Gemini API rate limit was reached. Try again shortly.",
+            "rate_limit",
+            None,
         ),
         (
             api_error(400, "INVALID_ARGUMENT", message="Request contains an invalid argument."),
             r"returned an error \(400\): Request contains an invalid argument.",
+            "unavailable",
+            None,
         ),
         (
             api_error(503, "UNAVAILABLE", message="The model is overloaded."),
             r"returned an error \(503\): The model is overloaded.",
+            "unavailable",
+            None,
         ),
-        (httpx2.ConnectError("Connection refused"), "Could not reach the Gemini API"),
-        (httpx2.ReadTimeout("timed out"), "Could not reach the Gemini API"),
-        (httpx.ConnectError("Connection refused"), "Could not reach the Gemini API"),
-        (httpx2.DecodingError("bad gzip data"), "sent a reply that could not be read"),
-        (httpx.DecodingError("bad gzip data"), "sent a reply that could not be read"),
+        (
+            httpx2.ConnectError("Connection refused"),
+            "Could not reach the Gemini API",
+            "unavailable",
+            None,
+        ),
+        (httpx2.ReadTimeout("timed out"), "Could not reach the Gemini API", "unavailable", None),
+        (
+            httpx.ConnectError("Connection refused"),
+            "Could not reach the Gemini API",
+            "unavailable",
+            None,
+        ),
+        (
+            httpx2.DecodingError("bad gzip data"),
+            "sent a reply that could not be read",
+            "unavailable",
+            None,
+        ),
+        (
+            httpx.DecodingError("bad gzip data"),
+            "sent a reply that could not be read",
+            "unavailable",
+            None,
+        ),
         (
             errors.UnknownApiResponseError("Failed to parse response as JSON. Raw response: {no"),
             "sent a reply that could not be read",
+            "unavailable",
+            None,
         ),
-        (wrong_shape(), "sent a reply that could not be read"),
+        (wrong_shape(), "sent a reply that could not be read", "unavailable", None),
     ],
 )
-def test_api_failures_become_clear_errors(error: BaseException, expected: str) -> None:
+def test_api_failures_become_clear_errors(
+    error: BaseException, expected: str, reason: FailureReason, retry_after: float | None
+) -> None:
     client = FakeClient(error=error)
 
     with pytest.raises(GenerationError, match=expected) as raised:
         generator_for(client).generate("q", [LEAVE])
     assert raised.value.__cause__ is error
+    assert raised.value.reason == reason
+    assert raised.value.retry_after == retry_after
+
+
+def test_the_generator_names_the_model_it_asks_for() -> None:
+    # The span of a failed request names the model too, and there is no reply to read it from.
+    assert generator_for(FakeClient()).model == MODEL
 
 
 def test_an_error_body_that_is_not_json_still_becomes_a_clear_error() -> None:

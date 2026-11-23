@@ -2,7 +2,7 @@
 
 import pytest
 
-from handbook_rag.generate.base import decline_without_context, is_answered
+from handbook_rag.generate.base import GenerationError, decline_without_context, is_answered
 from handbook_rag.generate.models import Citation, Segment
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
 from tests.support import make_chunk
@@ -80,3 +80,15 @@ def test_declining_without_context_says_so_and_names_the_model() -> None:
     assert answer.model == "some-model"
     assert answer.question == "anything"
     assert decline_without_context("anything", "some-model", None).text == NOT_FOUND_MESSAGE
+
+
+def test_a_generation_error_counts_as_unavailable_unless_it_says_otherwise() -> None:
+    plain = GenerationError("The Gemini API returned an error (500).")
+    limited = GenerationError("Slow down.", reason="rate_limit", retry_after=36.0)
+
+    assert (str(plain), plain.reason, plain.retry_after) == (
+        "The Gemini API returned an error (500).",
+        "unavailable",
+        None,
+    )
+    assert (limited.reason, limited.retry_after) == ("rate_limit", 36.0)

@@ -4,6 +4,7 @@ The Gemini API has no feature that returns which of *our* passages a statement r
 on, so this generator uses the portable method in :mod:`handbook_rag.generate.markers`.
 """
 
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -48,15 +49,26 @@ _WITHHELD = frozenset(
         types.FinishReason.PUP_LIMITED_DISABLED,
     }
 )
+# How the API writes a wait, such as "36s" or "0.5s".
+_SECONDS = re.compile(r"(\d+(?:\.\d+)?)s")
 
 
 class GeminiGenerator:
     """Answers a question from retrieved chunks with one streamed Gemini request."""
 
+    # The names OpenTelemetry's conventions for generative AI give the Gemini API and
+    # its request for content. tests/test_tracing.py checks them against the conventions.
+    provider = "gcp.gemini"
+    operation = "generate_content"
+
     def __init__(self, client: genai.Client, *, model: str, max_tokens: int) -> None:
         self._client = client
         self._model = model
         self._max_tokens = max_tokens
+
+    @property
+    def model(self) -> str:
+        return self._model
 
     def generate(
         self,
@@ -108,7 +120,7 @@ class GeminiGenerator:
                 if piece.prompt_feedback is not None and piece.prompt_feedback.block_reason:
                     blocked = True
         except errors.APIError as error:
-            raise GenerationError(self._explain(error)) from error
+            raise self._explain(error) from error
         except _NETWORK_ERRORS as error:
             raise GenerationError("Could not reach the Gemini API. Check the network.") from error
         except _UNREADABLE_REPLY_ERRORS as error:
@@ -131,21 +143,29 @@ class GeminiGenerator:
             seconds_to_first_text=None if first_text_at is None else first_text_at - started,
         )
 
-    def _explain(self, error: errors.APIError) -> str:
-        """Turn an error from the API into a message that says what to do about it."""
+    def _explain(self, error: errors.APIError) -> GenerationError:
+        """Turn an error from the API into one that says what to do about it."""
         details = _details(error)
         reasons = {detail.get("reason") for detail in details}
         if error.code == 401 or "API_KEY_INVALID" in reasons:
-            return "The Gemini API rejected the credential. Check GEMINI_API_KEY in .env."
+            return GenerationError(
+                "The Gemini API rejected the credential. Check GEMINI_API_KEY in .env.",
+                reason="configuration",
+            )
         if error.code == 403:
-            return f"The credential is not allowed to use {self._model}: {error.message}"
+            return GenerationError(
+                f"The credential is not allowed to use {self._model}: {error.message}",
+                reason="configuration",
+            )
         if error.code == 404:
-            return f"The model {self._model} was not found."
+            return GenerationError(
+                f"The model {self._model} was not found.", reason="configuration"
+            )
         if error.code == 429:
             return self._explain_rate_limit(details)
-        return f"The Gemini API returned an error ({error.code}): {error.message}"
+        return GenerationError(f"The Gemini API returned an error ({error.code}): {error.message}")
 
-    def _explain_rate_limit(self, details: Sequence[Mapping[str, Any]]) -> str:
+    def _explain_rate_limit(self, details: Sequence[Mapping[str, Any]]) -> GenerationError:
         """Say which limit was reached, when the API tells us.
 
         The free tier allows a small amount of use a minute and a fixed amount a day,
@@ -162,18 +182,23 @@ class GeminiGenerator:
             for violation in _dictionaries(detail.get("violations"))
         ]
         if any("PerDay" in limit for limit in limits):
-            return (
+            # The API may name a wait here too. It is not passed on: waiting that long
+            # does not bring back an allowance that is renewed once a day.
+            return GenerationError(
                 f"Today's limit for {self._model} is used up for this key's Google project. "
-                "Try again tomorrow, or choose another model with HANDBOOK_RAG_ANSWER_MODEL."
+                "Try again tomorrow, or choose another model with HANDBOOK_RAG_ANSWER_MODEL.",
+                reason="quota",
             )
         wait = next((detail["retryDelay"] for detail in details if "retryDelay" in detail), None)
         when = f"in {wait}" if isinstance(wait, str) and wait else "shortly"
         if any("PerMinute" in limit for limit in limits):
-            return (
+            message = (
                 f"The per-minute limit for {self._model} was reached for this key's Google "
                 f"project. Try again {when}."
             )
-        return f"The Gemini API rate limit was reached. Try again {when}."
+        else:
+            message = f"The Gemini API rate limit was reached. Try again {when}."
+        return GenerationError(message, reason="rate_limit", retry_after=_seconds(wait))
 
 
 def _pass_on(text: str, on_text: Callable[[str], None] | None) -> None:
@@ -214,6 +239,14 @@ def _usage(metadata: types.GenerateContentResponseUsageMetadata | None) -> Token
         output_tokens=(metadata.candidates_token_count or 0) + (metadata.thoughts_token_count or 0),
         cache_read_input_tokens=cached,
     )
+
+
+def _seconds(wait: object) -> float | None:
+    """A wait the API wrote, such as "36s", in seconds, or ``None`` if it is not one."""
+    if not isinstance(wait, str):
+        return None
+    written = _SECONDS.fullmatch(wait)
+    return float(written.group(1)) if written else None
 
 
 def _details(error: errors.APIError) -> list[Mapping[str, Any]]:

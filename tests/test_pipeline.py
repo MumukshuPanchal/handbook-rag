@@ -4,7 +4,7 @@ from handbook_rag.generate.models import Answer, Segment
 from handbook_rag.index.store import ScoredChunk
 from handbook_rag.ingest.models import Chunk
 from handbook_rag.pipeline import answer_question
-from tests.support import make_chunk
+from tests.support import StandInModel, make_chunk
 
 LEAVE = make_chunk("New parents get sixteen weeks of paid leave.")
 EXPENSES = make_chunk("Expense a laptop up to one thousand dollars.", doc_id="finance/expenses.md")
@@ -20,7 +20,7 @@ class FakeRetriever:
         return self._results[:limit]
 
 
-class FakeGenerator:
+class FakeGenerator(StandInModel):
     def __init__(self) -> None:
         self.received: list[Chunk] = []
 

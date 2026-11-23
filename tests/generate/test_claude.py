@@ -13,7 +13,7 @@ import httpx2
 import pytest
 from anthropic.types import Message
 
-from handbook_rag.generate.base import GenerationError
+from handbook_rag.generate.base import FailureReason, GenerationError
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE, SYSTEM_PROMPT
 from tests.support import make_chunk
@@ -273,47 +273,87 @@ def test_no_chunks_means_no_model_call_and_no_answer() -> None:
     assert answer.usage.input_tokens == 0
 
 
+def rate_limited(headers: dict[str, str] | None = None) -> anthropic.RateLimitError:
+    response = httpx2.Response(429, headers=headers, request=REQUEST)
+    return anthropic.RateLimitError("slow down", response=response, body=None)
+
+
 @pytest.mark.parametrize(
-    ("error", "expected"),
+    ("error", "expected", "reason", "retry_after"),
     [
         (
             anthropic.AuthenticationError(
                 "invalid x-api-key", response=httpx2.Response(401, request=REQUEST), body=None
             ),
             "ANTHROPIC_API_KEY",
+            "configuration",
+            None,
         ),
         (
-            anthropic.RateLimitError(
-                "slow down", response=httpx2.Response(429, request=REQUEST), body=None
+            anthropic.PermissionDeniedError(
+                "not allowed", response=httpx2.Response(403, request=REQUEST), body=None
             ),
-            "rate limit",
+            "not allowed to use claude-haiku-5-5: not allowed",
+            "configuration",
+            None,
         ),
+        (rate_limited(), "rate limit", "rate_limit", None),
+        (rate_limited({"retry-after": "20"}), "rate limit", "rate_limit", 20.0),
+        (rate_limited({"retry-after": "0"}), "rate limit", "rate_limit", 0.0),
+        (rate_limited({"retry-after": "1.5"}), "rate limit", "rate_limit", 1.5),
+        # A date, or anything else that is not a number of seconds, is not a known wait.
         (
+            rate_limited({"retry-after": "Wed, 21 Oct 2026 07:28:00 GMT"}),
+            "rate limit",
+            "rate_limit",
+            None,
+        ),
+        (rate_limited({"retry-after": "-5"}), "rate limit", "rate_limit", None),
+        (rate_limited({"retry-after": "nan"}), "rate limit", "rate_limit", None),
+        (rate_limited({"retry-after": "inf"}), "rate limit", "rate_limit", None),
+        (
+            # The code cannot tell a used-up balance from other rejected requests.
             anthropic.BadRequestError(
                 "Your credit balance is too low to access the Anthropic API.",
                 response=httpx2.Response(400, request=REQUEST),
                 body=None,
             ),
             "credit balance is too low",
+            "unavailable",
+            None,
         ),
         (
             anthropic.NotFoundError(
                 "model not found", response=httpx2.Response(404, request=REQUEST), body=None
             ),
             "was not found",
+            "configuration",
+            None,
         ),
-        (anthropic.APIConnectionError(request=REQUEST), "Could not reach"),
+        (anthropic.APIConnectionError(request=REQUEST), "Could not reach", "unavailable", None),
         (
             TypeError('"Could not resolve authentication method. Expected one of api_key..."'),
             "No Claude API credential",
+            "configuration",
+            None,
         ),
     ],
 )
-def test_api_failures_become_clear_errors(error: BaseException, expected: str) -> None:
+def test_api_failures_become_clear_errors(
+    error: BaseException, expected: str, reason: FailureReason, retry_after: float | None
+) -> None:
     generator, _ = generator_for(error)
 
-    with pytest.raises(GenerationError, match=expected):
+    with pytest.raises(GenerationError, match=expected) as raised:
         generator.generate("q", [LEAVE])
+    assert raised.value.reason == reason
+    assert raised.value.retry_after == retry_after
+
+
+def test_the_generator_names_the_model_it_asks_for() -> None:
+    generator, _ = generator_for(CITED_ANSWER)
+
+    assert generator.model == "claude-haiku-5-5"
 
 
 def test_an_unrelated_type_error_is_not_swallowed() -> None:

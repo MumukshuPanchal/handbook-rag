@@ -1,5 +1,6 @@
 """Generate answers with Claude, using the API's built-in citations."""
 
+import math
 import time
 from collections.abc import Callable, Sequence
 from typing import Literal
@@ -18,6 +19,11 @@ Effort = Literal["low", "medium", "high", "xhigh", "max"]
 class ClaudeGenerator:
     """Answers a question from retrieved chunks with one streamed Claude request."""
 
+    # The names OpenTelemetry's conventions for generative AI give Anthropic and a
+    # request to its Messages API. tests/test_tracing.py checks them against the conventions.
+    provider = "anthropic"
+    operation = "chat"
+
     def __init__(
         self,
         client: anthropic.Anthropic,
@@ -30,6 +36,10 @@ class ClaudeGenerator:
         self._model = model
         self._max_tokens = max_tokens
         self._effort = effort
+
+    @property
+    def model(self) -> str:
+        return self._model
 
     def generate(
         self,
@@ -60,17 +70,23 @@ class ClaudeGenerator:
                 message = stream.get_final_message()
         except anthropic.AuthenticationError as error:
             raise GenerationError(
-                "The Claude API rejected the credential. Check ANTHROPIC_API_KEY in .env."
+                "The Claude API rejected the credential. Check ANTHROPIC_API_KEY in .env.",
+                reason="configuration",
             ) from error
         except anthropic.PermissionDeniedError as error:
             raise GenerationError(
-                f"The credential is not allowed to use {self._model}: {error.message}"
+                f"The credential is not allowed to use {self._model}: {error.message}",
+                reason="configuration",
             ) from error
         except anthropic.NotFoundError as error:
-            raise GenerationError(f"The model {self._model} was not found.") from error
+            raise GenerationError(
+                f"The model {self._model} was not found.", reason="configuration"
+            ) from error
         except anthropic.RateLimitError as error:
             raise GenerationError(
-                "The Claude API rate limit was reached. Try again shortly."
+                "The Claude API rate limit was reached. Try again shortly.",
+                reason="rate_limit",
+                retry_after=_retry_after(error),
             ) from error
         except anthropic.APIStatusError as error:
             # Includes a rejected request, such as an organization with no credit left.
@@ -86,7 +102,8 @@ class ClaudeGenerator:
                 raise
             raise GenerationError(
                 "No Claude API credential was found. Put ANTHROPIC_API_KEY in a .env file "
-                "in the project folder."
+                "in the project folder.",
+                reason="configuration",
             ) from error
         finished = time.perf_counter()
 
@@ -109,6 +126,21 @@ class ClaudeGenerator:
             seconds=finished - started,
             seconds_to_first_text=None if first_text_at is None else first_text_at - started,
         )
+
+
+def _retry_after(error: anthropic.RateLimitError) -> float | None:
+    """The wait the API asked for in its retry-after header, in seconds, if it sent one.
+
+    The header may also hold a date. That form is not read: a wait that cannot be read
+    is reported as unknown, which is true.
+    """
+    value = error.response.headers.get("retry-after", "")
+    try:
+        seconds = float(value)
+    except ValueError:
+        return None
+    # float() also reads "nan", "inf" and negative numbers, none of which is a wait.
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
 def _segments(message: Message, chunks: Sequence[Chunk]) -> tuple[Segment, ...]:

@@ -213,7 +213,8 @@ def _gemini_client(settings: Settings, attempts: int) -> genai.Client:
     if key is None or not key.get_secret_value():
         raise GenerationError(
             "No Gemini API key was found. Create a free key in Google AI Studio and put it "
-            "in a .env file in the project folder, as GEMINI_API_KEY."
+            "in a .env file in the project folder, as GEMINI_API_KEY.",
+            reason="configuration",
         )
     return genai.Client(
         api_key=key.get_secret_value(),

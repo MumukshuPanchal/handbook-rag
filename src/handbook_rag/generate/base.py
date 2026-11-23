@@ -6,19 +6,67 @@ the rest of the application only ever sees the interface defined here.
 
 import re
 from collections.abc import Callable, Sequence
-from typing import Protocol
+from typing import Literal, Protocol
 
 from handbook_rag.generate.models import Answer, Segment
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
 from handbook_rag.ingest.models import Chunk
 
+FailureReason = Literal["rate_limit", "quota", "configuration", "unavailable"]
+"""What kind of failure stopped a request, which decides what may help.
+
+- ``rate_limit``: too many requests in a short time. Trying again soon may work.
+- ``quota``: the allowance for the day is used up. Trying again today will not work.
+- ``configuration``: no credential, a rejected one, or a model that cannot be used.
+  Nothing works until the settings change.
+- ``unavailable``: anything else. The API failed, could not be reached, or sent a reply
+  that could not be read.
+"""
+
 
 class GenerationError(RuntimeError):
-    """The model could not be reached or refused the request."""
+    """The model could not be reached or refused the request.
+
+    The message is for the person who runs the application: it can name settings and
+    files. A caller of the HTTP API is told only the ``reason``, in fixed words, and
+    when to try again if that is known.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: FailureReason = "unavailable",
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason: FailureReason = reason
+        self.retry_after = retry_after
+        """Seconds to wait before trying again, when the provider said so."""
 
 
 class Generator(Protocol):
-    """Anything that can write an answer to a question from a set of chunks."""
+    """Anything that can write an answer to a question from a set of chunks.
+
+    Besides writing, a generator says who serves its model and which model it asks for.
+    The pipeline needs both for the trace of a model call, also when the call fails and
+    there is no reply to read them from.
+    """
+
+    @property
+    def provider(self) -> str:
+        """Who serves the model, by the name OpenTelemetry's conventions give it."""
+        ...
+
+    @property
+    def operation(self) -> str:
+        """The kind of request made, by the name OpenTelemetry's conventions give it."""
+        ...
+
+    @property
+    def model(self) -> str:
+        """The model asked for. The reply names the model that served it."""
+        ...
 
     def generate(
         self,

@@ -115,6 +115,14 @@ def make_chunk(
     )
 
 
+class StandInModel:
+    """What every stand-in answer generator shares: the names the pipeline traces it by."""
+
+    provider = "stand-in"
+    operation = "chat"
+    model = "stand-in-model"
+
+
 class FakeReranker:
     """A stand-in reranker for tests: scores a text by how many of the question's words it has."""
 

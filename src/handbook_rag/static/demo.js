@@ -116,7 +116,7 @@ function isAnswer(value) {
     isObject(value) &&
     typeof value.answered === "boolean" &&
     Array.isArray(value.sources) &&
-    value.sources.every((source) => isObject(source) && typeof source.number === "number") &&
+    value.sources.every((source) => isObject(source) && Number.isInteger(source.number)) &&
     Array.isArray(value.segments) &&
     value.segments.every((segment) => isObject(segment) && Array.isArray(segment.sources)) &&
     isObject(value.usage)

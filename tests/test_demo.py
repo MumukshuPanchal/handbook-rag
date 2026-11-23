@@ -362,7 +362,7 @@ FORBIDDEN = {
     "a timer, which can run a string": r"\bset(?:Timeout|Interval)\b",
     "an inline event handler": r"\.on[a-z]+\s*=(?!=)|setAttribute\s*\(\s*[\"'`]on",
     "HTML parsed from a string": (
-        r"\b(?:DOMParser|createContextualFragment|setHTMLUnsafe|parseHTMLUnsafe|srcdoc)\b"
+        r"\b(?:DOMParser|createContextualFragment|setHTML(?:Unsafe)?|parseHTMLUnsafe|srcdoc)\b"
     ),
     "an element made in a namespace": r"\bcreateElementNS\b",
     "a javascript: address": r"(?i)javascript:",
@@ -370,6 +370,10 @@ FORBIDDEN = {
     "open": r"\bopen\b",
     "the Navigation API": r"\bnavigat(?:e|ion)\b",
     "a refresh by a meta element": r"(?i)\bhttp-?equiv\b",
+    "the history": r"\bhistory\b",
+    "an attribute made as a node": (
+        r"\b(?:attributes|createAttribute|setNamedItem|setAttributeNode)\b"
+    ),
 }
 
 
@@ -384,8 +388,9 @@ def problems_in(source: str) -> list[str]:
     # An element is a link only once it has an address, and only sourceLink gives one.
     if outside(r"href", link):
         found.append("an address set outside sourceLink")
-    # A link element, named as such, is made in sourceLink only.
-    if outside(r"\(\s*([\"'`])a\1\s*[,)]", link):
+    # A link element, named as such, is made in sourceLink only. The browser takes the
+    # name in either case, so "A" is a link too.
+    if outside(r"(?i)\(\s*([\"'`])a\1\s*[,)]", link):
         found.append("a link element made outside sourceLink")
     # An element whose kind is not written out is made by make only, and the rule above
     # keeps make from being asked for a link.
@@ -438,6 +443,17 @@ def test_the_script_reads_nothing_as_html_or_code_and_makes_links_in_one_place()
         (
             "page.answer.append(document.createElement('a'));",
             "a link element made outside sourceLink",
+        ),
+        (
+            'page.answer.append(document.createElement("A"));',
+            "a link element made outside sourceLink",
+        ),
+        ("page.answer.setHTML(data.text);", "HTML parsed from a string"),
+        ("history.go(-1);", "the history"),
+        ("history.pushState(null, '', data.url);", "the history"),
+        (
+            "const a = document.createAttribute(name); link.attributes.setNamedItem(a);",
+            "an attribute made as a node",
         ),
         (
             "page.answer.append(document.createElement(data.kind));",

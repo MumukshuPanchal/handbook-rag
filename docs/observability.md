@@ -91,7 +91,7 @@ A request to the API is traced the same way. Its response carries the trace id i
 
 An answer is written in a worker thread, which starts with a copy of the request's context, so its spans stay in the request's trace. A streamed answer carries the trace id in the header and in its `answer` event; an `error` event carries only its `detail`, and the header is sent all the same. A request to `/ask` that is turned away before an answer starts, because the service is full or answering is not configured, carries no trace id. A caller who leaves in the middle of a stream stops the model call; the spans of that answer end as failed, with the kind `handbook_rag.streaming.CallerGone`.
 
-Requests to `/health` are not traced. Something asks for it every few seconds, and those traces would bury the ones made by people. Neither are loads of the demo page and its two files: a page load is not a question. A question asked on the page is a request to `/ask`, traced like any other ([ADR 0016](adr/0016-a-demo-page-without-a-build-step.md)).
+Requests to `/health` are not traced. Something asks for it every few seconds, and those traces would bury the ones made by people. Neither is any request to the demo page's three addresses, `/`, `/static/demo.js` and `/static/demo.css`, whatever its method, and also while the page is switched off: a page load is not a question. A question asked on the page is a request to `/ask`, traced like any other ([ADR 0016](adr/0016-a-demo-page-without-a-build-step.md)).
 
 Start the service with `HANDBOOK_RAG_TRACING=true make serve`.
 

@@ -20,8 +20,8 @@
 
   <form id="ask-form" class="ask">
     <label for="question">Your question</label>
-    <p id="question-hint" class="hint">Up to 500 characters.</p>
-    <textarea id="question" name="query" rows="3" maxlength="500" aria-describedby="question-hint question-count"></textarea>
+    <p id="question-hint" class="hint">Up to 500 characters. Enter starts a new line; Ctrl+Enter, or Cmd+Enter on a Mac, asks.</p>
+    <textarea id="question" name="query" rows="3" maxlength="500" aria-describedby="question-hint question-count" aria-keyshortcuts="Control+Enter Meta+Enter"></textarea>
     <p id="question-count" class="hint">0 of 500 characters</p>
     <div class="buttons">
       <button type="submit" id="ask" aria-disabled="false">Ask</button>
@@ -43,7 +43,7 @@
   <div class="results">
     <section id="answer-area" class="answer-area" aria-labelledby="answer-heading" hidden>
       <h2 id="answer-heading">Answer</h2>
-      <div id="stream" class="stream" aria-live="polite"></div>
+      <div id="stream" class="stream"></div>
       <div id="answer"></div>
       <div id="failure" class="failure" role="alert"></div>
       <section id="sources-area" aria-labelledby="sources-heading" hidden>

@@ -86,6 +86,7 @@ code {
 
 .hint,
 .source-headings,
+.source-address,
 .address,
 footer {
   color: var(--muted);
@@ -253,6 +254,14 @@ button[aria-disabled="true"] {
 .source-headings {
   margin: 0.15rem 0;
   font-size: 0.9rem;
+}
+
+/* Where a source's link leads, written out, since its title can say anything. */
+.source-address {
+  margin: 0.15rem 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
 }
 
 .passage summary {

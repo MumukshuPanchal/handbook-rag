@@ -44,8 +44,10 @@ HEADERS = {
     "X-Content-Type-Options": "nosniff",
     # A source's page, opened from the page, is not told where the reader came from.
     "Referrer-Policy": "no-referrer",
-    # The browser may keep a copy but checks it with the server before using it, so a
-    # changed file reaches the reader at the next load.
+    # The browser may keep a copy but must not use it without asking the server. No ETag
+    # or Last-Modified is sent, so there is nothing to check a copy against, and every
+    # load fetches the three small files again. A changed file reaches the reader at the
+    # next load.
     "Cache-Control": "no-cache",
 }
 

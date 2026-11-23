@@ -5,10 +5,11 @@
 // Why it is written the way it is. The answer is written by a model, from handbook
 // pages that anyone at the company can edit, and the adversarial tests showed that a
 // link planted in a page reached the answer in three cases of four (docs/evaluation.md,
-// issue 66). So everything that comes from the API is shown as text and never read as
-// HTML: elements are built one by one and filled with textContent. The script uses no
-// innerHTML, outerHTML, insertAdjacentHTML, document.write, eval, new Function or inline
-// event handler, and a test reads this file to check that it stays so. Nothing in an
+// issue 66). So everything that comes from the API is shown as text: elements are built
+// one by one and filled with textContent. Nothing in this script reads a string as
+// markup, runs a string as code, or takes the reader to another page. A test reads the
+// whole of this file, these comments included, and fails if one of the names that would
+// do so appears in it, which is why the comments do not name them either. Nothing in an
 // answer becomes a link. The only links are the sources' pages, made in one function,
 // sourceLink, and only for an address that starts with https:// or http://. The page's
 // content security policy backs this up: the browser runs no inline script and loads
@@ -24,11 +25,15 @@
 // Splits the text received so far into whole events and the start of the next one. An
 // event ends with a blank line. A piece of the stream can end in the middle of an
 // event, or hold several: what comes after the last blank line is kept for the next
-// piece. The service ends every line with \n (server_sent_event in streaming.py), so
-// that is the only line ending looked for.
-function takeEvents(received) {
-  const blocks = received.split("\n\n");
-  const rest = blocks.pop();
+// piece. A line may end in \r\n, \n or \r, as the standard allows. The service sends \n,
+// but something between it and the browser may not. A \r at the very end is held back
+// until the stream has ended, because the \n that would make the two one line ending
+// may start the next piece.
+function takeEvents(received, ended) {
+  const held = !ended && received.endsWith("\r") ? "\r" : "";
+  const lines = received.slice(0, received.length - held.length).replace(/\r\n?/g, "\n");
+  const blocks = lines.split("\n\n");
+  const rest = blocks.pop() + held;
   const events = blocks.map(parseEvent).filter((event) => event !== null);
   return { events, rest };
 }
@@ -66,7 +71,7 @@ async function readEvents(body, onEvent) {
   for (;;) {
     const { done, value } = await reader.read();
     received += done ? decoder.decode() : decoder.decode(value, { stream: true });
-    const { events, rest } = takeEvents(received);
+    const { events, rest } = takeEvents(received, done);
     received = rest;
     events.forEach(onEvent);
     if (done) {
@@ -84,14 +89,34 @@ function parseData(data) {
   }
 }
 
+// The media type of a Content-Type header, without its parameters, in lower case.
+function mediaType(contentType) {
+  return (contentType ?? "").split(";")[0].trim().toLowerCase();
+}
+
+// What a reader is told when the service said yes but sent something other than a
+// stream of events: what came instead, by its content type.
+function notAStream(contentType) {
+  const type = mediaType(contentType);
+  if (type === "") {
+    return "The reply was not the stream of the answer, and it did not say what it was.";
+  }
+  const words = `The reply was ${type}, not the stream of the answer (text/event-stream).`;
+  return type === "text/html"
+    ? `${words} Something between this page and the service may have answered instead.`
+    : words;
+}
+
 // ---- Building the answer --------------------------------------------------------------
 
-// Whether a value has the shape of the API's answer, as far as this page reads it.
+// Whether a value has the shape of the API's answer, as far as this page reads it: down
+// to each source and each segment, so that building the answer cannot fail halfway.
 function isAnswer(value) {
   return (
     isObject(value) &&
     typeof value.answered === "boolean" &&
     Array.isArray(value.sources) &&
+    value.sources.every((source) => isObject(source) && typeof source.number === "number") &&
     Array.isArray(value.segments) &&
     value.segments.every((segment) => isObject(segment) && Array.isArray(segment.sources)) &&
     isObject(value.usage)
@@ -102,31 +127,45 @@ function isObject(value) {
   return value !== null && typeof value === "object";
 }
 
+// A value from the API as text to show: a string as it is, a number in figures, and
+// anything else, such as a missing field, as "unknown".
+function shown(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  return Number.isFinite(value) ? String(value) : "unknown";
+}
+
 // The answer as the pieces to show: the text of each segment, and the numbers of the
 // sources it rests on. Only numbers the answer lists are kept, so a number never points
-// at nothing.
+// at nothing. A segment without text adds none.
 function answerPieces(answer) {
   const listed = new Set(answer.sources.map((source) => source.number));
   return answer.segments.map((segment) => ({
-    text: String(segment.text),
+    text: typeof segment.text === "string" ? segment.text : "",
     numbers: segment.sources.filter((number) => listed.has(number)),
   }));
 }
 
 // The facts of a finished request, as pairs of a label and a value.
 function answerFacts(answer) {
+  const { input_tokens: read, output_tokens: written } = answer.usage;
+  const tokens =
+    Number.isFinite(read) && Number.isFinite(written)
+      ? `${read} read, ${written} written`
+      : "unknown";
   const firstText = answer.first_text_ms === null ? "no text came" : seconds(answer.first_text_ms);
   return [
-    ["Model", String(answer.model)],
-    ["Tokens", `${answer.usage.input_tokens} read, ${answer.usage.output_tokens} written`],
+    ["Model", shown(answer.model)],
+    ["Tokens", tokens],
     ["First text after", firstText],
     ["Whole answer after", seconds(answer.took_ms)],
-    ["Why the model stopped", String(answer.stop_reason)],
+    ["Why the model stopped", shown(answer.stop_reason)],
   ];
 }
 
 function seconds(milliseconds) {
-  return typeof milliseconds === "number" ? `${(milliseconds / 1000).toFixed(1)} s` : "unknown";
+  return Number.isFinite(milliseconds) ? `${(milliseconds / 1000).toFixed(1)} s` : "unknown";
 }
 
 function plural(count, one, many) {
@@ -149,7 +188,7 @@ function refusalInWords(status, body, retryAfter) {
     const problems = Array.isArray(detail) ? detail.filter(isObject) : [];
     const reasons = problems.map((problem) => {
       const field = Array.isArray(problem.loc) ? problem.loc.at(-1) : "request";
-      return `${field}: ${problem.msg}.`;
+      return `${shown(field)}: ${shown(problem.msg)}.`;
     });
     return ["The service did not accept the question.", ...reasons].join(" ");
   }
@@ -163,16 +202,39 @@ function refusalInWords(status, body, retryAfter) {
 }
 
 // How long the service asked to wait, in words, from a Retry-After header that holds a
-// number of seconds, which is what the service sends. Empty when there is none.
+// number of seconds, which is what the service sends. Empty when there is none, or when
+// it holds anything else, such as a date.
 function waitInWords(retryAfter) {
   if (retryAfter === null || !/^\d+$/.test(retryAfter)) {
     return "";
   }
   const wait = Number(retryAfter);
+  if (wait === 0) {
+    return "You can ask again now.";
+  }
   if (wait < 120) {
     return `Wait ${plural(wait, "second", "seconds")} before asking again.`;
   }
-  return `Wait about ${Math.ceil(wait / 60)} minutes before asking again.`;
+  if (wait < 3600) {
+    return `Wait about ${Math.ceil(wait / 60)} minutes before asking again.`;
+  }
+  return `Wait about ${plural(Math.round(wait / 3600), "hour", "hours")} before asking again.`;
+}
+
+// ---- Keys and announcements -----------------------------------------------------------
+
+// Whether a key press in the question box asks the question: Ctrl+Enter, or Cmd+Enter on
+// a Mac. Enter alone starts a new line, and an Enter that finishes a character being
+// composed, as some keyboards for other scripts do, asks nothing.
+function isAskKey(event) {
+  return event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing;
+}
+
+// The text that puts a message in the status line so that a screen reader announces it.
+// The same text set again is not announced, so a repeated message gets a no-break space
+// added, which changes the text and not what is read. The next repeat takes it off.
+function announcement(previous, words) {
+  return previous === words ? `${words} ` : words;
 }
 
 // ---- Building the page ----------------------------------------------------------------
@@ -199,6 +261,8 @@ const page = {
   passages: document.getElementById("passages"),
 };
 
+const UNREADABLE_ANSWER = "The service sent an answer this page cannot read.";
+
 // An element with a class and its text. The text is set as text, never parsed.
 function make(tag, className, text) {
   const node = document.createElement(tag);
@@ -212,14 +276,14 @@ function make(tag, className, text) {
 }
 
 // The one place that makes a link: to a source's page, from the url field the API sends.
-// Only an address that starts with https:// or http:// becomes a link. Anything else,
-// such as a javascript: or data: address, is shown as text next to the title.
+// Only an address that starts with https:// or http:// becomes a link. An address of any
+// other kind leaves the title as plain text.
 function sourceLink(url, title) {
   const isWebAddress =
     typeof url === "string" && (url.startsWith("https://") || url.startsWith("http://"));
   if (!isWebAddress) {
     const plain = make("span", "", title);
-    plain.append(make("span", "address", ` (not a web address: ${url})`));
+    plain.append(make("span", "address", " (no link: not a web address)"));
     return plain;
   }
   const link = document.createElement("a");
@@ -231,14 +295,18 @@ function sourceLink(url, title) {
   return link;
 }
 
-// A source or a found passage: its number, its title as a link to its page, the
-// headings above it, and its text folded away until asked for.
-function passageItem(label, passage, extra) {
+// A source or a found passage: its label, its title as a link to its page, the address
+// of that page as text, the headings above it, and its text folded away until asked for.
+// The name says which it is, for the fold's screen reader name.
+function passageItem(label, name, passage, extra) {
   const item = make("li", "source");
-  const title = make("p", "source-title");
-  const link = sourceLink(passage.url, String(passage.title));
-  title.append(make("span", "source-number", label), " ", link);
-  item.append(title);
+  const title = shown(passage.title);
+  const heading = make("p", "source-title");
+  heading.append(make("span", "source-number", label), " ", sourceLink(passage.url, title));
+  item.append(heading);
+  // The title is written by whoever edits the page, so the address is shown too, and the
+  // reader sees where the link leads before following it.
+  item.append(make("p", "source-address", shown(passage.url)));
   // The headings joined as the command line joins them.
   if (Array.isArray(passage.heading_path) && passage.heading_path.length > 0) {
     item.append(make("p", "source-headings", passage.heading_path.join(" > ")));
@@ -247,8 +315,10 @@ function passageItem(label, passage, extra) {
     item.append(make("p", "source-headings", extra));
   }
   const fold = make("details", "passage");
-  const text = make("p", "passage-text", String(passage.text));
-  fold.append(make("summary", "", "Show the passage"), text);
+  const summary = make("summary", "", "Show the passage");
+  // Every fold shows the same words, so a screen reader is also told whose passage it is.
+  summary.append(make("span", "visually-hidden", ` of ${name}, ${title}`));
+  fold.append(summary, make("p", "passage-text", shown(passage.text)));
   item.append(fold);
   return item;
 }
@@ -262,6 +332,9 @@ function citeButton(number, title) {
   return button;
 }
 
+// Brings a source into view and marks it. The focus stays on the number that was
+// pressed, so the reader keeps their place in the answer and can press the next one,
+// and the status line says which source is marked and where.
 function showSource(number) {
   const wanted = `source-${number}`;
   for (const item of page.sources.children) {
@@ -270,12 +343,12 @@ function showSource(number) {
   const item = document.getElementById(wanted);
   if (item !== null) {
     item.scrollIntoView({ block: "nearest" });
-    item.focus({ preventScroll: true });
+    say(`Source ${number} is marked, in the list of sources under the answer.`);
   }
 }
 
 function renderAnswer(answer) {
-  const titles = new Map(answer.sources.map((source) => [source.number, String(source.title)]));
+  const titles = new Map(answer.sources.map((source) => [source.number, shown(source.title)]));
   const box = make("div", answer.answered ? "answer" : "answer decline");
   if (!answer.answered) {
     box.append(make("p", "decline-label", "Not an answer"));
@@ -292,21 +365,21 @@ function renderAnswer(answer) {
     text.textContent = "The reply holds no text.";
   }
   box.append(text);
-  // The final answer takes the place of the text that streamed in. The streamed text is
-  // emptied and hidden rather than changed, so a screen reader does not read it twice.
+  const items = answer.sources.map((source) => {
+    const item = passageItem(`[${source.number}]`, `source ${source.number}`, source, "");
+    item.id = `source-${source.number}`;
+    return item;
+  });
+  const facts = answerFacts(answer);
+  // All is built before the page changes, so an answer that cannot be shown leaves the
+  // streamed text in place. The final answer then takes the place of that text, which is
+  // emptied and hidden.
   page.stream.replaceChildren();
   page.stream.hidden = true;
   page.answer.replaceChildren(box);
-  page.sources.replaceChildren(
-    ...answer.sources.map((source) => {
-      const item = passageItem(`[${source.number}]`, source, "");
-      item.id = `source-${source.number}`;
-      item.tabIndex = -1;
-      return item;
-    }),
-  );
-  page.sourcesArea.hidden = answer.sources.length === 0;
-  renderFacts(answerFacts(answer), answer.trace_id);
+  page.sources.replaceChildren(...items);
+  page.sourcesArea.hidden = items.length === 0;
+  renderFacts(facts, answer.trace_id);
 }
 
 // The facts of the request, and its trace id with a button that copies it.
@@ -339,7 +412,7 @@ function copyButton(text) {
 }
 
 function say(words) {
-  page.status.textContent = words;
+  page.status.textContent = announcement(page.status.textContent, words);
 }
 
 // Shows a failure in words. Text that had already arrived stays, marked as unfinished.
@@ -425,8 +498,16 @@ async function refused(response) {
 }
 
 // Reads the events of the answer: text as it is written, then the answer or an error.
+// The text is not announced piece by piece: the status line says that the model is
+// writing, and when the answer is complete.
 async function readAnswer(response) {
   const traceId = response.headers.get("X-Trace-Id");
+  const contentType = response.headers.get("Content-Type");
+  if (mediaType(contentType) !== "text/event-stream") {
+    fail(notAStream(contentType));
+    renderFacts([], traceId);
+    return;
+  }
   let ended = false;
   await readEvents(response.body, (event) => {
     if (ended) {
@@ -440,17 +521,7 @@ async function readAnswer(response) {
       page.stream.append(data.text);
     } else if (event.name === "answer") {
       ended = true;
-      if (isAnswer(data)) {
-        renderAnswer(data);
-        const count = data.sources.length;
-        say(
-          data.answered
-            ? `The answer is complete. It cites ${plural(count, "source", "sources")}.`
-            : "Not an answer: the assistant declined, or its reply did not come to a proper end.",
-        );
-      } else {
-        fail("The service sent an answer this page cannot read.");
-      }
+      showAnswer(data);
     } else if (event.name === "error") {
       ended = true;
       const detail = data !== null && typeof data.detail === "string" ? data.detail : "";
@@ -462,6 +533,28 @@ async function readAnswer(response) {
     fail("The answer stopped before it was complete: the stream ended without it.");
     renderFacts([], traceId);
   }
+}
+
+// Shows the answer event, or says that it cannot be read. Its shape is checked first,
+// and a fault while building it is caught too, so a reader is never told that the
+// connection broke when it was the answer that could not be read.
+function showAnswer(data) {
+  if (!isAnswer(data)) {
+    fail(UNREADABLE_ANSWER);
+    return;
+  }
+  try {
+    renderAnswer(data);
+  } catch (error) {
+    console.error(error);
+    fail(UNREADABLE_ANSWER);
+    return;
+  }
+  say(
+    data.answered
+      ? `The answer is complete. It cites ${plural(data.sources.length, "source", "sources")}.`
+      : "Not an answer: the assistant declined, or its reply did not come to a proper end.",
+  );
 }
 
 function stopped() {
@@ -523,8 +616,9 @@ function renderPassages(results) {
   page.searchState.textContent = results.length === 0 ? "The search found nothing." : "";
   page.passages.replaceChildren(
     ...results.map((result) => {
-      const score = typeof result.score === "number" ? result.score.toFixed(3) : "unknown";
-      return passageItem(`${result.rank}.`, result, `Score ${score}`);
+      const rank = shown(result.rank);
+      const score = Number.isFinite(result.score) ? result.score.toFixed(3) : "unknown";
+      return passageItem(`${rank}.`, `found passage ${rank}`, result, `Score ${score}`);
     }),
   );
 }
@@ -551,6 +645,14 @@ function start(question) {
 page.form.addEventListener("submit", (event) => {
   event.preventDefault();
   start(page.question.value.trim());
+});
+
+// Asking from the keyboard without leaving the box.
+page.question.addEventListener("keydown", (event) => {
+  if (isAskKey(event)) {
+    event.preventDefault();
+    start(page.question.value.trim());
+  }
 });
 
 // An example question is put in the box, so the reader sees what was asked, and asked.

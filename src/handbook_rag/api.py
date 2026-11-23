@@ -452,17 +452,19 @@ def _answer_model(settings: Settings) -> Generator | None:
         return None
 
 
-# The requests that are not worth a trace: health probes, and loads of the demo page and
-# its files.
+# The addresses whose requests are not worth a trace: health probes, and the demo page
+# and its two files.
 UNTRACED_PATHS = frozenset({"/health", *demo.FILES})
 
 
 def _is_untraced(scope: MutableMapping[str, Any]) -> bool:
-    """Whether a request is a health probe or a load of the demo page, not worth a trace.
+    """Whether a request is to /health or to one of the demo page's three addresses.
 
     Something asks for /health every few seconds, and a page load is not a question.
-    Traced, those requests would bury the ones made by people. A question asked on the
-    page is a request to /ask, and is traced like any other.
+    Traced, those requests would bury the ones made by people. The address alone decides,
+    so a request to one of them is not traced whatever its method, and also while the
+    page is switched off and the address answers 404. A question asked on the page is a
+    request to /ask, and is traced like any other.
     """
     return scope.get("path") in UNTRACED_PATHS
 

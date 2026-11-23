@@ -3,8 +3,9 @@
 The page's script cannot run here. The project has no JavaScript toolchain, on purpose
 (ADR 0016), so its behaviour in a browser is checked by hand. What can be checked without
 a browser is checked on the files as served and as written: the headers, the content
-security policy, the page's markup, and the script's source, which must hold no call
-that would read text from the API as HTML or as code, and make links in one place only.
+security policy, the page's markup, and the script's source, which must hold no name
+that would read text from the API as HTML or as code or take the reader to another page,
+and must make links in one place only.
 """
 
 import json
@@ -102,20 +103,32 @@ def test_the_page_and_its_files_are_not_part_of_the_apis_documentation(
     assert client.get("/").status_code == 200, "the page is served all the same"
 
 
-def test_loading_the_page_leaves_no_trace_while_a_search_does(
-    monkeypatch: pytest.MonkeyPatch,
+def test_the_page_and_its_files_take_no_other_method_than_get(client: TestClient) -> None:
+    for path in FILES:
+        for method in ("POST", "PUT", "DELETE"):
+            assert client.request(method, path).status_code == 405, f"{method} {path}"
+
+
+@pytest.mark.parametrize(("demo_on", "status"), [(True, {"GET": 200, "POST": 405}), (False, {})])
+def test_no_request_to_the_pages_addresses_is_traced_while_a_search_is(
+    monkeypatch: pytest.MonkeyPatch, demo_on: bool, status: dict[str, int]
 ) -> None:
-    """A page load is not a question. The question asked on the page is traced as usual."""
+    """A page load is not a question. The question asked on the page is traced as usual.
+
+    The address alone decides: no request to the page's three addresses is traced, whatever
+    its method, and also while the page is switched off and they answer 404.
+    """
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     monkeypatch.setattr("opentelemetry.trace.get_tracer_provider", lambda: provider)
     monkeypatch.setattr("handbook_rag.tracing._provider", provider)
 
-    with TestClient(application()) as client:
+    with TestClient(application(Settings(api_demo=demo_on))) as client:
         exporter.clear()  # drop the trace of the search that warmed the service up
         for path in FILES:
-            assert client.get(path).status_code == 200
+            for method in ("GET", "POST"):
+                assert client.request(method, path).status_code == status.get(method, 404)
         after_the_page = list(exporter.get_finished_spans())
         client.post("/search", json={"query": "paid leave"})
         after_a_search = exporter.get_finished_spans()
@@ -286,7 +299,19 @@ def test_the_page_tells_the_reader_the_length_limit_before_they_reach_it() -> No
     assert "question-hint" in str(box["aria-describedby"]).split()
 
 
-def test_the_question_has_a_label_and_the_answer_and_the_state_are_announced() -> None:
+def test_the_hint_tells_the_keys_that_ask_and_the_script_listens_for_them() -> None:
+    markup = page()
+    (box,) = [attrs for tag, attrs in markup.elements if tag == "textarea"]
+    script = static("demo.js")
+
+    assert "Ctrl+Enter" in markup.paragraphs["question-hint"]
+    assert "Cmd+Enter" in markup.paragraphs["question-hint"]
+    assert box["aria-keyshortcuts"] == "Control+Enter Meta+Enter"
+    assert 'event.key === "Enter" && (event.ctrlKey || event.metaKey)' in script
+    assert 'page.question.addEventListener("keydown"' in script
+
+
+def test_the_question_has_a_label_and_the_state_of_the_request_is_announced() -> None:
     markup = page()
     by_id = {attrs["id"]: (tag, attrs) for tag, attrs in markup.elements if attrs.get("id")}
     labelled = [attrs.get("for") for tag, attrs in markup.elements if tag == "label"]
@@ -294,9 +319,12 @@ def test_the_question_has_a_label_and_the_answer_and_the_state_are_announced() -
     assert [attrs.get("lang") for tag, attrs in markup.elements if tag == "html"] == ["en"]
     assert by_id["question"][0] == "textarea"
     assert labelled == ["question"]
-    assert by_id["stream"][1].get("aria-live") == "polite", "the text as it streams in"
     assert by_id["status"][1].get("role") == "status", "the state of the request"
     assert by_id["failure"][1].get("role") == "alert", "a failure, in words"
+    # The streamed text would be read piece by piece. The status line says that the model
+    # is writing, and when the answer is complete.
+    assert "aria-live" not in by_id["stream"][1]
+    assert [attrs["id"] for _, attrs in markup.elements if attrs.get("aria-live")] == []
 
 
 def test_every_element_the_script_looks_up_is_on_the_page() -> None:
@@ -309,12 +337,9 @@ def test_every_element_the_script_looks_up_is_on_the_page() -> None:
     assert len(markup.examples) == 3, 'the script looks for "button.example"'
 
 
-# The script's source.
-
-
-def code(script: str) -> str:
-    """The script without its comment lines, which name the very calls it must not make."""
-    return "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("//"))
+# The script's source. It is read whole, comments and strings included: a line that looks
+# like a comment can sit inside a template literal, where the ${...} on it runs. So the
+# script's own comments do not name what it must not hold.
 
 
 def function_body(source: str, name: str) -> range:
@@ -323,28 +348,33 @@ def function_body(source: str, name: str) -> range:
     return range(start, source.index("\n}\n", start) + 2)
 
 
-# What the script must never hold, by what it is. Each would let text from the API, or a
-# string built from it, run as code or be read as HTML.
+# What the script must never hold, by name, wherever the name stands. Each would let text
+# from the API, or a string built from it, be read as markup, run as code, or take the
+# reader to another page. The script has no reason to do any of these.
 FORBIDDEN = {
     "innerHTML": r"\binnerHTML\b",
     "outerHTML": r"\bouterHTML\b",
     "insertAdjacentHTML": r"\binsertAdjacentHTML\b",
-    "document.write": r"\bdocument\s*\.\s*write",
-    "eval": r"\beval\s*\(",
-    "new Function": r"\bFunction\s*\(",
+    "write or writeln": r"\bwrite(?:ln)?\b",
+    "eval": r"\beval\b",
+    "Function": r"\bFunction\b",
+    "a constructor reached by name": r"\bconstructor\b",
+    "a timer, which can run a string": r"\bset(?:Timeout|Interval)\b",
     "an inline event handler": r"\.on[a-z]+\s*=(?!=)|setAttribute\s*\(\s*[\"'`]on",
-    "a timer that runs a string": r"\bset(?:Timeout|Interval)\s*\(\s*[\"'`]",
     "HTML parsed from a string": (
         r"\b(?:DOMParser|createContextualFragment|setHTMLUnsafe|parseHTMLUnsafe|srcdoc)\b"
     ),
     "an element made in a namespace": r"\bcreateElementNS\b",
-    "a javascript: address": r"javascript:",
+    "a javascript: address": r"(?i)javascript:",
+    "location": r"\blocation\b",
+    "open": r"\bopen\b",
+    "the Navigation API": r"\bnavigat(?:e|ion)\b",
+    "a refresh by a meta element": r"(?i)\bhttp-?equiv\b",
 }
 
 
-def problems_in(script: str) -> list[str]:
+def problems_in(source: str) -> list[str]:
     """What a script holds that the demo page's script must not."""
-    source = code(script)
     found = [name for name, pattern in FORBIDDEN.items() if re.search(pattern, source)]
     link, make = function_body(source, "sourceLink"), function_body(source, "make")
 
@@ -377,16 +407,32 @@ def test_the_script_reads_nothing_as_html_or_code_and_makes_links_in_one_place()
         ("page.answer.innerHTML = data.text;", "innerHTML"),
         ("page.answer.outerHTML = data.text;", "outerHTML"),
         ('page.answer.insertAdjacentHTML("beforeend", data.text);', "insertAdjacentHTML"),
-        ("document.write(data.text);", "document.write"),
-        ("document.writeln(data.text);", "document.write"),
+        ("document.write(data.text);", "write or writeln"),
+        ("document.writeln(data.text);", "write or writeln"),
+        ("const doc = document; doc.write(data.text);", "write or writeln"),
         ("eval(data.text);", "eval"),
-        ("new Function(data.text)();", "new Function"),
+        ("(0, eval)(data.text);", "eval"),
+        ("new Function(data.text)();", "Function"),
+        ("const f = Function; f(data.text)();", "Function"),
+        ("data.constructor.constructor(data.text)();", "a constructor reached by name"),
         ("page.ask.onclick = start;", "an inline event handler"),
         ('page.ask.setAttribute("onclick", data.text);', "an inline event handler"),
-        ('setTimeout("start()", 10);', "a timer that runs a string"),
+        ('setTimeout("start()", 10);', "a timer, which can run a string"),
+        ("setInterval(data.text, 10);", "a timer, which can run a string"),
         ("new DOMParser().parseFromString(data.text, 'text/html');", "HTML parsed from a string"),
         ('document.createElementNS(namespace, "a");', "an element made in a namespace"),
         ('page.answer.append("javascript:alert(1)");', "a javascript: address"),
+        ("document.location.assign(data.text);", "location"),
+        ("top.location.replace(data.text);", "location"),
+        ("location = data.text;", "location"),
+        ("location.href = data.text;", "location"),
+        ("window.open(data.text);", "open"),
+        ("navigation.navigate(data.text);", "the Navigation API"),
+        ('meta.httpEquiv = "refresh";', "a refresh by a meta element"),
+        # A line that looks like a comment, inside a template literal: the ${...} runs.
+        ("const x = `\n// ${page.status.innerHTML = data.text}\n`;", "innerHTML"),
+        # A comment that names a forbidden call is caught too: comments are not skipped.
+        ("// page.answer.innerHTML = data.text;", "innerHTML"),
         ("anchor.href = data.url;", "an address set outside sourceLink"),
         ('page.answer.append(make("a", "", data.text));', "a link element made outside sourceLink"),
         (
@@ -411,7 +457,7 @@ def test_the_check_of_the_script_finds_each_kind_of_call_planted_in_it(
 
 
 def test_the_one_function_that_makes_a_link_checks_the_address_first() -> None:
-    source = code(static("demo.js"))
+    source = static("demo.js")
     span = function_body(source, "sourceLink")
     body = source[span.start : span.stop]
 

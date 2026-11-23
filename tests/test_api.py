@@ -41,7 +41,7 @@ from handbook_rag.api import (
     UNREACHABLE,
     WARM_UP_QUERY,
     AskResponse,
-    _is_health_check,
+    _is_untraced,
     create_app,
 )
 from handbook_rag.cli import app as cli
@@ -227,7 +227,7 @@ def test_a_search_is_traced_from_the_http_request_down_and_a_health_probe_is_not
     assert body["trace_id"] == format(root.context.trace_id, "032x")
     assert {"search", "retrieve.hybrid"} <= {span.name for span in finished}
     assert not [span.name for span in finished if "health" in span.name]
-    assert _is_health_check({"type": "http", "path": "/search"}) is False
+    assert _is_untraced({"type": "http", "path": "/search"}) is False
 
 
 def test_search_accepts_a_question_at_the_length_limit_and_strips_spaces(

@@ -170,6 +170,15 @@ class Settings(BaseSettings):
             "was written, so more answers at once would mostly wait on that limit."
         ),
     )
+    api_demo: bool = Field(
+        default=True,
+        description=(
+            "Whether the HTTP API serves the demo page at / and its two files under "
+            "/static/. Switched off, all three answer 404. Like the rest of the API the "
+            "page has no login, and every question asked on it spends the answer model's "
+            "allowance (ADR 0016)."
+        ),
+    )
     tracing: bool = Field(
         default=False,
         description=(

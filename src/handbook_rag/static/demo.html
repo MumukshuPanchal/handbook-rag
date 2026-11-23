@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Handbook assistant</title>
+<link rel="stylesheet" href="/static/demo.css">
+<script type="module" src="/static/demo.js"></script>
+</head>
+<body>
+<header>
+  <h1>Handbook assistant</h1>
+  <p>Ask a question about the GitLab handbook. The answer is written by a language model from the passages a search finds, and cites them by number.</p>
+  <p>Everything in an answer is shown as plain text. An address the model writes is not a link: the only links are the pages of the sources.</p>
+</header>
+
+<main>
+  <noscript><p class="failure">This page needs JavaScript to ask a question.</p></noscript>
+
+  <form id="ask-form" class="ask">
+    <label for="question">Your question</label>
+    <p id="question-hint" class="hint">Up to 500 characters.</p>
+    <textarea id="question" name="query" rows="3" maxlength="500" aria-describedby="question-hint question-count"></textarea>
+    <p id="question-count" class="hint">0 of 500 characters</p>
+    <div class="buttons">
+      <button type="submit" id="ask" aria-disabled="false">Ask</button>
+      <button type="button" id="stop" aria-disabled="true">Stop the answer</button>
+    </div>
+  </form>
+
+  <section class="examples" aria-labelledby="examples-heading">
+    <h2 id="examples-heading">Or ask one of these</h2>
+    <ul>
+      <li><button type="button" class="example" aria-disabled="false">How many weeks of parental leave do I get in the US?</button></li>
+      <li><button type="button" class="example" aria-disabled="false">Which personal VPN does GitLab recommend for team members?</button></li>
+      <li><button type="button" class="example" aria-disabled="false">How many days of paid annual leave do UK team members get?</button></li>
+    </ul>
+  </section>
+
+  <p id="status" class="status" role="status"></p>
+
+  <div class="results">
+    <section id="answer-area" class="answer-area" aria-labelledby="answer-heading" hidden>
+      <h2 id="answer-heading">Answer</h2>
+      <div id="stream" class="stream" aria-live="polite"></div>
+      <div id="answer"></div>
+      <div id="failure" class="failure" role="alert"></div>
+      <section id="sources-area" aria-labelledby="sources-heading" hidden>
+        <h3 id="sources-heading">Sources</h3>
+        <ol id="sources" class="sources"></ol>
+      </section>
+      <section id="facts-area" aria-labelledby="facts-heading" hidden>
+        <h3 id="facts-heading">About this request</h3>
+        <dl id="facts" class="facts"></dl>
+      </section>
+    </section>
+
+    <aside id="search-area" class="search-area" aria-label="What the search found" hidden>
+      <details>
+        <summary>What the search found <span id="search-count"></span></summary>
+        <p class="hint">The passages <code>POST /search</code> returns for the same question, best first. The answer runs this search before the model writes, and with the default settings it takes as many passages, so these are the passages the model was given. Compare them with the sources the answer cites. This search costs no request to the model.</p>
+        <p id="search-state"></p>
+        <ol id="passages" class="sources"></ol>
+      </details>
+    </aside>
+  </div>
+</main>
+
+<footer>
+  <p>For this machine only. The service has no login, and every question asked here uses the answer model's allowance. The API's own documentation is at <a href="/docs">/docs</a>.</p>
+</footer>
+</body>
+</html>

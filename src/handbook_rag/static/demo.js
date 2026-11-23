@@ -1,0 +1,577 @@
+// The demo page's script: it asks POST /ask for a streamed answer and shows the answer
+// as it arrives, with its sources. Why the page exists, and why it is built this way,
+// is in docs/adr/0016-a-demo-page-without-a-build-step.md.
+//
+// Why it is written the way it is. The answer is written by a model, from handbook
+// pages that anyone at the company can edit, and the adversarial tests showed that a
+// link planted in a page reached the answer in three cases of four (docs/evaluation.md,
+// issue 66). So everything that comes from the API is shown as text and never read as
+// HTML: elements are built one by one and filled with textContent. The script uses no
+// innerHTML, outerHTML, insertAdjacentHTML, document.write, eval, new Function or inline
+// event handler, and a test reads this file to check that it stays so. Nothing in an
+// answer becomes a link. The only links are the sources' pages, made in one function,
+// sourceLink, and only for an address that starts with https:// or http://. The page's
+// content security policy backs this up: the browser runs no inline script and loads
+// nothing from another site.
+//
+// There is no build step and no library: this file is what the browser runs. What can
+// go wrong is kept in small functions that take values and return values, such as
+// reading the events of a stream and building the answer from its segments. The rest
+// changes the page.
+
+// ---- Reading the events of a stream ---------------------------------------------------
+
+// Splits the text received so far into whole events and the start of the next one. An
+// event ends with a blank line. A piece of the stream can end in the middle of an
+// event, or hold several: what comes after the last blank line is kept for the next
+// piece. The service ends every line with \n (server_sent_event in streaming.py), so
+// that is the only line ending looked for.
+function takeEvents(received) {
+  const blocks = received.split("\n\n");
+  const rest = blocks.pop();
+  const events = blocks.map(parseEvent).filter((event) => event !== null);
+  return { events, rest };
+}
+
+// One event from its lines: its name and its data. Comment lines, which start with a
+// colon, and fields other than event and data are skipped. Without data it is no event.
+function parseEvent(block) {
+  let name = "message";
+  const data = [];
+  for (const line of block.split("\n")) {
+    const colon = line.indexOf(":");
+    if (colon === 0) {
+      continue;
+    }
+    const field = colon === -1 ? line : line.slice(0, colon);
+    let value = colon === -1 ? "" : line.slice(colon + 1);
+    if (value.startsWith(" ")) {
+      value = value.slice(1);
+    }
+    if (field === "event") {
+      name = value;
+    } else if (field === "data") {
+      data.push(value);
+    }
+  }
+  return data.length === 0 ? null : { name, data: data.join("\n") };
+}
+
+// Calls onEvent with each event of a response's body, as its pieces arrive. The decoder
+// holds back a character whose bytes are split between two pieces until it is whole.
+async function readEvents(body, onEvent) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let received = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    received += done ? decoder.decode() : decoder.decode(value, { stream: true });
+    const { events, rest } = takeEvents(received);
+    received = rest;
+    events.forEach(onEvent);
+    if (done) {
+      return;
+    }
+  }
+}
+
+// The data of an event as JSON, or null when it is not JSON.
+function parseData(data) {
+  try {
+    return JSON.parse(data);
+  } catch {
+    return null;
+  }
+}
+
+// ---- Building the answer --------------------------------------------------------------
+
+// Whether a value has the shape of the API's answer, as far as this page reads it.
+function isAnswer(value) {
+  return (
+    isObject(value) &&
+    typeof value.answered === "boolean" &&
+    Array.isArray(value.sources) &&
+    Array.isArray(value.segments) &&
+    value.segments.every((segment) => isObject(segment) && Array.isArray(segment.sources)) &&
+    isObject(value.usage)
+  );
+}
+
+function isObject(value) {
+  return value !== null && typeof value === "object";
+}
+
+// The answer as the pieces to show: the text of each segment, and the numbers of the
+// sources it rests on. Only numbers the answer lists are kept, so a number never points
+// at nothing.
+function answerPieces(answer) {
+  const listed = new Set(answer.sources.map((source) => source.number));
+  return answer.segments.map((segment) => ({
+    text: String(segment.text),
+    numbers: segment.sources.filter((number) => listed.has(number)),
+  }));
+}
+
+// The facts of a finished request, as pairs of a label and a value.
+function answerFacts(answer) {
+  const firstText = answer.first_text_ms === null ? "no text came" : seconds(answer.first_text_ms);
+  return [
+    ["Model", String(answer.model)],
+    ["Tokens", `${answer.usage.input_tokens} read, ${answer.usage.output_tokens} written`],
+    ["First text after", firstText],
+    ["Whole answer after", seconds(answer.took_ms)],
+    ["Why the model stopped", String(answer.stop_reason)],
+  ];
+}
+
+function seconds(milliseconds) {
+  return typeof milliseconds === "number" ? `${(milliseconds / 1000).toFixed(1)} s` : "unknown";
+}
+
+function plural(count, one, many) {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+// ---- Failures in words ----------------------------------------------------------------
+
+// What a reader is told when the service refused a request: from the status, the body
+// when it could be read as JSON, and the Retry-After header. A 503 carries the service's
+// own fixed words; a 422 names the field and what is wrong with it.
+function refusalInWords(status, body, retryAfter) {
+  const detail = isObject(body) ? body.detail : undefined;
+  if (status === 503) {
+    const words = typeof detail === "string" ? detail : "The service is unavailable.";
+    const wait = waitInWords(retryAfter);
+    return wait === "" ? words : `${words} ${wait}`;
+  }
+  if (status === 422) {
+    const problems = Array.isArray(detail) ? detail.filter(isObject) : [];
+    const reasons = problems.map((problem) => {
+      const field = Array.isArray(problem.loc) ? problem.loc.at(-1) : "request";
+      return `${field}: ${problem.msg}.`;
+    });
+    return ["The service did not accept the question.", ...reasons].join(" ");
+  }
+  if (status === 413) {
+    return "The question is too long to send.";
+  }
+  if (status >= 500) {
+    return `The service failed (status ${status}). Its log says why.`;
+  }
+  return `The service answered with status ${status}.`;
+}
+
+// How long the service asked to wait, in words, from a Retry-After header that holds a
+// number of seconds, which is what the service sends. Empty when there is none.
+function waitInWords(retryAfter) {
+  if (retryAfter === null || !/^\d+$/.test(retryAfter)) {
+    return "";
+  }
+  const wait = Number(retryAfter);
+  if (wait < 120) {
+    return `Wait ${plural(wait, "second", "seconds")} before asking again.`;
+  }
+  return `Wait about ${Math.ceil(wait / 60)} minutes before asking again.`;
+}
+
+// ---- Building the page ----------------------------------------------------------------
+
+const page = {
+  form: document.getElementById("ask-form"),
+  question: document.getElementById("question"),
+  count: document.getElementById("question-count"),
+  ask: document.getElementById("ask"),
+  stop: document.getElementById("stop"),
+  examples: [...document.querySelectorAll("button.example")],
+  status: document.getElementById("status"),
+  answerArea: document.getElementById("answer-area"),
+  stream: document.getElementById("stream"),
+  answer: document.getElementById("answer"),
+  failure: document.getElementById("failure"),
+  sourcesArea: document.getElementById("sources-area"),
+  sources: document.getElementById("sources"),
+  factsArea: document.getElementById("facts-area"),
+  facts: document.getElementById("facts"),
+  searchArea: document.getElementById("search-area"),
+  searchCount: document.getElementById("search-count"),
+  searchState: document.getElementById("search-state"),
+  passages: document.getElementById("passages"),
+};
+
+// An element with a class and its text. The text is set as text, never parsed.
+function make(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className !== "") {
+    node.className = className;
+  }
+  if (text !== undefined) {
+    node.textContent = text;
+  }
+  return node;
+}
+
+// The one place that makes a link: to a source's page, from the url field the API sends.
+// Only an address that starts with https:// or http:// becomes a link. Anything else,
+// such as a javascript: or data: address, is shown as text next to the title.
+function sourceLink(url, title) {
+  const isWebAddress =
+    typeof url === "string" && (url.startsWith("https://") || url.startsWith("http://"));
+  if (!isWebAddress) {
+    const plain = make("span", "", title);
+    plain.append(make("span", "address", ` (not a web address: ${url})`));
+    return plain;
+  }
+  const link = document.createElement("a");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = title;
+  link.append(make("span", "visually-hidden", " (opens in a new tab)"));
+  return link;
+}
+
+// A source or a found passage: its number, its title as a link to its page, the
+// headings above it, and its text folded away until asked for.
+function passageItem(label, passage, extra) {
+  const item = make("li", "source");
+  const title = make("p", "source-title");
+  const link = sourceLink(passage.url, String(passage.title));
+  title.append(make("span", "source-number", label), " ", link);
+  item.append(title);
+  // The headings joined as the command line joins them.
+  if (Array.isArray(passage.heading_path) && passage.heading_path.length > 0) {
+    item.append(make("p", "source-headings", passage.heading_path.join(" > ")));
+  }
+  if (extra !== "") {
+    item.append(make("p", "source-headings", extra));
+  }
+  const fold = make("details", "passage");
+  const text = make("p", "passage-text", String(passage.text));
+  fold.append(make("summary", "", "Show the passage"), text);
+  item.append(fold);
+  return item;
+}
+
+// A number after a piece of the answer, which brings its source into view.
+function citeButton(number, title) {
+  const button = make("button", "cite", String(number));
+  button.type = "button";
+  button.setAttribute("aria-label", `Source ${number}: ${title}`);
+  button.addEventListener("click", () => showSource(number));
+  return button;
+}
+
+function showSource(number) {
+  const wanted = `source-${number}`;
+  for (const item of page.sources.children) {
+    item.classList.toggle("marked", item.id === wanted);
+  }
+  const item = document.getElementById(wanted);
+  if (item !== null) {
+    item.scrollIntoView({ block: "nearest" });
+    item.focus({ preventScroll: true });
+  }
+}
+
+function renderAnswer(answer) {
+  const titles = new Map(answer.sources.map((source) => [source.number, String(source.title)]));
+  const box = make("div", answer.answered ? "answer" : "answer decline");
+  if (!answer.answered) {
+    box.append(make("p", "decline-label", "Not an answer"));
+  }
+  const text = make("p", "answer-text");
+  const pieces = answerPieces(answer);
+  for (const piece of pieces) {
+    text.append(piece.text);
+    for (const number of piece.numbers) {
+      text.append(citeButton(number, titles.get(number)));
+    }
+  }
+  if (pieces.length === 0) {
+    text.textContent = "The reply holds no text.";
+  }
+  box.append(text);
+  // The final answer takes the place of the text that streamed in. The streamed text is
+  // emptied and hidden rather than changed, so a screen reader does not read it twice.
+  page.stream.replaceChildren();
+  page.stream.hidden = true;
+  page.answer.replaceChildren(box);
+  page.sources.replaceChildren(
+    ...answer.sources.map((source) => {
+      const item = passageItem(`[${source.number}]`, source, "");
+      item.id = `source-${source.number}`;
+      item.tabIndex = -1;
+      return item;
+    }),
+  );
+  page.sourcesArea.hidden = answer.sources.length === 0;
+  renderFacts(answerFacts(answer), answer.trace_id);
+}
+
+// The facts of the request, and its trace id with a button that copies it.
+function renderFacts(rows, traceId) {
+  page.facts.replaceChildren();
+  for (const [label, value] of rows) {
+    page.facts.append(make("dt", "", label), make("dd", "", value));
+  }
+  if (typeof traceId === "string" && traceId !== "") {
+    const value = make("dd", "");
+    value.append(make("code", "", traceId), " ", copyButton(traceId));
+    page.facts.append(make("dt", "", "Trace id"), value);
+  }
+  page.factsArea.hidden = page.facts.children.length === 0;
+}
+
+function copyButton(text) {
+  const button = make("button", "copy", "Copy");
+  button.type = "button";
+  button.setAttribute("aria-label", "Copy the trace id");
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      say("The trace id is copied.");
+    } catch {
+      say("The trace id could not be copied. Select it and copy it by hand.");
+    }
+  });
+  return button;
+}
+
+function say(words) {
+  page.status.textContent = words;
+}
+
+// Shows a failure in words. Text that had already arrived stays, marked as unfinished.
+function fail(words) {
+  const partial = page.stream.textContent !== "";
+  page.stream.classList.toggle("unfinished", partial);
+  page.failure.textContent = partial
+    ? `${words} The text above is only what arrived before the failure.`
+    : words;
+  say("No answer.");
+}
+
+function clearAnswer() {
+  page.answerArea.hidden = false;
+  page.stream.replaceChildren();
+  page.stream.hidden = false;
+  page.stream.classList.remove("unfinished");
+  page.answer.replaceChildren();
+  page.failure.textContent = "";
+  page.sources.replaceChildren();
+  page.sourcesArea.hidden = true;
+  page.facts.replaceChildren();
+  page.factsArea.hidden = true;
+}
+
+// ---- Asking ---------------------------------------------------------------------------
+
+// The request being answered, or null. One at a time: a second question waits until the
+// first is answered or stopped, so nothing of the first can land in the second's answer.
+let current = null;
+
+// The buttons are marked unavailable with aria-disabled instead of disabled, so that the
+// button a keyboard user just pressed keeps the focus.
+function setBusy(busy) {
+  page.ask.setAttribute("aria-disabled", String(busy));
+  for (const example of page.examples) {
+    example.setAttribute("aria-disabled", String(busy));
+  }
+  page.stop.setAttribute("aria-disabled", String(!busy));
+}
+
+async function ask(question) {
+  const controller = new AbortController();
+  current = controller;
+  setBusy(true);
+  clearAnswer();
+  search(question);
+  say("Asking. The answer appears below as the model writes it.");
+  try {
+    const response = await fetch("/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: question, stream: true }),
+      signal: controller.signal,
+    });
+    if (response.ok) {
+      await readAnswer(response);
+    } else {
+      await refused(response);
+    }
+  } catch (error) {
+    if (controller.signal.aborted) {
+      stopped();
+    } else {
+      // A network failure, or a mistake in this script: the console says which.
+      console.error(error);
+      fail(
+        page.stream.textContent === ""
+          ? "The service could not be reached. Is it running?"
+          : "The connection to the service broke.",
+      );
+    }
+  } finally {
+    current = null;
+    setBusy(false);
+  }
+}
+
+async function refused(response) {
+  const body = await response.json().catch(() => null);
+  fail(refusalInWords(response.status, body, response.headers.get("Retry-After")));
+  renderFacts([], response.headers.get("X-Trace-Id"));
+}
+
+// Reads the events of the answer: text as it is written, then the answer or an error.
+async function readAnswer(response) {
+  const traceId = response.headers.get("X-Trace-Id");
+  let ended = false;
+  await readEvents(response.body, (event) => {
+    if (ended) {
+      return;
+    }
+    const data = parseData(event.data);
+    if (event.name === "text" && data !== null && typeof data.text === "string") {
+      if (page.stream.textContent === "") {
+        say("The model is writing.");
+      }
+      page.stream.append(data.text);
+    } else if (event.name === "answer") {
+      ended = true;
+      if (isAnswer(data)) {
+        renderAnswer(data);
+        const count = data.sources.length;
+        say(
+          data.answered
+            ? `The answer is complete. It cites ${plural(count, "source", "sources")}.`
+            : "Not an answer: the assistant declined, or its reply did not come to a proper end.",
+        );
+      } else {
+        fail("The service sent an answer this page cannot read.");
+      }
+    } else if (event.name === "error") {
+      ended = true;
+      const detail = data !== null && typeof data.detail === "string" ? data.detail : "";
+      fail(detail === "" ? "The answer could not be finished." : detail);
+      renderFacts([], traceId);
+    }
+  });
+  if (!ended) {
+    fail("The answer stopped before it was complete: the stream ended without it.");
+    renderFacts([], traceId);
+  }
+}
+
+function stopped() {
+  // Stop can be pressed in the moment after the answer or an error event arrived and
+  // before the stream closed. The request had ended by then, and its outcome stands.
+  if (page.answer.children.length > 0 || page.failure.textContent !== "") {
+    return;
+  }
+  const partial = page.stream.textContent !== "";
+  page.stream.classList.toggle("unfinished", partial);
+  say(
+    partial
+      ? "Stopped. The text above is only what arrived before that."
+      : "Stopped before the model wrote anything.",
+  );
+}
+
+// ---- What the search found ------------------------------------------------------------
+
+// The search for the question, run beside the answer. It costs no request to the model.
+// A search that comes back after the next question was asked is dropped.
+let searches = 0;
+
+async function search(question) {
+  const mine = ++searches;
+  page.searchArea.hidden = false;
+  page.searchCount.textContent = "";
+  page.searchState.textContent = "Searching.";
+  page.passages.replaceChildren();
+  let response;
+  let body;
+  try {
+    response = await fetch("/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: question }),
+    });
+    body = await response.json().catch(() => null);
+  } catch (error) {
+    console.error(error);
+    if (mine === searches) {
+      page.searchState.textContent = "The search failed. The service could not be reached.";
+    }
+    return;
+  }
+  if (mine !== searches) {
+    return;
+  }
+  if (response.ok && isObject(body) && Array.isArray(body.results)) {
+    renderPassages(body.results.filter(isObject));
+  } else {
+    const words = refusalInWords(response.status, body, response.headers.get("Retry-After"));
+    page.searchState.textContent = `The search failed. ${words}`;
+  }
+}
+
+function renderPassages(results) {
+  page.searchCount.textContent = `(${plural(results.length, "passage", "passages")})`;
+  page.searchState.textContent = results.length === 0 ? "The search found nothing." : "";
+  page.passages.replaceChildren(
+    ...results.map((result) => {
+      const score = typeof result.score === "number" ? result.score.toFixed(3) : "unknown";
+      return passageItem(`${result.rank}.`, result, `Score ${score}`);
+    }),
+  );
+}
+
+// ---- Wiring ---------------------------------------------------------------------------
+
+function showCount() {
+  page.count.textContent = `${page.question.value.length} of ${page.question.maxLength} characters`;
+}
+
+function start(question) {
+  if (current !== null) {
+    say("An answer is still being written. Stop it first, or wait for it.");
+    return;
+  }
+  if (question === "") {
+    say("Type a question first.");
+    page.question.focus();
+    return;
+  }
+  ask(question);
+}
+
+page.form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  start(page.question.value.trim());
+});
+
+// An example question is put in the box, so the reader sees what was asked, and asked.
+for (const example of page.examples) {
+  example.addEventListener("click", () => {
+    const question = example.textContent.trim();
+    if (current === null) {
+      page.question.value = question;
+      showCount();
+    }
+    start(question);
+  });
+}
+
+page.stop.addEventListener("click", () => {
+  if (current === null) {
+    say("No answer is being written.");
+    return;
+  }
+  current.abort();
+});
+
+page.question.addEventListener("input", showCount);
+showCount();

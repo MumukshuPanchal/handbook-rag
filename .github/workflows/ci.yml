@@ -120,3 +120,15 @@ jobs:
           uid=$(docker run --rm handbook-rag:ci id -u)
           echo "the image runs as uid $uid"
           test "$uid" != "0"
+
+      # The demo page's files are not Python, so they reach the image only if the wheel
+      # carries them, and without them the service does not start. They are read the way
+      # the service reads them, through the installed package.
+      - name: Check that the demo page's files are in the image
+        run: |
+          docker run --rm handbook-rag:ci python -c '
+          from handbook_rag.demo import read_files
+          for path, (body, media_type) in read_files().items():
+              assert body, f"{path} is empty"
+              print(path, media_type, len(body), "bytes")
+          '

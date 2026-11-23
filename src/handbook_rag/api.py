@@ -3,7 +3,8 @@
 Three endpoints: ``POST /ask`` answers a question with citations, as one JSON response
 or as server-sent events while the model writes; ``POST /search`` returns the passages
 most relevant to a question; and ``GET /health`` says whether the service can do its job.
-Why ``/ask`` works the way it does is in ADR 0015.
+Why ``/ask`` works the way it does is in ADR 0015. Unless it is switched off, the service
+also serves a demo page at ``/`` that asks ``/ask`` (see ``demo.py`` and ADR 0016).
 
 The application is built by :func:`create_app`, a factory. Tests build one with stand-in
 parts; ``handbook-rag serve`` builds the real one.
@@ -23,7 +24,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from starlette.types import Receive, Scope, Send
 
-from handbook_rag import __version__, wiring
+from handbook_rag import __version__, demo, wiring
 from handbook_rag.config import Settings, get_settings
 from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.models import Answer
@@ -451,13 +452,19 @@ def _answer_model(settings: Settings) -> Generator | None:
         return None
 
 
-def _is_health_check(scope: MutableMapping[str, Any]) -> bool:
-    """Whether a request is a health probe, which is not worth a trace.
+# The requests that are not worth a trace: health probes, and loads of the demo page and
+# its files.
+UNTRACED_PATHS = frozenset({"/health", *demo.FILES})
 
-    Something asks for /health every few seconds. Traced, those requests would bury the
-    ones made by people.
+
+def _is_untraced(scope: MutableMapping[str, Any]) -> bool:
+    """Whether a request is a health probe or a load of the demo page, not worth a trace.
+
+    Something asks for /health every few seconds, and a page load is not a question.
+    Traced, those requests would bury the ones made by people. A question asked on the
+    page is a request to /ask, and is traced like any other.
     """
-    return scope.get("path") == "/health"
+    return scope.get("path") in UNTRACED_PATHS
 
 
 def create_app(
@@ -515,7 +522,7 @@ def create_app(
         summary="Answer questions from a company handbook with cited passages, and search it.",
         lifespan=lifespan,
         telemetry={
-            "exclude": _is_health_check,
+            "exclude": _is_untraced,
             # The framework's own log records of a rejected request include the
             # caller's input, so they are switched off.
             "logs": False,
@@ -709,5 +716,8 @@ def create_app(
         raise HTTPException(
             status_code=503, detail=detail, headers={**headers, **_trace_headers(run)} or None
         ) from event.error
+
+    if settings.api_demo:
+        demo.add_demo_page(app)
 
     return app

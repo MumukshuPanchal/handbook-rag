@@ -1476,18 +1476,33 @@ def ask(
 ) -> None:
     """Answer a question from the handbook, with the passages that support the answer."""
     settings = get_settings()
-    try:
-        answer = answer_question(
-            question,
-            retriever=wiring.make_retriever(settings),
-            generator=wiring.make_generator(settings),
-            limit=settings.answer_context_chunks,
-            section=section,
-            on_text=lambda text: typer.echo(text, nl=False),
-        )
-    except (VectorStoreError, GenerationError) as error:
-        typer.echo(f"error: {error}", err=True)
-        raise typer.Exit(code=1) from error
+    traced: str | None = None
+
+    def note_trace(found: str) -> None:
+        nonlocal traced
+        traced = found
+
+    # Leaving the session sends the trace, also when the answer fails.
+    with tracing_session(settings):
+        try:
+            # Built outside the trace: loading models is a cost of starting the
+            # process, not of answering this question.
+            retriever = wiring.make_retriever(settings)
+            generator = wiring.make_generator(settings)
+            answer = answer_question(
+                question,
+                retriever=retriever,
+                generator=generator,
+                limit=settings.answer_context_chunks,
+                section=section,
+                on_text=lambda text: typer.echo(text, nl=False),
+                on_trace=note_trace,
+            )
+        except (VectorStoreError, GenerationError) as error:
+            typer.echo(f"error: {error}", err=True)
+            if traced is not None:
+                typer.echo(f"trace {traced}", err=True)
+            raise typer.Exit(code=1) from error
     typer.echo("")
 
     # A reply that is not an answer lists no sources, even if the model attached one to it.
@@ -1515,3 +1530,6 @@ def ask(
     elif answer.stop_reason not in ("end_turn", "no_context"):
         details.append(f"stopped early ({answer.stop_reason})")
     typer.echo("\n" + " | ".join(details))
+    if traced is not None:
+        # The id to look this answer up by in the trace backend.
+        typer.echo(f"trace {traced}")

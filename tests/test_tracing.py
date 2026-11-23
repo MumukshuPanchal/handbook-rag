@@ -1,10 +1,15 @@
+import ast
+import inspect
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import ClassVar
 
 import pytest
+from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as gen_ai
 from opentelemetry.trace import SpanKind, StatusCode
 from qdrant_client import QdrantClient
 from typer.testing import CliRunner
@@ -12,8 +17,14 @@ from typer.testing import CliRunner
 from handbook_rag import tracing, wiring
 from handbook_rag.cli import app
 from handbook_rag.config import Settings, get_settings
+from handbook_rag.generate.base import GenerationError
+from handbook_rag.generate.claude import ClaudeGenerator
+from handbook_rag.generate.gemini import GeminiGenerator
+from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import QdrantVectorStore, ScoredChunk, VectorStoreError
+from handbook_rag.ingest.models import Chunk
+from handbook_rag.pipeline import answer_question
 from handbook_rag.retrieve.dense import Retriever
 from handbook_rag.retrieve.hybrid import HybridRetriever
 from handbook_rag.wiring import RetrievalMode
@@ -21,6 +32,7 @@ from tests.support import (
     FakeEmbedder,
     FakeReranker,
     FakeSparseEncoder,
+    StandInModel,
     count_words,
     make_chunk,
     write_snapshot,
@@ -424,4 +436,238 @@ def test_a_failed_search_is_traced_as_failed_and_still_reports_its_trace(
     (exporter,) = exporters
     (root,) = [span for span in exporter.get_finished_spans() if span.parent is None]
     assert root.status.status_code is StatusCode.ERROR
+    assert f"trace {format(root.context.trace_id, '032x')}" in result.output
+
+
+# The span of a model call is named by OpenTelemetry's conventions for generative AI.
+# The names are written out in our code, so these tests compare them with the package
+# that defines the conventions: a name it renames or retires makes them fail.
+
+
+def notes_on_names(body: Sequence[ast.stmt]) -> dict[str, str]:
+    """Each name a block of the conventions' source defines, with the note written under it.
+
+    Python does not keep a note under a constant, so it is read from the source. The
+    note says when a name is deprecated, and what replaced it.
+    """
+    notes: dict[str, str] = {}
+    for statement, following in zip(body, [*body[1:], None], strict=True):
+        value = statement.value if isinstance(statement, ast.AnnAssign | ast.Assign) else None
+        if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
+            continue
+        note = ""
+        if isinstance(following, ast.Expr) and isinstance(following.value, ast.Constant):
+            note = str(following.value.value)
+        notes[value.value] = note
+    return notes
+
+
+def retired(note: str) -> bool:
+    """Whether a note says that a name was replaced by another or removed.
+
+    "Moved" is not retirement: the package says that of every name in this module,
+    because the conventions for generative AI are now kept in a repository of their own.
+    """
+    return "Replaced by" in note or "Removed" in note
+
+
+CONVENTIONS = ast.parse(inspect.getsource(gen_ai))
+
+
+def notes_on_values(enum: str) -> dict[str, str]:
+    """The values one list of allowed values in the conventions defines, with their notes."""
+    (body,) = [
+        node.body
+        for node in CONVENTIONS.body
+        if isinstance(node, ast.ClassDef) and node.name == enum
+    ]
+    return notes_on_names(body)
+
+
+def test_retired_names_are_recognised_as_retired() -> None:
+    """The check below is only worth something if it can fail."""
+    notes = notes_on_names(CONVENTIONS.body)
+
+    assert retired(notes["gen_ai.system"]), "replaced by gen_ai.provider.name"
+    assert retired(notes["gen_ai.usage.prompt_tokens"]), "replaced by gen_ai.usage.input_tokens"
+    assert retired(notes["gen_ai.prompt"]), "removed"
+    assert retired(notes_on_values("GenAiSystemValues")["gemini"]), "replaced by gcp.gemini"
+    assert not retired(notes["gen_ai.provider.name"])
+
+
+def test_our_names_for_a_model_call_are_the_current_names_of_the_installed_conventions() -> None:
+    ours = {name: value for name, value in vars(tracing).items() if name.startswith("GEN_AI_")}
+    notes = notes_on_names(CONVENTIONS.body)
+
+    assert len(ours) == 10
+    for name, value in ours.items():
+        assert getattr(gen_ai, name) == value, f"{name} is spelt differently in the conventions"
+        assert not retired(notes[value]), f"{value}: {notes[value]}"
+
+
+@pytest.mark.parametrize(
+    ("generator", "provider", "operation"),
+    [
+        (GeminiGenerator, "GCP_GEMINI", "GENERATE_CONTENT"),
+        (ClaudeGenerator, "ANTHROPIC", "CHAT"),
+    ],
+)
+def test_each_provider_and_operation_is_named_as_the_installed_conventions_name_it(
+    generator: type[GeminiGenerator | ClaudeGenerator], provider: str, operation: str
+) -> None:
+    providers = notes_on_values("GenAiProviderNameValues")
+    operations = notes_on_values("GenAiOperationNameValues")
+
+    assert generator.provider == getattr(gen_ai.GenAiProviderNameValues, provider).value
+    assert generator.operation == getattr(gen_ai.GenAiOperationNameValues, operation).value
+    assert not retired(providers[generator.provider])
+    assert not retired(operations[generator.operation])
+
+
+def test_every_conventional_name_a_model_call_records_is_current(
+    spans: InMemorySpanExporter,
+) -> None:
+    """Also catches a name typed into the code without going through the constants."""
+
+    def everything(question: str, chunks: Sequence[Chunk]) -> Answer:
+        return Answer(
+            question=question,
+            segments=(Segment("Sixteen weeks.", (Citation(chunks[0]),)),),
+            answered=True,
+            model="stand-in-model",
+            stop_reason="end_turn",
+            usage=TokenUsage(
+                input_tokens=10,
+                output_tokens=5,
+                cache_read_input_tokens=3,
+                cache_creation_input_tokens=2,
+            ),
+            seconds_to_first_text=0.5,
+        )
+
+    answer_question(
+        "how long is parental leave",
+        retriever=Fixed(LEAVE),
+        generator=Scripted(everything),
+        limit=1,
+    )
+
+    notes = notes_on_names(CONVENTIONS.body)
+    recorded = {
+        key
+        for span in spans.get_finished_spans()
+        for key in span.attributes or {}
+        if key.startswith("gen_ai.")
+    }
+    assert len(recorded) == 10, "every name the code knows, in one span"
+    for key in recorded:
+        assert key in notes, f"{key} is not a name of the conventions"
+        assert not retired(notes[key]), f"{key}: {notes[key]}"
+
+
+# The command line traces an answer as it traces a search.
+
+
+class Scripted(StandInModel):
+    """An answer model that writes what it is told to, and notes whether a trace was open."""
+
+    def __init__(
+        self,
+        replies: Callable[[str, Sequence[Chunk]], Answer] | None = None,
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        self._replies = replies
+        self._error = error
+
+    def generate(
+        self,
+        question: str,
+        chunks: Sequence[Chunk],
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Answer:
+        if self._error is not None:
+            raise self._error
+        if self._replies is not None:
+            return self._replies(question, chunks)
+        if on_text is not None:
+            on_text("Sixteen weeks of paid leave.")
+        return Answer(
+            question=question,
+            segments=(Segment("Sixteen weeks of paid leave.", (Citation(chunks[0]),)),),
+            answered=True,
+            model="stand-in-model",
+            stop_reason="end_turn",
+            usage=TokenUsage(input_tokens=1200, output_tokens=40),
+        )
+
+
+def build_outside_a_trace(model: Scripted, built: list[bool]) -> Callable[[Settings], Scripted]:
+    """A stand-in for building the answer model that notes whether a span was open then."""
+
+    def build(_settings: Settings) -> Scripted:
+        built.append(trace.get_current_span().is_recording())
+        return model
+
+    return build
+
+
+@pytest.mark.usefixtures("indexed_handbook")
+def test_a_traced_answer_prints_the_id_of_its_trace_at_the_end(
+    exporters: list[RecordingExporter], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HANDBOOK_RAG_TRACING", "true")
+    get_settings.cache_clear()
+    built: list[bool] = []
+    monkeypatch.setattr(wiring, "make_generator", build_outside_a_trace(Scripted(), built))
+
+    result = runner.invoke(app, ["ask", "how many weeks of paid leave"])
+
+    assert result.exit_code == 0, result.output
+    (exporter,) = exporters
+    sent = exporter.get_finished_spans()
+    (root,) = [span for span in sent if span.parent is None]
+    assert root.name == "answer"
+    assert {span.context.trace_id for span in sent} == {root.context.trace_id}
+    assert {"search", "retrieve.hybrid", "chat stand-in-model"} <= {span.name for span in sent}
+    assert result.output.splitlines()[-1] == f"trace {format(root.context.trace_id, '032x')}"
+    assert built == [False], "the model is built before the trace begins"
+    recorded = {key: value for span in sent for key, value in (span.attributes or {}).items()}
+    assert "handbook_rag.query.text" not in recorded
+    assert "how many weeks of paid leave" not in recorded.values()
+
+
+@pytest.mark.usefixtures("indexed_handbook")
+def test_an_answer_is_not_traced_unless_tracing_is_switched_on(
+    exporters: list[RecordingExporter], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(wiring, "make_generator", lambda _settings: Scripted())
+
+    result = runner.invoke(app, ["ask", "how many weeks of paid leave"])
+
+    assert result.exit_code == 0, result.output
+    assert "trace" not in result.output
+    assert exporters == []
+
+
+@pytest.mark.usefixtures("indexed_handbook")
+def test_a_failed_answer_is_traced_as_failed_and_still_reports_its_trace(
+    exporters: list[RecordingExporter], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HANDBOOK_RAG_TRACING", "true")
+    get_settings.cache_clear()
+    limited = GenerationError("The Gemini API rate limit was reached.", reason="rate_limit")
+    monkeypatch.setattr(wiring, "make_generator", lambda _settings: Scripted(error=limited))
+
+    result = runner.invoke(app, ["ask", "how many weeks of paid leave"])
+
+    assert result.exit_code == 1
+    assert "error: The Gemini API rate limit was reached." in result.output
+    (exporter,) = exporters
+    sent = exporter.get_finished_spans()
+    (root,) = [span for span in sent if span.parent is None]
+    assert root.status.status_code is StatusCode.ERROR
+    (call,) = [span for span in sent if span.name == "chat stand-in-model"]
+    assert call.status.status_code is StatusCode.ERROR
     assert f"trace {format(root.context.trace_id, '032x')}" in result.output

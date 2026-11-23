@@ -32,3 +32,7 @@ The pipeline is instrumented with OpenTelemetry, the vendor-neutral standard for
 ## Update, 2026-11-22
 
 The retrieval stages are traced, and the local backend is Jaeger: a small container that accepts OTLP directly. The comparison of backends is still open, on purpose. Backends built for language-model applications differ from Jaeger on spans of model calls, and there are none until the answering step is traced. See [the observability guide](../observability.md).
+
+## Update, 2026-11-23
+
+The model call is traced. The pipeline opens its span itself, for both providers, instead of relying on an SDK's own spans as the decision above planned: the default model is now Gemini ([ADR 0013](0013-gemini-free-tier-with-marker-citations.md)), and one span written here reads the same for both. The span is named and described with the names of OpenTelemetry's semantic conventions for generative AI: the provider, the model asked for and the model that answered, the tokens, and why the model stopped. A test compares each name with the package that defines the conventions, so a renamed one is noticed. A backend built for language-model applications that follows these conventions should therefore read these spans without a mapping. None has been tried, and Jaeger stays the local backend. Facts the conventions have no name for, such as whether the reply counts as an answer and which passages it cites, carry the project's own `handbook_rag.` prefix. Whether the Claude SDK adds a span of its own inside ours has not been seen, because the Claude path has not been run.

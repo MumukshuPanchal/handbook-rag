@@ -26,6 +26,7 @@ from tests.support import (
     FakeEmbedder,
     FakeReranker,
     FakeSparseEncoder,
+    StandInModel,
     Upstream,
     count_words,
     write_snapshot,
@@ -761,7 +762,7 @@ def test_a_missing_model_file_is_not_reported_as_a_missing_golden_set(
     assert "model.safetensors" in str(result.exception)
 
 
-class CannedGenerator:
+class CannedGenerator(StandInModel):
     """Answers from the first chunk it is given, citing it."""
 
     def generate(
@@ -806,7 +807,7 @@ def test_ask_prints_the_answer_its_sources_and_the_cost(
 def test_ask_reports_a_generation_failure_clearly(
     monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
 ) -> None:
-    class FailingGenerator:
+    class FailingGenerator(StandInModel):
         def generate(self, *_args: object, **_kwargs: object) -> Answer:
             raise GenerationError("No Claude API credential was found.")
 
@@ -830,7 +831,7 @@ def test_ask_without_a_key_says_where_to_put_one(fake_pipeline: FakeEmbedder) ->
     assert "Traceback" not in result.output
 
 
-class FixedReply:
+class FixedReply(StandInModel):
     """A generator that gives one prepared reply, citing the first chunk it is handed."""
 
     def __init__(self, text: str, *, answered: bool, stop_reason: str) -> None:
@@ -943,7 +944,7 @@ ANSWER_QUESTIONS: list[dict[str, Any]] = [
 ]
 
 
-class EvalModel:
+class EvalModel(StandInModel):
     """Answers from the first chunk, declines anything about parking, and counts its calls."""
 
     def __init__(self, *, error: GenerationError | None = None) -> None:

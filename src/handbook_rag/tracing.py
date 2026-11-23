@@ -26,10 +26,28 @@ from handbook_rag.config import Settings
 
 if TYPE_CHECKING:
     # The vector store opens spans itself, so it cannot be imported here at run time.
+    # An answer holds chunks from the store, so the same goes for it.
+    from handbook_rag.generate.models import Answer
     from handbook_rag.index.store import ScoredChunk
 
 TRACER_NAME = "handbook_rag"
 ATTRIBUTE_PREFIX = "handbook_rag"
+
+# Names from OpenTelemetry's semantic conventions for generative AI, for the span of a
+# request to a language model. A backend built for language-model applications knows
+# them. They are written out here instead of imported, because the package that defines
+# them keeps them in a private module that is still changing. tests/test_tracing.py
+# compares each with that package, so a renamed or retired name is noticed.
+GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
+GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
+GEN_AI_RESPONSE_MODEL = "gen_ai.response.model"
+GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
+GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK = "gen_ai.response.time_to_first_chunk"
+GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
+GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
+GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS = "gen_ai.usage.cache_creation.input_tokens"
 # How long sending a batch of spans may take, retries included. When no backend is
 # running, this is how long a command waits before it gives up on its trace.
 EXPORT_TIMEOUT_SECONDS = 3.0
@@ -137,6 +155,77 @@ def record_query(span: Span, query: str) -> None:
     span.set_attribute(f"{ATTRIBUTE_PREFIX}.query.chars", len(query))
     if _record_content:
         span.set_attribute(f"{ATTRIBUTE_PREFIX}.query.text", query)
+
+
+@contextmanager
+def model_call(*, provider: str, operation: str, model: str, passages: int) -> Iterator[Span]:
+    """Open the span of one request to a language model.
+
+    The span is named and described as OpenTelemetry's conventions for generative AI
+    say, so that a backend built for language-model applications can read it: its name
+    is the operation and the model asked for, and it is a client span, because the model
+    runs at the provider. What the conventions have no name for, such as how many
+    passages the model was given, carries the project's prefix. A failed request marks
+    the span as failed, as in any stage.
+    """
+    with stage(f"{operation} {model}", kind=SpanKind.CLIENT) as span:
+        span.set_attribute(GEN_AI_OPERATION_NAME, operation)
+        span.set_attribute(GEN_AI_PROVIDER_NAME, provider)
+        span.set_attribute(GEN_AI_REQUEST_MODEL, model)
+        span.set_attribute(f"{ATTRIBUTE_PREFIX}.passages.given", passages)
+        yield span
+
+
+def record_reply(span: Span, answer: "Answer") -> None:
+    """Note what a model call returned, without its text.
+
+    The model that served the reply, the tokens, why it stopped, whether it counts as an
+    answer, which passages it cites, and how long the first words took. These are names,
+    ids and counts, so they are always recorded.
+    """
+    usage = answer.usage
+    span.set_attribute(GEN_AI_RESPONSE_MODEL, answer.model)
+    # A list in the conventions. The reason is in the words this application uses for
+    # both providers, such as "end_turn" or "max_tokens".
+    span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, [answer.stop_reason])
+    # Every token the model read, those served from the provider's cache included. The
+    # application's own count leaves the cached ones out, because they are billed at
+    # another price, so the cache's share is recorded on its own below.
+    span.set_attribute(
+        GEN_AI_USAGE_INPUT_TOKENS,
+        usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens,
+    )
+    span.set_attribute(GEN_AI_USAGE_OUTPUT_TOKENS, usage.output_tokens)
+    if usage.cache_read_input_tokens:
+        span.set_attribute(GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, usage.cache_read_input_tokens)
+    if usage.cache_creation_input_tokens:
+        span.set_attribute(
+            GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS, usage.cache_creation_input_tokens
+        )
+    if answer.seconds_to_first_text is not None:
+        # Measured to the first words of the answer. A model that reasons before it
+        # answers sends other pieces first, so this can be later than its first piece.
+        span.set_attribute(GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK, answer.seconds_to_first_text)
+    span.set_attribute(f"{ATTRIBUTE_PREFIX}.answered", answer.answered)
+    span.set_attribute(f"{ATTRIBUTE_PREFIX}.passages.cited", len(answer.sources))
+    # In the order the answer numbers its sources, so [1] in the answer is the first id.
+    # With the search span's ids, this tells whether the right passage was cited.
+    span.set_attribute(
+        f"{ATTRIBUTE_PREFIX}.passages.cited_chunk_ids",
+        [chunk.chunk_id for chunk in answer.sources],
+    )
+
+
+def record_answer(span: Span, answer: "Answer") -> None:
+    """Note how a question ended: whether it was answered, and its text if content is on.
+
+    The answer is recorded with its citation markers, so a trace shows which statement
+    rests on which passage. Like a question, its text is left out by default: it can
+    repeat personal or confidential details from the question.
+    """
+    span.set_attribute(f"{ATTRIBUTE_PREFIX}.answered", answer.answered)
+    if _record_content:
+        span.set_attribute(f"{ATTRIBUTE_PREFIX}.answer.text", answer.text_with_markers)
 
 
 def trace_id(span: Span) -> str | None:

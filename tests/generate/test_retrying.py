@@ -262,6 +262,19 @@ def test_a_server_that_refused_is_never_asked_again_sooner_than_after_the_usual_
     assert answer.requests == 3
 
 
+def test_the_pause_before_a_rate_limited_model_is_asked_again_ends_at_the_deadline() -> None:
+    clock = Clock()
+    limited = Step(error=failure("rate_limit", retry_after=0.1))
+    model = Scripted(limited, ANSWERS, clock=clock)
+
+    answer = wrap(model, clock, deadline=0.3).generate(QUESTION, [LEAVE])
+
+    # The provider's wait of 0.1 s ends by the deadline, so the model is asked again. Our
+    # own pause would be 0.5 s, by the chance of 0, and is cut short to the 0.3 s left.
+    assert clock.slept == [pytest.approx(0.3)]
+    assert answer.requests == 2
+
+
 @pytest.mark.parametrize(("takes", "wait"), [(0.0, 36.0), (25.0, 5.5)])
 def test_a_rate_limit_whose_wait_ends_after_the_deadline_ends_the_attempts_at_once(
     takes: float, wait: float

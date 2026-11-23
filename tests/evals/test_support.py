@@ -20,22 +20,18 @@ from handbook_rag.evals.judge import (
     SupportCase,
     Verdict,
 )
-from handbook_rag.evals.stage import SavedRunError
-from handbook_rag.evals.support import (
-    CHECK_FILE,
+from handbook_rag.evals.judging import (
     agreement_headline,
-    case_fingerprint,
     judge_check_stage,
     judge_record,
     judgement_row,
     labelled_pairs,
     load_judgements,
-    load_labelled_cases,
     run_judge,
-    saved_support,
-    support_cases,
-    support_stage,
+    saved_verdicts,
 )
+from handbook_rag.evals.stage import SavedRunError
+from handbook_rag.evals.support import SUPPORT, load_labelled_cases, support_cases
 from tests.support import make_chunk
 
 LEAVE = make_chunk("New parents get sixteen weeks of paid leave.", heading_path=("Parental leave",))
@@ -204,10 +200,10 @@ def test_the_fingerprint_of_a_case_changes_with_anything_the_judge_reads() -> No
         replace(case, statements=(replace(case.statements[0], cites=(3,)), *case.statements[1:])),
     ]
 
-    prints = {case_fingerprint(variant) for variant in variants}
+    prints = {variant.fingerprint for variant in variants}
 
     assert len(prints) == len(variants)
-    assert case_fingerprint(case) not in prints
+    assert case.fingerprint not in prints
     # The numbers are read by the judge too: the same words under other numbers is
     # another prompt, and a verdict names its statement by number.
     renumbered_statements = replace(
@@ -216,12 +212,10 @@ def test_the_fingerprint_of_a_case_changes_with_anything_the_judge_reads() -> No
     renumbered_passages = replace(
         case, passages=tuple(replace(p, number=p.number + 5) for p in case.passages)
     )
-    assert (
-        len({case_fingerprint(c) for c in (case, renumbered_statements, renumbered_passages)}) == 3
-    )
+    assert len({c.fingerprint for c in (case, renumbered_statements, renumbered_passages)}) == 3
     # The id is a name, not something the judge reads.
-    assert case_fingerprint(replace(case, case_id="another-name")) == case_fingerprint(case)
-    assert len(case_fingerprint(case)) == 16
+    assert replace(case, case_id="another-name").fingerprint == case.fingerprint
+    assert len(case.fingerprint) == 16
 
 
 # Labelled answers
@@ -446,21 +440,21 @@ def test_a_saved_judgement_comes_back_as_it_was_under_the_fingerprint_of_what_wa
 ) -> None:
     (case, other) = support_cases(QUESTIONS, RECORDS, CHUNKS)
     judgement = ScriptedJudge({("q001", 2): "unsupported", ("q001", 3): "no_claim"}).judge(case)
-    stage = support_stage(tmp_path)
+    stage = SUPPORT.run_stage(tmp_path)
     stage.open(CONFIG)
 
     stage.append(judgement_row(case, judgement))
     stage.append(judgement_row(other, ScriptedJudge().judge(other)))
 
-    saved = load_judgements(stage.rows_path)
-    assert set(saved) == {case_fingerprint(case), case_fingerprint(other)}
-    assert saved[case_fingerprint(case)] == judgement
-    assert [v.verdict for v in saved[case_fingerprint(case)].verdicts] == [
+    saved = load_judgements(stage.rows_path, SUPPORT.verdicts)
+    assert set(saved) == {case.fingerprint, other.fingerprint}
+    assert saved[case.fingerprint] == judgement
+    assert [v.verdict for v in saved[case.fingerprint].verdicts] == [
         "supported",
         "unsupported",
         "no_claim",
     ]
-    assert not saved[case_fingerprint(case)].supported
+    assert not saved[case.fingerprint].supported
 
 
 @pytest.mark.parametrize(
@@ -483,19 +477,19 @@ def test_a_saved_line_that_is_not_a_judgement_is_reported(tmp_path: Path, row: o
     path.write_text(json.dumps(row) + "\n")
 
     with pytest.raises(SavedRunError, match=r"support\.jsonl:1 is not a saved judgement"):
-        load_judgements(path)
+        load_judgements(path, SUPPORT.verdicts)
 
 
 def test_the_two_judge_stages_keep_their_files_apart_and_say_what_to_do(tmp_path: Path) -> None:
     tmp_path = tmp_path / "run"
-    support, check = support_stage(tmp_path), judge_check_stage(tmp_path)
+    support, check = SUPPORT.run_stage(tmp_path), judge_check_stage(tmp_path)
 
     assert (support.rows_file, support.state_file) == ("support.jsonl", "support.json")
     assert (check.rows_file, check.state_file) == ("judgements.jsonl", "run.json")
     (case, _) = support_cases(QUESTIONS, RECORDS, CHUNKS)
     support.open(CONFIG)
     support.append(judgement_row(case, ScriptedJudge().judge(case)))
-    (tmp_path / CHECK_FILE).write_text("{}")
+    (tmp_path / SUPPORT.check_file).write_text("{}")
 
     with pytest.raises(SavedRunError, match="use the judge that made them") as refused:
         support.check({**CONFIG, "judge_model": "another-judge"})
@@ -530,7 +524,7 @@ def test_every_answer_is_judged_once_and_handed_over_as_new() -> None:
 def test_a_saved_verdict_on_exactly_the_same_answer_is_used_again() -> None:
     cases = support_cases(QUESTIONS, RECORDS, CHUNKS)
     first = run_judge(cases, ScriptedJudge({("q001", 2): "unsupported"}))
-    saved = {case_fingerprint(case): first.judgements[case.case_id] for case in cases}
+    saved = {case.fingerprint: first.judgements[case.case_id] for case in cases}
     judge = ScriptedJudge()
     kept: list[tuple[str, bool]] = []
 
@@ -550,7 +544,7 @@ def test_a_saved_verdict_on_exactly_the_same_answer_is_used_again() -> None:
 def test_an_answer_that_reads_differently_is_judged_again() -> None:
     cases = support_cases(QUESTIONS, RECORDS, CHUNKS)
     first = run_judge(cases, ScriptedJudge())
-    saved = {case_fingerprint(case): first.judgements[case.case_id] for case in cases}
+    saved = {case.fingerprint: first.judgements[case.case_id] for case in cases}
     # The question was asked again and the reply now says something else.
     changed = {**RECORDS, "q002": record("q002", Statement("Two thousand dollars.", (1,)))}
     judge = ScriptedJudge({("q002", 1): "unsupported"})
@@ -658,7 +652,7 @@ def test_each_labelled_statement_is_paired_with_the_judges_verdict(tmp_path: Pat
         ("q001", 1, "supported", "supported", "real"),
         ("q001-v1", 1, "unsupported", "unsupported", "number"),
     ]
-    agreement = measure_agreement(pairs)
+    agreement = measure_agreement(pairs, verdicts=SUPPORT.verdicts, faults=SUPPORT.faults)
     assert agreement.caught == {"number": (1, 1)}
 
 
@@ -674,36 +668,38 @@ def test_an_answer_the_judge_has_not_ruled_on_is_left_out_of_the_comparison(
 
 def test_only_verdicts_on_the_answers_as_they_now_read_count_for_a_run(tmp_path: Path) -> None:
     cases = support_cases(QUESTIONS, RECORDS, CHUNKS)
-    stage = support_stage(tmp_path)
+    stage = SUPPORT.run_stage(tmp_path)
     stage.open(CONFIG)
     for case in cases:
         stage.append(judgement_row(case, ScriptedJudge().judge(case)))
     changed = {**RECORDS, "q002": record("q002", Statement("Two thousand dollars.", (1,)))}
 
-    assert set(saved_support(tmp_path, cases)) == {"q001", "q002"}
-    assert set(saved_support(tmp_path, support_cases(QUESTIONS, changed, CHUNKS))) == {"q001"}
-    assert saved_support(tmp_path / "nowhere", cases) == {}
+    assert set(saved_verdicts(SUPPORT, tmp_path, cases)) == {"q001", "q002"}
+    assert set(saved_verdicts(SUPPORT, tmp_path, support_cases(QUESTIONS, changed, CHUNKS))) == {
+        "q001"
+    }
+    assert saved_verdicts(SUPPORT, tmp_path / "nowhere", cases) == {}
 
 
 def test_the_record_of_the_judge_says_what_it_read_and_cost_and_how_it_was_checked(
     tmp_path: Path,
 ) -> None:
     cases = support_cases(QUESTIONS, RECORDS, CHUNKS)
-    stage = support_stage(tmp_path)
+    stage = SUPPORT.run_stage(tmp_path)
     stage.open(CONFIG)
     stage.add_attempts(3)
     run = run_judge(cases, ScriptedJudge({("q001", 2): "unsupported", ("q001", 3): "no_claim"}))
     for case in cases:
         stage.append(judgement_row(case, run.judgements[case.case_id]))
-    judged = saved_support(tmp_path, cases)
+    judged = saved_verdicts(SUPPORT, tmp_path, cases)
 
-    assert judge_record(tmp_path, {}) is None
-    unchecked = judge_record(tmp_path, judged)
+    assert judge_record(SUPPORT, tmp_path, {}) is None
+    unchecked = judge_record(SUPPORT, tmp_path, judged)
     assert unchecked == {
         "config": CONFIG,
         "attempts": 3,
         "answers_judged": 2,
-        "statements": {"supported": 2, "unsupported": 1, "no_claim": 1},
+        "verdicts": {"supported": 2, "unsupported": 1, "no_claim": 1},
         "input_tokens": 1800,
         "output_tokens": 120,
         "median_seconds": 1.5,
@@ -711,7 +707,7 @@ def test_the_record_of_the_judge_says_what_it_read_and_cost_and_how_it_was_check
     }
     # The middle of the times, which for two answers lies between them.
     slower = {**judged, "q002": dataclasses.replace(judged["q002"], seconds=4.5)}
-    timed = judge_record(tmp_path, slower)
+    timed = judge_record(SUPPORT, tmp_path, slower)
     assert timed is not None
     assert timed["median_seconds"] == 3.0
 
@@ -723,8 +719,8 @@ def test_the_record_of_the_judge_says_what_it_read_and_cost_and_how_it_was_check
         "answers": answers,
         "agreement": agreement,
     }
-    (tmp_path / CHECK_FILE).write_text(json.dumps(check))
-    checked = judge_record(tmp_path, judged)
+    (tmp_path / SUPPORT.check_file).write_text(json.dumps(check))
+    checked = judge_record(SUPPORT, tmp_path, judged)
     assert checked is not None
     assert checked["check"] == {
         "run": "evals/runs/judge/baseline",
@@ -733,10 +729,10 @@ def test_the_record_of_the_judge_says_what_it_read_and_cost_and_how_it_was_check
     }
 
     # A check of another judge says nothing about this one.
-    (tmp_path / CHECK_FILE).write_text(
+    (tmp_path / SUPPORT.check_file).write_text(
         json.dumps({**check, "config": {**CONFIG, "judge_instructions": "reworded"}})
     )
-    other = judge_record(tmp_path, judged)
+    other = judge_record(SUPPORT, tmp_path, judged)
     assert other is not None
     assert other["check"] is None
 
@@ -747,7 +743,13 @@ def test_the_figures_quoted_beside_a_score_can_be_saved_as_json(tmp_path: Path) 
         [case.case for case in labelled], ScriptedJudge({("q001-v1", 1): "unsupported"})
     )
 
-    headline = agreement_headline(measure_agreement(labelled_pairs(labelled, run.judgements)))
+    headline = agreement_headline(
+        measure_agreement(
+            labelled_pairs(labelled, run.judgements),
+            verdicts=SUPPORT.verdicts,
+            faults=SUPPORT.faults,
+        )
+    )
 
     assert json.loads(json.dumps(headline)) == headline
     assert headline["statements"] == 2

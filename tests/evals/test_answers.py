@@ -865,8 +865,9 @@ def test_the_latest_reply_to_a_question_wins(tmp_path: Path) -> None:
 def test_an_assistant_that_does_everything_right_scores_one_on_every_metric() -> None:
     run = run_answers(QUESTIONS, DOCUMENTS, careful)
 
-    # The judge found both answers backed by the passages they cite.
-    report = summarise_answers(QUESTIONS, run.records, supported={"q001": True, "q002": True})
+    # The judges found both answers backed by the passages they cite, and correct.
+    both = {"q001": True, "q002": True}
+    report = summarise_answers(QUESTIONS, run.records, judged={"supported": both, "correct": both})
 
     assert set(report.summary) == set(METRIC_IDS)
     assert {name: estimate.mean for name, estimate in report.summary.items()} == dict.fromkeys(
@@ -876,6 +877,8 @@ def test_an_assistant_that_does_everything_right_scores_one_on_every_metric() ->
     assert {name: estimate.count for name, estimate in report.summary.items()} == {
         "right_call": 3,
         "supported": 2,
+        "correct": 2,
+        "answered_correctly": 2,
         "answered": 2,
         "declined": 1,
         "evidence_in_context": 2,
@@ -890,7 +893,9 @@ def test_the_judged_score_is_given_only_to_answers_the_judge_has_ruled_on() -> N
 
     unjudged = summarise_answers(QUESTIONS, run.records)
     partly = summarise_answers(
-        QUESTIONS, run.records, supported={"q001": False, "u001": True, "q999": True}
+        QUESTIONS,
+        run.records,
+        judged={"supported": {"q001": False, "u001": True, "q999": True}},
     )
 
     # Without a judge there is no such score: code cannot compute it.
@@ -902,6 +907,47 @@ def test_the_judged_score_is_given_only_to_answers_the_judge_has_ruled_on() -> N
     assert grades["q001"]["supported"] == 0.0
     assert "supported" not in grades["q002"]
     assert "supported" not in grades["u001"]
+    # No judge has ruled on correctness, so nothing is said about it either.
+    assert "correct" not in partly.summary
+    assert "answered_correctly" not in partly.summary
+
+
+def test_a_correct_answer_counts_for_the_answer_and_for_the_question() -> None:
+    def ask(question_text: str) -> Answer:
+        question = BY_TEXT[question_text]
+        if question is LAPTOP_QUESTION:
+            return declines(question)
+        # The parking question has no answer in the handbook, and gets one all the same.
+        return reply(question, Segment("Sixteen weeks.", (Citation(LEAVE_CHUNK),)))
+
+    records = run_answers(QUESTIONS, DOCUMENTS, ask).records
+
+    right = summarise_answers(QUESTIONS, records, judged={"correct": {"q001": True}})
+    wrong = summarise_answers(QUESTIONS, records, judged={"correct": {"q001": False}})
+    # The judge has ruled on correctness in this run, but not yet on this answer.
+    waiting = summarise_answers(QUESTIONS, records, judged={"correct": {"q999": True}})
+
+    grades = {item.question.id: item.scores for item in right.scored}
+    # The answer that was given is correct: one of one answers.
+    assert (right.summary["correct"].mean, right.summary["correct"].count) == (1.0, 1)
+    # Of the two questions the handbook answers, one got a correct answer and one was
+    # declined, which counts as no correct answer.
+    assert (grades["q001"]["answered_correctly"], grades["q002"]["answered_correctly"]) == (
+        1.0,
+        0.0,
+    )
+    assert right.summary["answered_correctly"].mean == 0.5
+    assert right.summary["answered_correctly"].count == 2
+    # A question the handbook does not answer has no correct answer to give.
+    assert "correct" not in grades["u001"]
+    assert "answered_correctly" not in grades["u001"]
+    assert (wrong.summary["correct"].mean, wrong.summary["answered_correctly"].mean) == (0.0, 0.0)
+    # An answer that is still to be judged is counted neither way.
+    assert "correct" not in waiting.summary
+    assert (
+        waiting.summary["answered_correctly"].mean,
+        waiting.summary["answered_correctly"].count,
+    ) == (0.0, 1)
 
 
 def test_an_assistant_that_does_everything_wrong_scores_zero() -> None:

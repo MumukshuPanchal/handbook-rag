@@ -12,7 +12,9 @@ from typer.testing import CliRunner
 from handbook_rag import __version__, wiring
 from handbook_rag.cli import app
 from handbook_rag.config import Settings, get_settings
+from handbook_rag.evals.correctness import CORRECT, CorrectnessCase
 from handbook_rag.evals.judge import JudgeError, Judgement, StatementVerdict, SupportCase
+from handbook_rag.evals.judging import Criterion
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
@@ -1349,36 +1351,45 @@ def test_eval_answers_stops_on_a_broken_label_before_any_request(
 
 
 class FakeJudge:
-    """Calls a statement unsupported when it says "eighteen", and counts what it is asked."""
+    """Faults whatever says "eighteen", by either criterion, and counts what it is asked."""
 
     model = "gemini-3.5-flash-lite"
 
     def __init__(self, *, lenient: bool = False, error: JudgeError | None = None) -> None:
         self.asked: list[str] = []
         self.built_with: list[dict[str, Any]] = []
+        self.built_for: list[str] = []
         self._lenient = lenient
         self._error = error
 
-    def build(self, _settings: Settings, **options: Any) -> "FakeJudge":
+    def build(self, _settings: Settings, criterion: Criterion[Any], **options: Any) -> "FakeJudge":
+        self.built_for.append(criterion.name)
         self.built_with.append(options)
         return self
 
-    def judge(self, case: SupportCase) -> Judgement:
+    def _faults(self, text: str) -> bool:
+        return "eighteen" in text.lower() and not self._lenient
+
+    def judge(self, case: SupportCase | CorrectnessCase) -> Judgement:
         self.asked.append(case.case_id)
         if self._error is not None:
             raise self._error
-        return Judgement(
-            case_id=case.case_id,
-            verdicts=tuple(
+        verdicts: tuple[StatementVerdict, ...]
+        if isinstance(case, CorrectnessCase):
+            verdict = "incorrect" if self._faults(case.answer) else "correct"
+            verdicts = (StatementVerdict(1, verdict, "A reason."),)
+        else:
+            verdicts = tuple(
                 StatementVerdict(
                     statement.number,
-                    "unsupported"
-                    if "eighteen" in statement.text.lower() and not self._lenient
-                    else "supported",
+                    "unsupported" if self._faults(statement.text) else "supported",
                     "A reason.",
                 )
                 for statement in case.statements
-            ),
+            )
+        return Judgement(
+            case_id=case.case_id,
+            verdicts=verdicts,
             model="gemini-3.5-flash-lite",
             input_tokens=900,
             output_tokens=60,
@@ -1449,7 +1460,39 @@ def judged_run(
     labelled = tmp_path / "cases.jsonl"
     labelled.write_text(json.dumps(real) + "\n" + json.dumps(planted) + "\n")
     checks = tmp_path / "judge"
+    # The same two answers, labelled by the second criterion: against the reference answer.
+    real_by_reference = {
+        "case": "q001",
+        "kind": "real",
+        "question": ANSWER_QUESTIONS[0]["question"],
+        "reference": ANSWER_QUESTIONS[0]["reference_answer"],
+        "answer": "Sixteen weeks of paid leave.",
+        "expected": "correct",
+    }
+    planted_by_reference = {
+        **real_by_reference,
+        "case": "q001-v1",
+        "kind": "number",
+        "answer": "Eighteen weeks of paid leave.",
+        "expected": "incorrect",
+    }
+    labelled_correct = tmp_path / "correct-cases.jsonl"
+    labelled_correct.write_text(
+        json.dumps(real_by_reference) + "\n" + json.dumps(planted_by_reference) + "\n"
+    )
+    scored_run = ["--dataset", answer_run[2], "--runs", str(tmp_path / "runs")]
     return {
+        "judge_correct": [
+            "eval-judge",
+            "--criterion",
+            "correct",
+            "--cases",
+            str(labelled_correct),
+            "--output",
+            str(tmp_path / "judge-correct"),
+        ],
+        "correct": ["eval-correct", *scored_run, "--variant", "baseline"],
+        "correct_checks": tmp_path / "judge-correct",
         "judge": ["eval-judge", "--cases", str(labelled), "--output", str(checks)],
         "support": [
             "eval-support",
@@ -1619,10 +1662,15 @@ def test_eval_support_judges_the_saved_answers_and_adds_the_score_to_the_run(
     assert len((run_dir / "support.jsonl").read_text().splitlines()) == 1
     summary = json.loads((run_dir / "summary.json").read_text())
     assert summary["metrics"]["supported"] == {"mean": 1.0, "low": 1.0, "high": 1.0, "count": 1}
-    assert summary["judge"]["answers_judged"] == 1
-    assert summary["judge"]["statements"] == {"supported": 1, "unsupported": 0, "no_claim": 0}
-    assert summary["judge"]["attempts"] == 1
-    assert summary["judge"]["check"] is None
+    assert summary["judges"]["supported"]["answers_judged"] == 1
+    assert summary["judges"]["supported"]["verdicts"] == {
+        "supported": 1,
+        "unsupported": 0,
+        "no_claim": 0,
+    }
+    assert summary["judges"]["supported"]["attempts"] == 1
+    assert summary["judges"]["supported"]["check"] is None
+    assert set(summary["judges"]) == {"supported"}
     # What the answer stage recorded is kept as it was.
     assert summary["description"] == "Answers by gemini-3.5-flash-lite from 5 passages."
     assert summary["attempts"] == 2
@@ -1666,8 +1714,8 @@ def test_eval_support_uses_a_check_again_and_quotes_its_agreement(
     )
     run_dir = judged_run["run_dir"]
     summary = json.loads((run_dir / "summary.json").read_text())
-    assert summary["judge"]["check"]["run"] == check
-    assert summary["judge"]["check"]["agreement"]["recall"]["count"] == 1
+    assert summary["judges"]["supported"]["check"]["run"] == check
+    assert summary["judges"]["supported"]["check"]["agreement"]["recall"]["count"] == 1
     # The borrowed verdict is copied, so the run can be read without the check.
     assert len((run_dir / "support.jsonl").read_text().splitlines()) == 1
 
@@ -1740,7 +1788,7 @@ def test_eval_support_needs_an_answer_run_and_a_judge_that_answers(
     # The run's scores are left as the answer stage wrote them.
     summary = json.loads((judged_run["run_dir"] / "summary.json").read_text())
     assert "supported" not in summary["metrics"]
-    assert "judge" not in summary
+    assert "judges" not in summary
 
 
 def test_eval_support_leaves_out_a_reply_to_a_question_that_was_relabelled_since(
@@ -1772,7 +1820,7 @@ def test_eval_support_leaves_out_a_reply_to_a_question_that_was_relabelled_since
     summary = json.loads((run_dir / "summary.json").read_text())
     assert (summary["questions_scored"], summary["questions_not_asked"]) == (1, 1)
     assert "supported" not in summary["metrics"]
-    assert "judge" not in summary
+    assert "judges" not in summary
 
     # Asking again makes a reply to the new label, and that one is judged.
     monkeypatch.setattr("handbook_rag.wiring.make_generator", EvalModel().build)
@@ -1810,7 +1858,7 @@ def test_eval_support_leaves_no_old_scores_standing_when_no_saved_reply_still_co
     summary = json.loads((run_dir / "summary.json").read_text())
     assert summary["metrics"] == {}
     assert (summary["questions_scored"], summary["questions_not_asked"]) == (0, 2)
-    assert "judge" not in summary
+    assert "judges" not in summary
     assert summary["description"] == "Answers by gemini-3.5-flash-lite from 5 passages."
 
 
@@ -1846,7 +1894,7 @@ def test_eval_support_quotes_only_a_whole_check_that_exists(
     )
     assert quoted.exit_code == 0, quoted.output
     summary = json.loads((judged_run["run_dir"] / "summary.json").read_text())
-    assert summary["judge"]["check"]["answers"] == {"labelled": 2, "judged": 2}
+    assert summary["judges"]["supported"]["check"]["answers"] == {"labelled": 2, "judged": 2}
 
 
 def test_a_check_in_which_the_judge_raised_no_alarm_is_quoted_as_that(
@@ -1884,7 +1932,7 @@ def test_a_restart_that_then_fails_does_not_leave_the_old_judged_score_standing(
     assert not (run_dir / "support.jsonl").exists()
     summary = json.loads((run_dir / "summary.json").read_text())
     assert "supported" not in summary["metrics"]
-    assert "judge" not in summary
+    assert "judges" not in summary
     rows = [json.loads(line) for line in (run_dir / "results.jsonl").read_text().splitlines()]
     assert all("supported" not in row["grade"] for row in rows)
     # What the answer stage measured is still there.
@@ -1907,4 +1955,181 @@ def test_restarting_the_answer_run_discards_the_verdicts_on_its_replies(
     assert not (run_dir / "support.jsonl").exists()
     assert not (run_dir / "support.json").exists()
     assert "Supported by its sources" not in restarted.output
-    assert "judge" not in json.loads((run_dir / "summary.json").read_text())
+    assert "judges" not in json.loads((run_dir / "summary.json").read_text())
+
+
+# The second judged criterion, through the same commands.
+
+
+def test_eval_judge_checks_the_judge_of_the_second_criterion_without_reading_the_handbook(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+
+    def no_corpus(_settings: Settings) -> None:
+        raise AssertionError("this judge is shown no passage, so the handbook is not read")
+
+    monkeypatch.setattr("handbook_rag.cli.build_corpus", no_corpus)
+
+    result = runner.invoke(app, [*judged_run["judge_correct"], "--variant", "baseline"])
+
+    assert result.exit_code == 0, result.output
+    assert (judge.built_for, judge.built_with) == (["correct"], [{"attempts": 1}])
+    assert sorted(judge.asked) == ["q001", "q001-v1"]
+    assert "criterion    correct" in result.output
+    assert "q001-v1  NOT CORRECT" in result.output
+    assert "answers      2 compared with their labels, 0 left out" in result.output
+    assert "Faults caught (recall)       1.000  (95% interval 0.207 to 1.000, n=1)" in result.output
+    assert "Caught, number: 1 of 1" in result.output
+    run_dir = judged_run["correct_checks"] / "baseline"
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["criterion"] == "correct"
+    assert summary["config"] == wiring.describe_judge(get_settings(), CORRECT)
+    assert (summary["answers_labelled"], summary["answers_judged"]) == (2, 2)
+    assert summary["agreement"]["matrix"]["incorrect"] == {
+        "correct": 0,
+        "partial": 0,
+        "incorrect": 1,
+    }
+    (saved_real, saved_planted) = sorted(
+        map(json.loads, (run_dir / "judgements.jsonl").read_text().splitlines()),
+        key=lambda row: row["case"],
+    )
+    assert saved_real["verdicts"] == [{"number": 1, "verdict": "correct", "reason": "A reason."}]
+    assert saved_planted["verdicts"][0]["verdict"] == "incorrect"
+
+
+def test_eval_correct_adds_its_scores_beside_those_of_the_first_judge(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    assert runner.invoke(app, judged_run["support"]).exit_code == 0
+
+    result = runner.invoke(app, judged_run["correct"])
+
+    assert result.exit_code == 0, result.output
+    assert judge.built_for == ["support", "correct"]
+    # One answer is judged by each. The reply that declined has nothing to judge.
+    assert judge.asked == ["q001", "q001"]
+    assert "Correctness of answers: baseline" in result.output
+    assert "judged       1 of 1 answers, 0 of them from verdicts saved earlier" in result.output
+    assert "Correct by the reference     1.000  (95% interval 1.000 to 1.000, n=1)" in result.output
+    assert "Gets a correct answer        1.000" in result.output
+    # The first judge's score is still there, and each judge is described.
+    assert "Supported by its sources     1.000" in result.output
+    assert (
+        "read 1 answers: 1 statements supported, 0 unsupported, 0 without a claim" in result.output
+    )
+    assert "read 1 answers: 1 correct, 0 partial, 0 incorrect" in result.output
+    assert "Run eval-judge --criterion correct, then eval-correct --checked." in result.output
+    assert "Run eval-judge, then eval-support --checked." in result.output
+
+    run_dir = judged_run["run_dir"]
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert set(summary["judges"]) == {"supported", "correct"}
+    assert summary["judges"]["correct"]["verdicts"] == {"correct": 1, "partial": 0, "incorrect": 0}
+    assert summary["judges"]["correct"]["config"] == wiring.describe_judge(get_settings(), CORRECT)
+    assert summary["metrics"]["correct"]["count"] == 1
+    assert summary["metrics"]["answered_correctly"] == {
+        "mean": 1.0,
+        "low": summary["metrics"]["answered_correctly"]["low"],
+        "high": 1.0,
+        "count": 1,
+    }
+    rows = {
+        row["prompt_id"]: row["grade"]
+        for row in map(json.loads, (run_dir / "results.jsonl").read_text().splitlines())
+    }
+    assert (rows["q001"]["correct"], rows["q001"]["answered_correctly"]) == (1.0, 1.0)
+    assert "correct" not in rows["u001"]
+    assert sorted(path.name for path in run_dir.iterdir() if path.name.startswith("correct")) == [
+        "correct.json",
+        "correct.jsonl",
+    ]
+
+    # Judging by the first criterion again keeps what the second found, and asks nothing.
+    again = runner.invoke(app, judged_run["support"])
+    assert again.exit_code == 0, again.output
+    assert "Correct by the reference     1.000" in again.output
+    assert judge.asked == ["q001", "q001"]
+
+    # Asking the questions again from nothing discards what both judges found.
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", EvalModel().build)
+    restarted = runner.invoke(app, [*judged_run["answers"], "--restart"])
+    assert restarted.exit_code == 0, restarted.output
+    assert [p.name for p in run_dir.iterdir() if p.name.startswith(("correct", "support"))] == []
+    assert "Correct by the reference" not in restarted.output
+
+
+def test_eval_correct_uses_a_check_of_its_own_judge_and_refuses_the_other_ones(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    assert runner.invoke(app, [*judged_run["judge"], "--variant", "baseline"]).exit_code == 0
+    assert (
+        runner.invoke(app, [*judged_run["judge_correct"], "--variant", "baseline"]).exit_code == 0
+    )
+    asked_by_the_checks = len(judge.asked)
+
+    # A check of the judge of the other criterion says nothing about this one.
+    other = runner.invoke(
+        app, [*judged_run["correct"], "--checked", str(judged_run["checks"] / "baseline")]
+    )
+
+    assert other.exit_code == 1
+    assert "was made with another judge" in other.output
+    assert "eval-judge --criterion correct" in other.output
+    assert not (judged_run["run_dir"] / "correct.jsonl").exists()
+
+    check = str(judged_run["correct_checks"] / "baseline")
+    result = runner.invoke(app, [*judged_run["correct"], "--checked", check])
+
+    assert result.exit_code == 0, result.output
+    # The check had read this very question, reference answer and answer: no request.
+    assert len(judge.asked) == asked_by_the_checks
+    assert "judged       1 of 1 answers, 1 of them from verdicts saved earlier" in result.output
+    assert (
+        "judge check  it caught 1 of 1 answers labelled not correct, and 0 of its 1 alarms "
+        f"were false ({check})" in result.output
+    )
+    summary = json.loads((judged_run["run_dir"] / "summary.json").read_text())
+    assert summary["judges"]["correct"]["check"]["run"] == check
+    assert summary["judges"]["correct"]["check"]["answers"] == {"labelled": 2, "judged": 2}
+
+
+def test_eval_correct_scores_a_wrong_answer_as_not_correct(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    class SaysEighteen(EvalModel):
+        def generate(
+            self,
+            question: str,
+            chunks: Sequence[Chunk],
+            *,
+            on_text: Callable[[str], None] | None = None,
+        ) -> Answer:
+            answer = super().generate(question, chunks, on_text=on_text)
+            if not answer.answered:
+                return answer
+            wrong = Segment("Eighteen weeks of paid leave.", answer.segments[0].citations)
+            return dataclasses.replace(answer, segments=(wrong,))
+
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", SaysEighteen().build)
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", FakeJudge().build)
+    assert runner.invoke(app, answer_run).exit_code == 0
+
+    result = runner.invoke(
+        app, ["eval-correct", "--dataset", answer_run[2], "--runs", str(tmp_path / "runs")]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "q001  NOT CORRECT" in result.output
+    assert "Correct by the reference     0.000" in result.output
+    # The question was answered, and the right call was made. The answer is still wrong,
+    # and only this judge can tell.
+    assert "Gets a correct answer        0.000" in result.output
+    assert "Right call                   1.000" in result.output
+    assert "read 1 answers: 0 correct, 0 partial, 1 incorrect" in result.output

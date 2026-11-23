@@ -6,8 +6,10 @@ from pathlib import Path
 import pytest
 
 from handbook_rag.evals.answers import answers_stage
+from handbook_rag.evals.correctness import CORRECT
+from handbook_rag.evals.judging import judge_check_stage
 from handbook_rag.evals.stage import SavedRunError, Stage, load_rows
-from handbook_rag.evals.support import judge_check_stage, support_stage
+from handbook_rag.evals.support import SUPPORT
 
 CONFIG: dict[str, object] = {"judge_model": "fake-judge", "instructions": "abc"}
 
@@ -97,14 +99,18 @@ def test_a_stage_needs_a_file_of_its_own_for_each_purpose(tmp_path: Path) -> Non
 
 def test_the_stages_of_a_run_share_no_file(tmp_path: Path) -> None:
     # Restarting one stage removes its files. None of them may belong to another stage.
-    answers, support = answers_stage(tmp_path), support_stage(tmp_path)
+    stages = [answers_stage(tmp_path), SUPPORT.run_stage(tmp_path), CORRECT.run_stage(tmp_path)]
 
     def files(stage: Stage) -> set[str]:
         return {stage.rows_file, stage.state_file, *stage.outputs}
 
-    assert files(answers) & files(support) == set()
+    every_file = [name for stage in stages for name in sorted(files(stage))]
+    assert len(set(every_file)) == len(every_file)
     # A judge check has a directory of its own, where it uses the same names as a run.
-    assert judge_check_stage(tmp_path).rows_file not in files(answers) | files(support)
+    assert judge_check_stage(tmp_path).rows_file not in every_file
+    # Checks of the two judges are kept apart.
+    assert SUPPORT.checks_dir != CORRECT.checks_dir
+    assert SUPPORT.labelled_path != CORRECT.labelled_path
 
 
 def test_a_line_that_is_not_a_row_is_reported(tmp_path: Path) -> None:

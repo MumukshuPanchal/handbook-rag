@@ -16,7 +16,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
-from typing import Literal, Protocol, get_args
+from typing import Literal, get_args
 
 import httpx
 import httpx2
@@ -181,19 +181,31 @@ class SupportCase:
     passages: tuple[JudgedPassage, ...]
     statements: tuple[JudgedStatement, ...]
 
+    @property
+    def fingerprint(self) -> str:
+        """A short hash of everything the judge reads for this answer."""
+        content = [
+            self.question,
+            [[p.number, p.title, p.text] for p in self.passages],
+            [[s.number, s.text, list(s.cites)] for s in self.statements],
+        ]
+        encoded = json.dumps(content, ensure_ascii=False).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()[:16]
+
 
 @dataclass(frozen=True, slots=True)
 class StatementVerdict:
-    """The judge's decision on one statement."""
+    """The judge's decision on one statement, or on a whole answer under the number 1."""
 
     number: int
-    verdict: Verdict
+    verdict: str
+    """One of the verdicts of the criterion that was judged."""
     reason: str
 
 
 @dataclass(frozen=True, slots=True)
 class Judgement:
-    """The judge's verdicts on one answer, and what it cost to get them."""
+    """A judge's verdicts on one answer, and what it cost to get them."""
 
     case_id: str
     verdicts: tuple[StatementVerdict, ...]
@@ -206,15 +218,6 @@ class Judgement:
     def supported(self) -> bool:
         """Whether the answer is supported: none of its statements is unsupported."""
         return all(verdict.verdict != "unsupported" for verdict in self.verdicts)
-
-
-class SupportJudge(Protocol):
-    """Anything that can decide whether an answer's statements are backed by their passages."""
-
-    @property
-    def model(self) -> str: ...
-
-    def judge(self, case: SupportCase) -> Judgement: ...
 
 
 def build_judge_prompt(case: SupportCase) -> str:
@@ -297,6 +300,74 @@ def read_verdicts(reply: str, case: SupportCase) -> tuple[StatementVerdict, ...]
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ModelReply:
+    """The text a model sent back, and what the request cost."""
+
+    text: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    seconds: float
+
+
+def ask_for_json(
+    client: genai.Client,
+    *,
+    model: str,
+    max_tokens: int,
+    instructions: str,
+    prompt: str,
+    schema: type[pydantic.BaseModel],
+) -> ModelReply:
+    """Send one request that must be answered with JSON of the given shape.
+
+    Whatever goes wrong becomes a :class:`JudgeError`: the request failing, the reply
+    being withheld, or the reply not coming to a proper end. None of them is a verdict.
+    """
+    config = types.GenerateContentConfig(
+        system_instruction=instructions,
+        max_output_tokens=max_tokens,
+        response_mime_type="application/json",
+        response_schema=schema,
+        # No follow-up requests by the SDK: every request is one the run has counted.
+        automatic_continuation=False,
+    )
+    started = time.perf_counter()
+    try:
+        response = client.models.generate_content(model=model, contents=prompt, config=config)
+    except errors.APIError as error:
+        raise JudgeError(
+            f"The Gemini API returned an error ({error.code}): {error.message}"
+        ) from error
+    except _NETWORK_ERRORS as error:
+        raise JudgeError("Could not reach the Gemini API. Check the network.") from error
+    except _UNREADABLE_REPLY_ERRORS as error:
+        raise JudgeError("The Gemini API sent a reply that could not be read.") from error
+    seconds = time.perf_counter() - started
+
+    feedback = response.prompt_feedback
+    if feedback is not None and feedback.block_reason:
+        raise JudgeError(
+            f"The API withheld the judge's reply ({feedback.block_reason.name.lower()})."
+        )
+    candidate = response.candidates[0] if response.candidates else None
+    finish = candidate.finish_reason if candidate is not None else None
+    if finish is not types.FinishReason.STOP:
+        reason = finish.name.lower() if finish is not None else "no reply"
+        raise JudgeError(f"The judge's reply did not come to a proper end ({reason}).")
+    usage = response.usage_metadata
+    return ModelReply(
+        text=_reply_text(response),
+        model=response.model_version or model,
+        input_tokens=(usage.prompt_token_count or 0) if usage else 0,
+        output_tokens=(
+            (usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0) if usage else 0
+        ),
+        seconds=seconds,
+    )
+
+
 class GeminiSupportJudge:
     """Judges one answer with one Gemini request, asking for JSON of a fixed shape."""
 
@@ -312,52 +383,21 @@ class GeminiSupportJudge:
     def judge(self, case: SupportCase) -> Judgement:
         if not case.statements:
             raise JudgeError(f"{case.case_id} has no statement to judge.")
-        prompt = build_judge_prompt(case)
-        config = types.GenerateContentConfig(
-            system_instruction=SUPPORT_INSTRUCTIONS,
-            max_output_tokens=self._max_tokens,
-            response_mime_type="application/json",
-            response_schema=_Reply,
-            # No follow-up requests by the SDK: every request is one the run has counted.
-            automatic_continuation=False,
+        reply = ask_for_json(
+            self._client,
+            model=self._model,
+            max_tokens=self._max_tokens,
+            instructions=SUPPORT_INSTRUCTIONS,
+            prompt=build_judge_prompt(case),
+            schema=_Reply,
         )
-        started = time.perf_counter()
-        try:
-            response = self._client.models.generate_content(
-                model=self._model, contents=prompt, config=config
-            )
-        except errors.APIError as error:
-            raise JudgeError(
-                f"The Gemini API returned an error ({error.code}): {error.message}"
-            ) from error
-        except _NETWORK_ERRORS as error:
-            raise JudgeError("Could not reach the Gemini API. Check the network.") from error
-        except _UNREADABLE_REPLY_ERRORS as error:
-            raise JudgeError("The Gemini API sent a reply that could not be read.") from error
-        seconds = time.perf_counter() - started
-
-        feedback = response.prompt_feedback
-        if feedback is not None and feedback.block_reason:
-            raise JudgeError(
-                f"The API withheld the judge's reply ({feedback.block_reason.name.lower()})."
-            )
-        candidate = response.candidates[0] if response.candidates else None
-        finish = candidate.finish_reason if candidate is not None else None
-        if finish is not types.FinishReason.STOP:
-            reason = finish.name.lower() if finish is not None else "no reply"
-            raise JudgeError(f"The judge's reply did not come to a proper end ({reason}).")
-        usage = response.usage_metadata
         return Judgement(
             case_id=case.case_id,
-            verdicts=read_verdicts(_reply_text(response), case),
-            model=response.model_version or self._model,
-            input_tokens=(usage.prompt_token_count or 0) if usage else 0,
-            output_tokens=(
-                (usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0)
-                if usage
-                else 0
-            ),
-            seconds=seconds,
+            verdicts=read_verdicts(reply.text, case),
+            model=reply.model,
+            input_tokens=reply.input_tokens,
+            output_tokens=reply.output_tokens,
+            seconds=reply.seconds,
         )
 
 

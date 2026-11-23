@@ -254,7 +254,7 @@ def test_an_answer_is_supported_when_no_statement_is_unsupported() -> None:
     def judgement(*verdicts: str) -> Judgement:
         return Judgement(
             "q001",
-            tuple(StatementVerdict(n, v, "") for n, v in enumerate(verdicts, 1)),  # type: ignore[arg-type]
+            tuple(StatementVerdict(n, v, "") for n, v in enumerate(verdicts, 1)),
             MODEL,
         )
 

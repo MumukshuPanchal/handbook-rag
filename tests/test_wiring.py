@@ -1,14 +1,26 @@
+import dataclasses
+import json
+from pathlib import Path
+from typing import Any
+
 import anthropic
 import pytest
 from pydantic import SecretStr
 
 from handbook_rag import wiring
 from handbook_rag.config import Settings
+from handbook_rag.evals.correctness import (
+    CORRECT,
+    GeminiCorrectnessJudge,
+    correctness_request_fingerprint,
+)
 from handbook_rag.evals.judge import (
     SUPPORT_INSTRUCTIONS,
     GeminiSupportJudge,
     request_fingerprint,
 )
+from handbook_rag.evals.judging import Criterion
+from handbook_rag.evals.support import SUPPORT
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
@@ -187,7 +199,7 @@ def test_the_judge_is_built_for_the_configured_model_with_the_key_passed_directl
         judge_max_tokens=321,
     )
 
-    judge = make_judge(settings, attempts=1)
+    judge = make_judge(settings, SUPPORT, attempts=1)
 
     assert isinstance(judge, GeminiSupportJudge)
     assert judge.model == "gemini-9-judge"
@@ -198,22 +210,23 @@ def test_the_judge_is_built_for_the_configured_model_with_the_key_passed_directl
     assert options.retry_options is not None
     # One attempt: a run that counts its requests cannot have them sent again unseen.
     assert options.retry_options.attempts == 1
-    assert make_judge(settings)._client._api_client._http_options.retry_options.attempts == 3  # type: ignore[attr-defined]
+    retried = make_judge(settings, SUPPORT)
+    assert retried._client._api_client._http_options.retry_options.attempts == 3  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize("key", [None, SecretStr("")])
 def test_a_judge_without_a_key_is_a_clear_error(key: SecretStr | None) -> None:
     with pytest.raises(GenerationError, match="GEMINI_API_KEY"):
-        make_judge(Settings(gemini_api_key=key))
+        make_judge(Settings(gemini_api_key=key), SUPPORT)
 
 
 def test_a_judge_request_cannot_be_sent_fewer_than_one_time() -> None:
     with pytest.raises(ValueError, match="at least once"):
-        make_judge(Settings(gemini_api_key=SecretStr("k")), attempts=0)
+        make_judge(Settings(gemini_api_key=SecretStr("k")), CORRECT, attempts=0)
 
 
-def test_verdicts_record_the_judge_that_made_them(monkeypatch: pytest.MonkeyPatch) -> None:
-    described = describe_judge(Settings())
+def test_verdicts_record_the_judge_that_made_them() -> None:
+    described = describe_judge(Settings(), SUPPORT)
 
     assert described == {
         "judge_model": "gemini-3.5-flash-lite",
@@ -224,6 +237,42 @@ def test_verdicts_record_the_judge_that_made_them(monkeypatch: pytest.MonkeyPatc
     assert len(str(described["judge_instructions"])) == 16
 
     # Reworded instructions are another judge, whose agreement has to be measured again.
-    monkeypatch.setattr(wiring, "SUPPORT_INSTRUCTIONS", SUPPORT_INSTRUCTIONS + " Be strict.")
-    assert describe_judge(Settings())["judge_instructions"] != described["judge_instructions"]
-    assert describe_judge(Settings(judge_model="gemini-9-judge"))["judge_model"] == "gemini-9-judge"
+    reworded = dataclasses.replace(SUPPORT, instructions=SUPPORT_INSTRUCTIONS + " Be strict.")
+    assert (
+        describe_judge(Settings(), reworded)["judge_instructions"]
+        != described["judge_instructions"]
+    )
+    other_model = describe_judge(Settings(judge_model="gemini-9-judge"), SUPPORT)
+    assert other_model["judge_model"] == "gemini-9-judge"
+
+
+def test_each_criterion_has_a_judge_of_its_own() -> None:
+    settings = Settings(gemini_api_key=SecretStr("test-key-not-a-real-one"))
+
+    judge = make_judge(settings, CORRECT, attempts=1)
+    support, correct = describe_judge(settings, SUPPORT), describe_judge(settings, CORRECT)
+
+    assert isinstance(judge, GeminiCorrectnessJudge)
+    assert judge.model == "gemini-3.5-flash-lite"
+    assert judge._max_tokens == 2000
+    # Other instructions and another layout of the request: verdicts of one are never
+    # taken for verdicts of the other.
+    assert support["judge_instructions"] != correct["judge_instructions"]
+    assert support["judge_request"] != correct["judge_request"]
+    assert correct["judge_request"] == correctness_request_fingerprint()
+
+
+def test_the_saved_checks_are_of_the_judges_the_code_builds_today() -> None:
+    # A check of a judge is kept beside the scores that judge gave. If the instructions,
+    # the layout of a request or the model change, the judge is another one, and this
+    # fails until it has been checked again and the new check is saved.
+    root = Path(__file__).parents[1] / "evals" / "runs"
+    criteria: tuple[Criterion[Any], ...] = (SUPPORT, CORRECT)
+    for criterion in criteria:
+        check = root / criterion.checks_dir.name / "baseline" / "run.json"
+        if not check.is_file():
+            continue
+        saved = json.loads(check.read_text(encoding="utf-8"))["config"]
+        assert saved == describe_judge(Settings(), criterion), criterion.name
+        scored = root / "answers" / "baseline" / criterion.state_file
+        assert json.loads(scored.read_text(encoding="utf-8"))["config"] == saved, criterion.name

@@ -1,5 +1,6 @@
 {
   "description": "gemini-3.5-flash-lite judging the labelled answers in evals/judge/support/cases.jsonl.",
+  "criterion": "support",
   "config": {
     "judge_model": "gemini-3.5-flash-lite",
     "judge_max_tokens": 2000,
@@ -10,7 +11,7 @@
   "answers_judged": 169,
   "answers_failed": 0,
   "attempts": 201,
-  "statements_left_out_as_unclear": 5,
+  "left_out_as_unclear": 5,
   "agreement": {
     "statements": 259,
     "same_decision": {

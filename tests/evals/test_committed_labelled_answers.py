@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from handbook_rag.evals.judge import VERDICTS
-from handbook_rag.evals.support import UNCLEAR
+from handbook_rag.evals.judging import UNCLEAR
 
 CASES = Path(__file__).parents[2] / "evals" / "judge" / "support" / "cases.jsonl"
 FAULTS = {

@@ -14,12 +14,7 @@ from google.genai import types as genai_types
 from qdrant_client import QdrantClient
 
 from handbook_rag.config import Settings
-from handbook_rag.evals.judge import (
-    SUPPORT_INSTRUCTIONS,
-    GeminiSupportJudge,
-    SupportJudge,
-    request_fingerprint,
-)
+from handbook_rag.evals.judging import Criterion, Judge, JudgedCase
 from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
@@ -231,22 +226,24 @@ def _gemini_client(settings: Settings, attempts: int) -> genai.Client:
     )
 
 
-def make_judge(settings: Settings, *, attempts: int | None = None) -> SupportJudge:
-    """Build the judge that checks whether statements are backed by their passages.
+def make_judge[C: JudgedCase](
+    settings: Settings, criterion: Criterion[C], *, attempts: int | None = None
+) -> Judge[C]:
+    """Build the judge for one criterion.
 
     ``attempts`` is how often one request may be sent, as for :func:`make_generator`. An
     evaluation passes 1.
     """
     if attempts is not None and attempts < 1:
         raise ValueError("A request has to be sent at least once.")
-    return GeminiSupportJudge(
+    return criterion.judge(
         _gemini_client(settings, attempts or GEMINI_ATTEMPTS),
         model=settings.judge_model,
         max_tokens=settings.judge_max_tokens,
     )
 
 
-def describe_judge(settings: Settings) -> dict[str, object]:
+def describe_judge[C: JudgedCase](settings: Settings, criterion: Criterion[C]) -> dict[str, object]:
     """The settings that decide a verdict, for recording with the verdicts.
 
     The instructions are recorded as a short hash, as for an answer, and so is the layout
@@ -257,8 +254,10 @@ def describe_judge(settings: Settings) -> dict[str, object]:
     return {
         "judge_model": settings.judge_model,
         "judge_max_tokens": settings.judge_max_tokens,
-        "judge_instructions": hashlib.sha256(SUPPORT_INSTRUCTIONS.encode("utf-8")).hexdigest()[:16],
-        "judge_request": request_fingerprint(),
+        "judge_instructions": hashlib.sha256(criterion.instructions.encode("utf-8")).hexdigest()[
+            :16
+        ],
+        "judge_request": criterion.request_fingerprint(),
     }
 
 

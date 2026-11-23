@@ -47,6 +47,8 @@ from handbook_rag.ingest.models import Document
 METRICS: list[dict[str, str]] = [
     {"id": "right_call", "label": "Right call", "kind": "binary"},
     {"id": "supported", "label": "Supported by its sources", "kind": "binary"},
+    {"id": "correct", "label": "Correct by the reference", "kind": "binary"},
+    {"id": "answered_correctly", "label": "Gets a correct answer", "kind": "binary"},
     {"id": "answered", "label": "Answers when it should", "kind": "binary"},
     {"id": "declined", "label": "Declines when it should", "kind": "binary"},
     {"id": "evidence_in_context", "label": "Evidence among the passages", "kind": "binary"},
@@ -219,6 +221,36 @@ class AnswerRun:
     when the search fails or finds nothing, because the model is then never called."""
     stopped: str | None = None
     """Why the run ended before every question was asked, if it did."""
+
+
+def judged_scores(
+    question: GoldenQuestion, record: AnswerRecord, judged: Mapping[str, Mapping[str, bool]]
+) -> dict[str, float]:
+    """The scores the judges add for one reply. A score that does not apply is left out.
+
+    - ``supported``, for an answer: no statement in it goes beyond the passage it cites.
+    - ``correct``, for an answer to a question the handbook answers: it agrees with the
+      reference answer.
+    - ``answered_correctly``, for every question the handbook answers: the asker got a
+      correct answer. A reply that declined counts as 0 here, so this is the one score
+      that joins the search, the decision to answer and the answer itself. It is given
+      once a judge has ruled on correctness in this run, and it means what it says only
+      when that judge has ruled on every answer.
+
+    An answer a judge has not ruled on gets no score from that judge. It is counted
+    neither way.
+    """
+    scores: dict[str, float] = {}
+    if record.answered:
+        for metric, passed in judged.items():
+            if question.id in passed:
+                scores[metric] = float(passed[question.id])
+    if question.type == "answerable" and "correct" in judged:
+        if not record.answered:
+            scores["answered_correctly"] = 0.0
+        elif "correct" in scores:
+            scores["answered_correctly"] = scores["correct"]
+    return scores
 
 
 def replies_to_current_labels(
@@ -419,14 +451,13 @@ def summarise_answers(
     questions: Sequence[GoldenQuestion],
     records: Mapping[str, AnswerRecord],
     failures: Sequence[FailedQuestion] = (),
-    supported: Mapping[str, bool] | None = None,
+    judged: Mapping[str, Mapping[str, bool]] | None = None,
 ) -> AnswerReport:
     """Score every reply and average the scores, overall and for the groups worth reading.
 
-    ``supported`` holds the judge's finding for the answers it has judged, by question
-    id: whether every statement of the answer is backed by the passages it cites. It adds
-    the one score that code alone cannot compute. An answer the judge has not judged gets
-    no such score, and is not counted as supported or as unsupported.
+    ``judged`` holds what the judges found, by the id of the score and then by question
+    id: whether the answer passed. These are the scores that code alone cannot compute
+    (see :func:`judged_scores`).
     """
     scored = []
     for question in questions:
@@ -434,8 +465,7 @@ def summarise_answers(
             continue
         record = records[question.id]
         scores = score_answer(question, record)
-        if supported is not None and record.answered and question.id in supported:
-            scores["supported"] = float(supported[question.id])
+        scores.update(judged_scores(question, record, judged or {}))
         scored.append(ScoredAnswer(question, record, scores))
     failed = [failure for failure in failures if failure.question_id not in records]
     # A reply made without any passage never reached the model, so it has no timing.
@@ -508,7 +538,7 @@ def write_answer_run(
     config: Mapping[str, object],
     *,
     attempts: int,
-    judge: Mapping[str, object] | None = None,
+    judges: Mapping[str, Mapping[str, object]] | None = None,
 ) -> Path:
     """Write the scores of one run next to its saved replies, and return its directory.
 
@@ -567,9 +597,10 @@ def write_answer_run(
         "timing": report.timing,
         "tokens": report.tokens,
     }
-    if judge is not None:
-        # Who judged, what it cost, and how far it agreed with labelled answers.
-        summary["judge"] = dict(judge)
+    if judges:
+        # For each judged score: who judged, what it cost, and how far that judge agreed
+        # with labelled answers.
+        summary["judges"] = {metric: dict(record) for metric, record in judges.items()}
     write_json(run_dir / "summary.json", summary)
     (run_dir / "change.md").write_text(f"{description}\n", encoding="utf-8")
     return run_dir

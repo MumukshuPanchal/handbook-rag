@@ -1,18 +1,21 @@
 """Measuring how far a judge agrees with labelled statements."""
 
-from typing import cast
-
 import pytest
 
-from handbook_rag.evals.agreement import Pair, measure_agreement
-from handbook_rag.evals.judge import Verdict
+from handbook_rag.evals import agreement as agreement_module
+from handbook_rag.evals.agreement import Agreement, Pair
+from handbook_rag.evals.judge import VERDICTS
 
 
 def pairs(*rows: tuple[str, int, str, str, str]) -> list[Pair]:
     return [
-        Pair(case, number, cast(Verdict, expected), cast(Verdict, judged), kind)
-        for case, number, expected, judged, kind in rows
+        Pair(case, number, expected, judged, kind) for case, number, expected, judged, kind in rows
     ]
+
+
+def measure_agreement(pairs: list[Pair]) -> Agreement:
+    """Measure as the first criterion does: three verdicts, of which one is a fault."""
+    return agreement_module.measure_agreement(pairs, verdicts=VERDICTS, faults={"unsupported"})
 
 
 def test_a_judge_that_matches_every_label_agrees_completely() -> None:
@@ -178,3 +181,50 @@ def test_the_table_of_verdicts_reads_label_first_and_judge_second() -> None:
 def test_agreement_needs_something_to_compare() -> None:
     with pytest.raises(ValueError, match="at least one labelled statement"):
         measure_agreement([])
+
+
+def test_several_verdicts_can_count_as_a_fault() -> None:
+    # The second criterion: an answer that is partial or incorrect is not correct.
+    agreement = agreement_module.measure_agreement(
+        pairs(
+            ("a", 1, "correct", "correct", "real"),
+            ("b", 1, "partial", "incorrect", "omission"),
+            ("c", 1, "incorrect", "partial", "number"),
+            ("d", 1, "incorrect", "correct", "name"),
+            ("e", 1, "correct", "partial", "real"),
+        ),
+        verdicts=("correct", "partial", "incorrect"),
+        faults={"partial", "incorrect"},
+    )
+
+    # Taking partial for incorrect is another verdict and the same decision: not correct.
+    assert agreement.same_verdict.mean == pytest.approx(1 / 5)
+    assert agreement.same_decision.mean == pytest.approx(3 / 5)
+    assert agreement.recall is not None
+    assert agreement.precision is not None
+    assert agreement.recall.mean == pytest.approx(2 / 3)
+    assert agreement.precision.mean == pytest.approx(2 / 3)
+    assert (agreement.recall.count, agreement.precision.count) == (3, 3)
+    assert agreement.caught == {"name": (0, 1), "number": (1, 1), "omission": (1, 1)}
+    assert agreement.matrix == {
+        "correct": {"correct": 1, "partial": 1, "incorrect": 0},
+        "partial": {"correct": 0, "partial": 0, "incorrect": 1},
+        "incorrect": {"correct": 1, "partial": 1, "incorrect": 0},
+    }
+
+
+def test_the_faults_decide_what_every_figure_is_about() -> None:
+    rows = pairs(("a", 1, "partial", "correct", "omission"), ("b", 1, "correct", "correct", "real"))
+    verdicts = ("correct", "partial", "incorrect")
+
+    strict = agreement_module.measure_agreement(
+        rows, verdicts=verdicts, faults={"partial", "incorrect"}
+    )
+    lax = agreement_module.measure_agreement(rows, verdicts=verdicts, faults={"incorrect"})
+
+    # Counting partial as a fault, the judge let one through. Not counting it, there was
+    # nothing to catch.
+    assert strict.recall is not None
+    assert strict.recall.mean == 0.0
+    assert lax.recall is None
+    assert (strict.same_decision.mean, lax.same_decision.mean) == (0.5, 1.0)

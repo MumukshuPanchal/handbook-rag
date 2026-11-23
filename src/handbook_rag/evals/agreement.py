@@ -2,13 +2,13 @@
 
 A judge's score means nothing until the judge itself has been checked. The check is
 simple: give the judge statements whose verdict is known, and count how often it reaches
-the same one. Two numbers matter most, and both are about the verdict ``unsupported``:
+the same one. Two numbers matter most, and both are about the *faults*: the verdicts
+that count against an answer, such as ``unsupported``.
 
-- **Recall**: of the statements that really are unsupported, how many did the judge call
-  unsupported? A judge with low recall lets faults through, so every answer it reports
-  as supported is worth less.
-- **Precision**: of the statements the judge called unsupported, how many really are? A
-  judge with low precision raises false alarms, so the score it reports is too low.
+- **Recall**: of the statements labelled with a fault, how many did the judge fault? A
+  judge with low recall lets faults through, so every answer it passes is worth less.
+- **Precision**: of the statements the judge faulted, how many are labelled with a fault?
+  A judge with low precision raises false alarms, so the score it reports is too low.
 
 The labelled examples hold real answers and copies of them with one planted fault. The
 planted faults are what makes recall measurable at all: real answers hold too few.
@@ -18,10 +18,9 @@ every time: 41 of 41 is not certainty.
 """
 
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 
-from handbook_rag.evals.judge import VERDICTS, Verdict
 from handbook_rag.evals.metrics import Estimate, share_with_interval
 
 REAL = "real"
@@ -34,8 +33,8 @@ class Pair:
 
     case_id: str
     statement: int
-    expected: Verdict
-    judged: Verdict
+    expected: str
+    judged: str
     kind: str = REAL
     """``real``, or the kind of fault that was planted in this statement."""
 
@@ -50,38 +49,47 @@ class Agreement:
     same_verdict: Estimate
     """Share of statements judged exactly as labelled, of the three verdicts."""
     same_decision: Estimate
-    """Share of statements on which judge and label agree whether it is unsupported.
+    """Share of statements on which judge and label agree whether it is a fault.
     This is the decision an answer's score depends on."""
     kappa: float
     """Cohen's kappa for that decision: agreement beyond what chance alone would give.
     1 is complete agreement, 0 is no better than chance, and a judge that does worse than
     chance scores below 0, down to -1."""
     recall: Estimate | None
-    """Of the statements labelled unsupported, the share the judge called unsupported."""
+    """Of the statements labelled with a fault, the share the judge faulted."""
     precision: Estimate | None
-    """Of the statements the judge called unsupported, the share labelled unsupported."""
+    """Of the statements the judge faulted, the share labelled with a fault."""
     caught: dict[str, tuple[int, int]]
-    """For each kind of statement labelled unsupported: how many the judge caught, of how many."""
+    """For each kind of statement labelled with a fault: how many the judge caught, of how many."""
     answers: int
     same_answer: Estimate
     """Share of answers on which judge and labels agree whether the answer is supported."""
     answer_recall: Estimate | None
-    """Of the answers with a statement labelled unsupported, the share the judge failed."""
+    """Of the answers with a statement labelled with a fault, the share the judge failed."""
     answer_precision: Estimate | None
-    """Of the answers the judge failed, the share with a statement labelled unsupported."""
+    """Of the answers the judge failed, the share with a statement labelled with a fault."""
 
 
-def measure_agreement(pairs: Sequence[Pair]) -> Agreement:
-    """Compare the judge's verdicts with the labels."""
+def measure_agreement(
+    pairs: Sequence[Pair], *, verdicts: Sequence[str], faults: Collection[str]
+) -> Agreement:
+    """Compare the judge's verdicts with the labels.
+
+    ``verdicts`` are the verdicts the criterion allows, and ``faults`` those among them
+    that count against an answer. Both have to be given: with the wrong faults every
+    figure here would be about another decision.
+    """
     if not pairs:
         raise ValueError("Agreement needs at least one labelled statement.")
-    names: tuple[str, ...] = VERDICTS
-    matrix = {expected: dict.fromkeys(names, 0) for expected in names}
+    matrix = {expected: dict.fromkeys(verdicts, 0) for expected in verdicts}
     for pair in pairs:
         matrix[pair.expected][pair.judged] += 1
 
-    labelled_bad = [pair for pair in pairs if pair.expected == "unsupported"]
-    judged_bad = [pair for pair in pairs if pair.judged == "unsupported"]
+    def is_fault(verdict: str) -> bool:
+        return verdict in faults
+
+    labelled_bad = [pair for pair in pairs if is_fault(pair.expected)]
+    judged_bad = [pair for pair in pairs if is_fault(pair.judged)]
     by_kind: dict[str, list[Pair]] = defaultdict(list)
     for pair in labelled_bad:
         by_kind[pair.kind].append(pair)
@@ -89,11 +97,11 @@ def measure_agreement(pairs: Sequence[Pair]) -> Agreement:
     by_case: dict[str, list[Pair]] = defaultdict(list)
     for pair in pairs:
         by_case[pair.case_id].append(pair)
-    # An answer is unsupported when any of its statements is.
+    # An answer is faulted when any of its statements is.
     answers = [
         (
-            any(pair.expected == "unsupported" for pair in members),
-            any(pair.judged == "unsupported" for pair in members),
+            any(is_fault(pair.expected) for pair in members),
+            any(is_fault(pair.judged) for pair in members),
         )
         for members in by_case.values()
     ]
@@ -101,12 +109,12 @@ def measure_agreement(pairs: Sequence[Pair]) -> Agreement:
         statements=len(pairs),
         matrix=matrix,
         same_verdict=_share(pair.expected == pair.judged for pair in pairs),
-        same_decision=_share(_is_bad(pair.expected) == _is_bad(pair.judged) for pair in pairs),
-        kappa=_kappa([(_is_bad(pair.expected), _is_bad(pair.judged)) for pair in pairs]),
-        recall=_share_or_none(pair.judged == "unsupported" for pair in labelled_bad),
-        precision=_share_or_none(pair.expected == "unsupported" for pair in judged_bad),
+        same_decision=_share(is_fault(pair.expected) == is_fault(pair.judged) for pair in pairs),
+        kappa=_kappa([(is_fault(pair.expected), is_fault(pair.judged)) for pair in pairs]),
+        recall=_share_or_none(is_fault(pair.judged) for pair in labelled_bad),
+        precision=_share_or_none(is_fault(pair.expected) for pair in judged_bad),
         caught={
-            kind: (sum(pair.judged == "unsupported" for pair in members), len(members))
+            kind: (sum(is_fault(pair.judged) for pair in members), len(members))
             for kind, members in sorted(by_kind.items())
         },
         answers=len(answers),
@@ -114,10 +122,6 @@ def measure_agreement(pairs: Sequence[Pair]) -> Agreement:
         answer_recall=_share_or_none(judged for labelled, judged in answers if labelled),
         answer_precision=_share_or_none(labelled for labelled, judged in answers if judged),
     )
-
-
-def _is_bad(verdict: Verdict) -> bool:
-    return verdict == "unsupported"
 
 
 def _share(flags: Iterable[bool]) -> Estimate:

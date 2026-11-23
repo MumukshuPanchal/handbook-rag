@@ -8,8 +8,15 @@ services:
   # index has not been built. Build it with:
   #   docker compose run --rm api handbook-rag snapshot
   #   docker compose run --rm api handbook-rag index
-  # The containers do not read a .env file. They run with the default settings plus the
-  # ones listed here; add a line to change another.
+  # The application inside the container does not read a .env file. It runs with the
+  # default settings plus the ones listed here; add a line to change another.
+  #
+  # One value does come from the project's .env file: the Gemini API key, which /ask
+  # needs. Compose reads .env itself to fill in ${GEMINI_API_KEY} below, so the key is
+  # written neither in this file nor in the image (.dockerignore keeps .env out of the
+  # build). Without it the API starts anyway, searches work, and /ask answers 503.
+  # Note that `docker compose config` prints the file with the key filled in, in clear
+  # text, and so does `docker inspect` on the running container. Do not paste either.
   api:
     build: .
     image: handbook-rag:local
@@ -22,6 +29,8 @@ services:
       HANDBOOK_RAG_QDRANT_URL: http://qdrant:6333
       HANDBOOK_RAG_TRACING: "true"
       HANDBOOK_RAG_OTLP_ENDPOINT: http://jaeger:4318
+      # Empty when .env has no key, which the application treats as no key.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     # No authentication, so it is published on this machine only.
     ports:
       - "127.0.0.1:8000:8000"

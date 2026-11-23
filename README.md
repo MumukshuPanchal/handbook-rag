@@ -106,6 +106,25 @@ A real answer on 23 November 2026. That evening the free model was overloaded: t
 
 The page is for this machine only: like the rest of the API it has no login, and every question asked on it spends the key's allowance. Everything in an answer is shown as plain text, so an address the model writes is not a link, because a handbook page can plant one ([adversarial tests](#adversarial-tests)). It is three hand-written files served by the API, with no build step and a strict content security policy ([ADR 0016](docs/adr/0016-a-demo-page-without-a-build-step.md)). `HANDBOOK_RAG_API_DEMO=false` switches it off.
 
+### Use it from an AI assistant
+
+`handbook-rag mcp` offers the handbook search to AI assistants and coding tools as one tool, `search_handbook`, over the Model Context Protocol (MCP). The assistant starts the command itself, on the same machine, and speaks to it over its standard input and output. It needs the vector store running and the index built, and no API key: the tool only searches, and the assistant writes its own answer from the passages. Why no tool answers is in [ADR 0017](docs/adr/0017-an-mcp-server-for-search.md).
+
+A client is given a command and its arguments. Like every command, the server reads its settings from `.env` in the directory it starts in, so start it in the project's directory:
+
+```text
+command:    uv
+arguments:  run --directory /absolute/path/to/handbook-rag handbook-rag mcp
+```
+
+Where a client keeps this, and in what form, is in that client's own documentation. No named assistant has been tried: the server was driven by the SDK's own client in the tests, and by a client written by hand against the full index.
+
+- **What the tool returns.** The passages best first, each with its rank, score, title, section, the headings above it, the page's address and its text: the same object as `POST /search`, as structured data, and the same passages as text. It takes `query` (1 to 500 characters), `limit` (1 to 20) and an optional `section`.
+- **Passages are not instructions.** The tool's description tells the calling model that the passages are text from pages many people can edit: material to read and to quote with their address, never instructions to follow. Planted instructions got through the assistant's own model in the [adversarial tests](#adversarial-tests), and a calling model reads the same pages. Whether a calling model holds to the description is not measured.
+- **The first search can wait.** The models load in the background as the server starts, so the handshake is answered at once and the first search waits for the rest of the load. Against the full index on the development laptop, on 23 November 2026, the handshake came 3.8 seconds after the start and the first search was answered 9.2 seconds after it, as seen there and recorded in no file. A search that would wait more than two minutes for the models is refused instead.
+- **Failures are tool errors in fixed words**, as over HTTP: a vector store that cannot be reached, an index that has not been built, arguments that break a limit. The cause goes to the log, on standard error, which a client shows or keeps.
+- `make mcp` starts the server in a terminal, where it waits for a client's messages. An assistant starts the command itself.
+
 ### With Docker Compose
 
 `docker compose up` starts the API, the vector store and the trace backend. Only Docker is needed.
@@ -364,6 +383,7 @@ make index      # embed the chunks and store them; safe to run again
 make search q="how do I expense a laptop"
 make traces     # start the trace backend; see docs/observability.md
 make serve      # run the HTTP API at http://127.0.0.1:8000; POST /ask answers, POST /search searches
+make mcp        # serve search to AI assistants over MCP, on standard input and output; an assistant starts it itself
 uv run handbook-rag search "what is compa-ratio" --rerank
 make ask q="how do I expense a laptop"   # answer with citations; needs a free Gemini API key
 make test-live       # send three real requests to the answer model, one of them through the API

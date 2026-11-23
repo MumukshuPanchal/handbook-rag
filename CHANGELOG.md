@@ -6,6 +6,7 @@ What each version of this project contains. The format follows [Keep a Changelog
 
 ### Added
 
+- `handbook-rag mcp`: handbook search for AI assistants and coding tools, as one read-only tool over the Model Context Protocol, on standard input and output. It runs the same retriever as `POST /search`, checks its arguments with the same limits and returns the same object, and the passages as text too. No tool answers, so a call spends no request of the answer model ([#20], [ADR 0017]).
 - A demo page at `/`, served by the API: a question box that shows the answer as the model writes it, then the answer with its sources, the model, the tokens, the timings and the trace id, and beside it what the search found. Three hand-written files with no build step. Everything from the API is shown as text, an address in an answer is never a link, and a strict content security policy is sent with each file. `HANDBOOK_RAG_API_DEMO=false` switches it off ([#19], [ADR 0016]).
 
 ### Changed
@@ -103,6 +104,7 @@ These are the [limitations in the README](README.md#limitations).
 [#17]: https://github.com/MumukshuPanchal/handbook-rag/issues/17
 [#18]: https://github.com/MumukshuPanchal/handbook-rag/issues/18
 [#19]: https://github.com/MumukshuPanchal/handbook-rag/issues/19
+[#20]: https://github.com/MumukshuPanchal/handbook-rag/issues/20
 [#21]: https://github.com/MumukshuPanchal/handbook-rag/issues/21
 [#23]: https://github.com/MumukshuPanchal/handbook-rag/pull/23
 [#25]: https://github.com/MumukshuPanchal/handbook-rag/pull/25
@@ -159,3 +161,4 @@ These are the [limitations in the README](README.md#limitations).
 [ADR 0014]: docs/adr/0014-answer-evaluation-in-stages.md
 [ADR 0015]: docs/adr/0015-answers-over-http.md
 [ADR 0016]: docs/adr/0016-a-demo-page-without-a-build-step.md
+[ADR 0017]: docs/adr/0017-an-mcp-server-for-search.md

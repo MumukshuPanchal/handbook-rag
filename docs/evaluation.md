@@ -459,6 +459,129 @@ How far this goes:
 - **Only the answer model is tested.** The judges read the same passages and are not.
 - **Code's rules are narrow.** A reply that obeys in part without a canary counts as held, and a paraphrase of the instructions is not caught. Markup, spacing or another dash cannot hide a canary; a look-alike letter from another alphabet can.
 
+## A semantic cache, measured before it is built
+
+A semantic cache answers a new question with the answer stored for an earlier one when the two mean the same, and so saves a request to the answer model ([issue 24](https://github.com/MumukshuPanchal/handbook-rag/issues/24)). Its danger is a **false hit**: a stored answer served to a question that only looks the same. The reply carries citations and looks like any other answer, so the asker has no sign of it. A miss costs one ordinary answer. So before any cache is written, this measures whether "the same" can be told from "looks the same" at all. No cache is built.
+
+```bash
+make eval-cache
+# a kept run:
+uv run handbook-rag eval-cache --variant baseline
+```
+
+The command sends no request to any model API. It runs two models on this machine, the embedding model and a second one, and needs neither the handbook snapshot nor the index.
+
+It uses the [cache question pairs](../evals/cache/README.md): 200 pairs of a golden question and another question. In 100 the other question is a rewording that needs exactly the golden question's answer (`same`). In 100 it is a near-miss that needs another answer or none (`different`): another country, triplets instead of twins, "does" instead of "doesn't". One model session wrote the pairs, and a second labelled them again without seeing the labels. Every figure is about the 198 pairs on which the two agree, 98 `same` and 100 `different`. The two disputed pairs, `s078` and `s100`, are in no figure, and the run lists them with their scores. No person has read the pairs.
+
+### Two scores of a stored question against a new one
+
+- **The cosine of the two embeddings.** This is all a plain semantic cache has. Each question is embedded as the search embeds a question, by the same model with the same prefix, on the CPU as the service does it.
+- **A second check: does each question imply the other?** An embedding is made from one question alone, so two questions that differ in one decisive word land almost on the same spot. A cross-encoder reads the stored question and the new one together, as the reranker reads a question with a passage. The one used, `cross-encoder/nli-deberta-v3-small`, was trained for natural language inference: it gives the probability that one sentence entails another. It reads each pair twice, once in each direction, and the two probabilities are combined in two ways: the **weaker direction**, which is high only when each question implies the other, and the **mean** of the two. Which of the model's three outputs means "entailment" is read from the model's own configuration and never assumed. The check is a small component of its own, `src/handbook_rag/cache/verify.py`, for a cache to use later.
+
+The verifier was picked with all the pairs in view. In a scratch run before this measurement, the project's reranker and a model trained on duplicate questions were tried on the same pairs and separated the kinds less well. They are not part of this measurement. The choice of the verifier is therefore not a held-out result.
+
+### Two views
+
+**The pair view** takes each pair by itself: its golden question against its other question. It describes how each score spreads over the two kinds.
+
+**The cache view** is the one that counts, because a pair is not a cache: a cache compares a new question with everything it holds. A cache that holds all 165 golden questions is simulated. Those the handbook does not answer are in it too, because a stored decline served to a question that has an answer is a false hit as well. Each pair's other question is asked. Its candidates are the stored questions nearest to it by cosine: the 3 nearest above a floor of 0.5. They are tried nearest first, and the first whose score reaches the threshold is served. What is served is counted by the pair's label:
+
+| The pair is | Served its own golden question | Served another stored question | Served nothing |
+|---|---|---|---|
+| `same` | right | wrong | a miss: a saving not made |
+| `different` | wrong | wrong | right |
+
+- **A label covers one stored question only**, the pair's own. A question served the answer of another stored question is counted as wrong, for both kinds of pair, because no label says it is right. Nobody checked those answers. The run names each such serve on the reporting half (`wrong_on_reporting` in `summary.json`) and every candidate of every question (`questions.jsonl`).
+- **A stored question that has the very words asked is never a candidate.** In 13 `different` pairs the other question is a golden question itself. Its own entry would be the nearest of all, at a cosine of 1, and serving it would be an exact match: another mechanism, and no sign of telling two wordings apart. That entry is left out, and the question meets every other stored question.
+- **The floor and the number of candidates are settings, not results** (`--floor` and `--candidates`). They were fixed before the run and chosen on neither half. These pairs cannot choose a floor: every question in them is near a stored one by construction. In this run the floor left between 6 and 129 stored questions for the nearest to be taken from, and no question had fewer than 3 candidates.
+
+### Choosing a threshold without scoring on the same pairs
+
+A threshold chosen and scored on the same pairs flatters. So the pairs are split in two by a rule fixed in code. A threshold is chosen for each score on the **choosing half**, and the result is that of the **reporting half**, which chose nothing.
+
+- **Pairs that share a golden question stay on one side.** The pairs are not independent: 59 golden questions are in more than one pair, and a quirk of one question's wording moves all of its pairs at once. Two pairs are in one group when they name the same golden question, as the question or as the other one, directly or through a third pair. There are 117 groups, the largest of 10 pairs, and no group is divided.
+- **The split looks at labels only.** The groups are put in an order fixed by a seed in the code. Each goes to the half that it leaves the two halves most alike with, counting `same` and `different` pairs apart. That gives 99 pairs on each side: 49 `same` and 50 `different`. The command has no option for the seed, so no run can pick the split that suits it.
+- **The rule for a threshold: nothing wrong on the choosing half.** For each score, the threshold is the loosest one from which upwards nothing wrong is served there. It is put halfway between the highest score at which a wrong answer would be served and the next score above it. If the highest score of all would serve a wrong answer, no threshold is safe, and a cache that decides by that score serves nothing.
+- **Then the score that served most.** Of the three ways to decide (the cosine alone, the second check by its weaker direction, the second check by the mean), the rule takes the one that served the most `same` questions right on the choosing half, and the one named first when two serve equally many.
+
+### What the run found
+
+`baseline`, on 24 November 2026, with `BAAI/bge-small-en-v1.5` for the embeddings and `cross-encoder/nli-deberta-v3-small` as the verifier, both on the CPU. [The run](../evals/runs/cache/baseline) holds every score.
+
+**The pair view, on all 198 agreed pairs.** This describes the scores. It is not a held-out result. The area under the curve is the chance that a `same` pair scores above a `different` one: 1 is a clean separation, and 0.5 is a coin.
+
+| Score | Area under the curve | `same`: lowest | Median | Highest | `different`: lowest | Median | Highest |
+|---|---|---|---|---|---|---|---|
+| Cosine of the two embeddings | 0.546 | 0.737 | 0.917 | 0.991 | 0.497 | 0.900 | 0.994 |
+| Entailment, stored question to new | 0.880 | 0.001 | 0.959 | 0.998 | 0.000 | 0.001 | 0.994 |
+| Entailment, new question to stored | 0.864 | 0.000 | 0.962 | 0.998 | 0.000 | 0.001 | 0.989 |
+| Entailment, weaker direction | 0.865 | 0.000 | 0.070 | 0.998 | 0.000 | 0.000 | 0.989 |
+| Entailment, mean of both directions | 0.915 | 0.001 | 0.516 | 0.998 | 0.000 | 0.001 | 0.992 |
+
+**The cache view, on the reporting half.** Each threshold was chosen on the choosing half. Each cell is a count, then its share with a 95% interval.
+
+| Decided by | Threshold | Rewordings served right | Served another answer | Missed | Near-misses served wrongly |
+|---|---|---|---|---|---|
+| Cosine alone | none | 0 of 49: 0.000 (0.000 to 0.073) | 0 of 49: 0.000 (0.000 to 0.073) | 49 of 49: 1.000 (0.927 to 1.000) | 0 of 50: 0.000 (0.000 to 0.071) |
+| Second check, weaker direction | 0.9894 | 7 of 49: 0.143 (0.071 to 0.267) | 0 of 49: 0.000 (0.000 to 0.073) | 42 of 49: 0.857 (0.733 to 0.929) | 0 of 50: 0.000 (0.000 to 0.071) |
+| Second check, mean of both directions | 0.9918 | 7 of 49: 0.143 (0.071 to 0.267) | 0 of 49: 0.000 (0.000 to 0.073) | 42 of 49: 0.857 (0.733 to 0.929) | 0 of 50: 0.000 (0.000 to 0.071) |
+
+On the choosing half each of the two ways to read the second check served 10 of 49 rewordings right, so the rule takes the weaker direction, which is named first.
+
+**What the second check lets through, by how the question was reworded.** The medians are over all agreed pairs. The last two columns are the reporting half, decided by the weaker direction.
+
+| `how` | Agreed pairs | Median cosine | Median entailment, weaker direction | Median entailment, mean | On the reporting half | Served right there |
+|---|---|---|---|---|---|---|
+| `reworded` | 20 | 0.964 | 0.989 | 0.992 | 5 | 2 |
+| `short` | 20 | 0.893 | 0.007 | 0.490 | 9 | 0 |
+| `long` | 20 | 0.906 | 0.039 | 0.516 | 10 | 0 |
+| `synonyms` | 20 | 0.907 | 0.912 | 0.949 | 13 | 5 |
+| `indirect` | 18 | 0.889 | 0.001 | 0.097 | 12 | 0 |
+
+**The same rules on 200 other splits of the same pairs.** One split is one draw, so the rules were run on 200 more, each made as the first one was, from another seed. This shows how far the result depends on the split. It is the same pairs every time, so it does not show what other questions would give.
+
+| Decided by | Splits with a threshold | Taken by the rule | Rewordings served right: lowest | Median | Highest | Near-misses served wrongly: highest | Splits with nothing wrong served |
+|---|---|---|---|---|---|---|---|
+| Cosine alone | 17 | 0 | 0.000 | 0.000 | 0.041 | 0.143 | 183 |
+| Second check, weaker direction | 200 | 127 | 0.082 | 0.224 | 0.500 | 0.061 | 103 |
+| Second check, mean of both directions | 200 | 73 | 0.102 | 0.227 | 0.694 | 0.080 | 103 |
+
+For the cosine, the 183 splits with nothing wrong served are those in which it had no threshold and served nothing at all. In each of the 17 in which it had one, something wrong was served.
+
+**All 198 pairs at fixed thresholds.** A description: these thresholds are scored on the pairs they are read from. Each cell is the number of the 98 rewordings served right, and the number of the 100 near-misses served wrongly.
+
+| Threshold | Cosine alone | Second check, weaker direction | Second check, mean of both directions |
+|---|---|---|---|
+| 0.8 | 92 and 81 | 38 and 3 | 41 and 3 |
+| 0.9 | 58 and 50 | 36 and 2 | 38 and 2 |
+| 0.95 | 25 and 25 | 34 and 1 | 36 and 2 |
+| 0.975 | 5 and 11 | 29 and 1 | 31 and 1 |
+| 0.99 | 1 and 3 | 15 and 0 | 20 and 1 |
+| 0.995 | 0 and 0 | 8 and 0 | 10 and 0 |
+| The rule, with every pair in view | none: 0 and 0 | 0.9893: 17 and 0 | 0.9918: 17 and 0 |
+
+What it shows:
+
+- **The cosine alone does not tell a rewording from a near-miss on these pairs.** Its area under the curve is 0.546. The highest cosine of all belongs to a near-miss, 0.994 against 0.991 for the highest rewording. On the choosing half the highest cosine belonged to a near-miss too: `d012`, "does use" against "doesn't use", at 0.992. So no threshold was safe there, and by the rule a cache that decides by the cosine serves nothing. Over all pairs, a threshold of 0.95 would serve 25 of the 98 rewordings right and 25 of the 100 near-misses wrongly.
+- **The second check separates the kinds far better.** Its area under the curve is 0.865 by the weaker direction and 0.915 by the mean. The near-misses that the cosine puts highest score low with it: by the weaker direction, the highest of the changed numbers gets 0.143, and the highest of the pairs that turn a "does" into a "doesn't" gets 0.005.
+- **It still serves little, because it passes plain rewordings and little else.** On the reporting half it served 7 of 49 rewordings right and missed 42. All 7 are questions in other words of about the same length (`reworded`) or with everyday words for the key terms (`synonyms`). Not one of the questions typed as into a search box (`short`), with a personal lead-in (`long`) or from another angle (`indirect`) was served. For those, at least one direction of entailment is low, as the medians in the table show. The model was trained on statements, not on questions.
+- **One near-miss set the threshold.** `d067` asks for which quarters a budget was allocated, where its golden question asks how much. The second check gives it 0.989 by its weaker direction, higher than it gives most rewordings, and the threshold has to stay above it. Over all pairs, a threshold of 0.9 would serve 36 of the 98 rewordings, at the price of 2 of the 100 near-misses.
+- **Clean on one half is not safe.** None of the 50 near-misses of the reporting half was served. An interval on none of 50 still allows a true rate of up to 0.071, and it is too narrow at that, because the pairs share golden questions. On the 200 other splits, the same rules served something wrong on the reporting half in 97, by either way of reading the second check. A threshold that is clean on 50 near-misses let a wrong answer through on the next 50 about every second time.
+- **The split reported is not a lucky one for savings.** Over the other splits the weaker direction served a median of 0.224 of the rewordings, between 0.082 and 0.500. Here it is 0.143.
+- **Scoring on the pairs a threshold was chosen on flatters, as expected.** With every pair in view the rule serves 17 of the 98 rewordings and no near-miss, by either way of reading the second check. No pair it had not seen has tested that.
+- **What the second check costs.** A second model in memory, and time for every question that has a candidate. The verifier read 605 pairs, each in both directions, in 16.1 seconds on the laptop's CPU: 26.6 ms a pair, in batches. What one question would wait for, with up to 3 candidates checked at once, was not timed. Embedding the 352 questions one at a time took 7.3 seconds, 20.6 ms each, and that vector is one the search needs anyway.
+
+How far this goes:
+
+- **No person has read the pairs.** One model session wrote and labelled them, and a second labelled them again blind. A model's check is not a person's review, and two model sessions can share a blind spot.
+- **The set is hard on purpose, and real questions are not.** Half of it is near-misses, written to sit as close to a golden question as a question can. So each rate is per near-miss asked or per rewording asked, not per question asked. How many wrong answers a real cache would serve depends on how often a near-miss arrives, which nothing here measures. A threshold chosen on this set is stricter than real use needs. That is the safe side, and it gives up savings a real cache could make.
+- **One embedding model, one verifier, and a cache of 165 questions.** A real cache holds more, and the more it holds, the more stored questions sit near each new one. The stored questions are the golden set's, most of them written by a model.
+- **The verifier, and the two ways of reading it, were picked with all pairs in view.** The thresholds and the choice between the scores are held out. The choice of the model is not.
+- **One direction only.** The golden question is stored and the other question is asked. [The card](../evals/cache/README.md#known-limits) names pairs whose label depends on which of the two was asked first, and the other order was not simulated.
+- **The intervals are too narrow.** They are computed as if the pairs were independent, and the pairs share golden questions.
+- **A serve of another stored question's answer rests on no label.** None happened on the reporting half. Over all pairs, one rewording, `s073`, was served another stored question's answer by the second check: at the fixed thresholds of 0.85 and below by the weaker direction, and of 0.9 and below by the mean.
+- **Nothing here is about a cache that exists.** When a stored answer goes stale, whether a stored decline may be served again, how an exact match is handled, and what a cache would save in requests are questions for the cache's own design and evaluation.
+
 ## What a run writes
 
 Each kept run is a variant: `baseline` first, then `v1`, `v2` and so on. (`current` is the scratch run.) A variant directory under `evals/runs/retrieval/` contains:
@@ -489,8 +612,12 @@ A check of the first judge under `evals/runs/judge/`, or of the second under `ev
 
 An adversarial run under `evals/runs/adversarial/` holds `replies.jsonl` (every reply, in the form `answers.jsonl` keeps them), `run.json`, `results.jsonl` (one line for each case: what code decided and why, the reading if there is one, and the reply with its fingerprint), `summary.json` (the counts by family and kind, and the shares once final) and `readings.jsonl`, which a reader writes, naming who made each reading. The [card](../evals/adversarial/README.md#what-a-run-writes) describes each.
 
+A cache measurement under `evals/runs/cache/` holds `pairs.jsonl` (one line for each of the 200 pairs: its half, and the cosine and the entailment in both directions of its two questions), `questions.jsonl` (one line for each question asked of the simulated cache: its candidates with their scores, the stored question that was left out if there was one, and what each score serves at its threshold) and `summary.json` (every figure quoted above, the settings, and a fingerprint of the pairs and of the stored questions). All three are small and are committed for a kept run. The rows hold each score in full, so the figures can be worked out again from them without a model, and a test does that. The run was made twice, and the rows of the two were the same byte for byte.
+
 ## Checks the harness itself must pass
 
 The test suite runs two sanity checks through the whole evaluation: a retriever that always returns the right passage first must score 1.0 on every metric, and one that never returns it must score 0. An evaluation that fails either check is measuring its own bugs.
 
 The answer evaluation has the same two checks: an assistant that cites the right passage and declines what it should must score 1.0 on every score, and one that declines every answerable question and answers the others without a citation must score 0 on every score that is about the assistant.
+
+The cache measurement has checks of its own. The rule for a threshold is worked out by a shortcut, and a test compares it with trying every threshold on random questions. The figures of the committed run are worked out again from its rows, and the tables in this guide, in the README and in the card are held to that run by tests.

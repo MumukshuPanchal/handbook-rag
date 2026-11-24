@@ -157,6 +157,7 @@ src/handbook_rag/
     retrieve/           dense, sparse, fusion, rerank
     generate/           prompt assembly, one generator per provider, citation mapping,
                         and the wrapper that asks again and falls back
+    cache/              the second check a semantic cache would make; no cache is built yet
     pipeline.py         the single entry point: question in, answer out
     api.py              the FastAPI application
     demo.py             serves the demo page and its two files, with their security headers
@@ -167,7 +168,9 @@ src/handbook_rag/
     wiring.py           builds the parts from the settings
     cli.py              the handbook-rag command
     evals/              metrics, runs, the two judges, adversarial tests
+                        and the cache measurement
 evals/                  golden set, labelled answers, adversarial cases, saved runs
+                        and the question pairs of the cache measurement
 tests/                  unit and integration tests
 docs/                   charter, architecture, roadmap, decision records, guides
 compose.yaml            API, Qdrant and trace backend

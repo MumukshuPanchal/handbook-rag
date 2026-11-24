@@ -396,6 +396,95 @@ def test_the_planted_instructions_are_the_committed_run() -> None:
         assert [held, of] == [str(hits(estimate)), str(estimate["count"])], label
 
 
+# Each row of the cache table, and the score the simulated cache decides by in the run.
+CACHE = {
+    "Cosine alone": "cosine",
+    "Second check, weaker direction": "entails_min",
+    "Second check, mean of both directions": "entails_mean",
+}
+
+
+def test_the_cache_measurement_is_the_committed_run() -> None:
+    run = summary("cache/baseline")
+    pairs, scores, cache = run["pairs"], run["pair_view"]["scores"], run["cache_view"]
+    policies, others = cache["policies"], cache["other_splits"]
+    rows = table(readme(), "| Decided by | Threshold | Rewordings served right |")
+
+    def counted(count: int, estimate: Any) -> str:
+        """A count with its share, as the table prints it: 7 of 49: 0.143 (0.071 to 0.267)."""
+        return f"{count} of {estimate['count']}: {with_interval(estimate)}"
+
+    def says(start: str) -> list[str]:
+        return numbers(line_starting(readme(), start))
+
+    assert [row[0] for row in rows] == list(CACHE)
+    for label, threshold, right, wrong in rows:
+        policy = policies[CACHE[label]]
+        same, different = policy["reporting"]["same"], policy["reporting"]["different"]
+        assert [threshold, right, wrong] == [
+            "none" if policy["threshold"] is None else f"{policy['threshold']:.4f}",
+            counted(same["right"], same["right_share"]),
+            counted(different["wrong"], different["wrong_share"]),
+        ], label
+        # The table is the half that chose nothing: the run's counts of that half.
+        assert same["right_share"]["count"] == cache["split"]["reporting"]["same"]
+        assert different["wrong_share"]["count"] == cache["split"]["reporting"]["different"]
+
+    # The issue, the pairs, the stored questions, and the day of the run, which no run records.
+    assert says("A semantic cache would answer a new question") == [
+        "24",
+        str(pairs["agreed"]),
+        str(pairs["same"]),
+        str(pairs["different"]),
+        str(cache["stored_questions"]),
+        "24",
+        "2026",
+    ]
+    assert "(evals/runs/cache/baseline)" in line_starting(readme(), "A semantic cache would answer")
+
+    (at_95,) = [row for row in cache["whole_set"]["curves"]["cosine"] if row["threshold"] == 0.95]
+    assert says("- **The similarity of two embeddings does not tell a rewording") == [
+        str(pairs["agreed"]),
+        three(scores["cosine"]["area_under_curve"]),
+        "0.5",
+        "0.95",
+        str(at_95["same"]["right"]),
+        str(pairs["same"]),
+        str(at_95["different"]["wrong"]),
+        str(pairs["different"]),
+    ]
+    # "no threshold served a rewording without a near-miss, so [it] serves nothing"
+    assert policies["cosine"]["threshold"] is None
+    assert policies["cosine"]["reporting"]["same"]["right"] == 0
+
+    weaker = policies["entails_min"]
+    same, different = weaker["reporting"]["same"], weaker["reporting"]["different"]
+    assert says("- **A second check helps, and serves little.**") == [
+        three(scores["entails_min"]["area_under_curve"]),
+        three(scores["entails_mean"]["area_under_curve"]),
+        str(same["right"]),
+        str(same["pairs"]),
+        str(different["pairs"]),
+        str(same["missed"]),
+    ]
+    assert different["wrong"] == 0
+    # "It passes a question put in other words, and not one typed as into a search box,
+    # with a personal lead-in or from another angle."
+    by_how = weaker["reporting_by_how"]
+    assert by_how["reworded"]["right"] + by_how["synonyms"]["right"] == same["right"]
+    assert [by_how[how]["right"] for how in ("short", "long", "indirect")] == [0, 0, 0]
+
+    assert says("- **None wrong of 50 is not safe.**") == [
+        str(different["pairs"]),
+        three(cache["zero_wrong_allows"]["up_to"]),
+        str(others["splits"]),
+        str(others["chosen_policy"]["splits_with_something_wrong"]),
+    ]
+    assert says("- **These are rates on a hard set, not on real questions.**") == [
+        str(cache["stored_questions"])
+    ]
+
+
 def test_every_link_to_a_file_or_a_heading_leads_to_one() -> None:
     for target in re.findall(r"\]\(([^)\s]+)\)", readme()):
         if target.startswith(("http://", "https://")):

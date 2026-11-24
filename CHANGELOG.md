@@ -13,6 +13,8 @@ What each version of this project contains. The format follows [Keep a Changelog
 - Time limits for an answer asked for on the command line or over HTTP: one request to the model may be silent for 20 seconds, and the model may be tried again for 30 (`HANDBOOK_RAG_ANSWER_TIMEOUT_SECONDS`, `HANDBOOK_RAG_ANSWER_DEADLINE_SECONDS`). The repeats are made by our own code instead of the SDKs, three attempts at most: each one is counted in the answer's new `requests` and has a span of its own, and no new attempt is decided on after the deadline: a pause is cut short to end at it, and the attempt after that pause starts at the deadline. What is tried again is decided by the kind of failure, and nothing is tried again once text has been sent. On an overloaded evening a silent model was given up after two requests and 42 seconds ([#42], [ADR 0018]).
 - An optional fallback model, `HANDBOOK_RAG_ANSWER_FALLBACK_MODEL`, asked once when the answer model gives up for any reason but a wrong setting. The answer's new `fallback` says when it wrote the reply. A missing key for its provider is found when the service starts. A fallback that succeeds has not been seen for real yet ([#42], [ADR 0018]).
 - `POST /ask` has a 503 of its own for a model that did not answer in time, and its JSON object, also in the `answer` event of a stream, has `requests` and `fallback`. The demo page shows both when an answer took more than one request ([#42], [ADR 0018]).
+- `handbook-rag eval-cache` and `make eval-cache`: a measurement of what a semantic cache would serve, made before any cache is built. It uses 200 labelled pairs of a golden question and a rewording or a near-miss (`evals/cache/`), simulates a cache that holds the golden questions, chooses each threshold on one half of the pairs and reports on the other. It sends no request to a model API. On the first run the similarity of two embeddings alone could serve nothing safely, and a second check served 7 of 49 rewordings and none of 50 near-misses on the half it had not seen. No person has read the pairs, and no cache is built ([#24], [the guide](docs/evaluation.md#a-semantic-cache-measured-before-it-is-built)).
+- `handbook_rag.cache.verify`: the second check on its own, for a cache to use later. A cross-encoder trained for natural language inference reads a stored question and a new one in both directions. Which of its outputs means entailment is read from the model's configuration. `HANDBOOK_RAG_CACHE_VERIFIER_MODEL` names the model ([#24]).
 - When no answer can be written, `ask` says what failed and lists the passages the search found. When an answer took more than one request, its last line says how many, and whether the fallback model wrote it ([#42]).
 
 ### Changed
@@ -120,6 +122,7 @@ These are the [limitations in the README](README.md#limitations).
 [#20]: https://github.com/MumukshuPanchal/handbook-rag/issues/20
 [#21]: https://github.com/MumukshuPanchal/handbook-rag/issues/21
 [#23]: https://github.com/MumukshuPanchal/handbook-rag/pull/23
+[#24]: https://github.com/MumukshuPanchal/handbook-rag/issues/24
 [#25]: https://github.com/MumukshuPanchal/handbook-rag/pull/25
 [#26]: https://github.com/MumukshuPanchal/handbook-rag/pull/26
 [#27]: https://github.com/MumukshuPanchal/handbook-rag/pull/27

@@ -105,3 +105,38 @@ def test_hybrid_end_to_end_finds_exact_terms_and_paraphrases(store: QdrantVector
 
     assert retriever.retrieve("ZX81", limit=1)[0].chunk == ERROR_CODE
     assert retriever.retrieve("sixteen weeks paid leave for parents", limit=1)[0].chunk == LEAVE
+
+
+def thirty_each() -> tuple[FixedRetriever, FixedRetriever]:
+    """Two searches of thirty results that share one chunk, which both of them rank last."""
+    shared = ScoredChunk(make_chunk("both"), 0.1)
+    dense = [ScoredChunk(make_chunk(f"dense {rank}"), 1.0 - 0.01 * rank) for rank in range(1, 30)]
+    sparse = [ScoredChunk(make_chunk(f"sparse {rank}"), 9.0 - 0.1 * rank) for rank in range(1, 30)]
+    return FixedRetriever([*dense, shared]), FixedRetriever([*sparse, shared])
+
+
+def test_with_the_default_constant_a_chunk_of_both_lists_comes_before_any_chunk_of_one() -> None:
+    dense, sparse = thirty_each()
+
+    as_set = HybridRetriever(dense, sparse).retrieve("q", limit=3)
+    with_a_low_constant = HybridRetriever(dense, sparse, rrf_k=5).retrieve("q", limit=10)
+
+    # Thirtieth in both lists is 2/90, and first in one list is 1/61.
+    assert as_set[0].chunk.text == "both"
+    assert as_set[0].score == pytest.approx(2 / 90)
+    assert as_set[1].score == pytest.approx(1 / 61)
+    # With the constant 5 the first results of each search come through: 1/6 against 2/35.
+    assert {found.chunk.text for found in with_a_low_constant[:2]} == {"dense 1", "sparse 1"}
+    assert with_a_low_constant[0].score == pytest.approx(1 / 6)
+    assert "both" not in [found.chunk.text for found in with_a_low_constant]
+
+
+def test_a_chunk_beyond_the_candidates_of_both_searches_is_not_returned() -> None:
+    dense, sparse = thirty_each()
+
+    with_ten = HybridRetriever(dense, sparse, candidates=10).retrieve("q", limit=10)
+    with_thirty = HybridRetriever(dense, sparse, candidates=30).retrieve("q", limit=10)
+
+    assert dense.limits == [10, 30]
+    assert "both" not in [found.chunk.text for found in with_ten]
+    assert with_thirty[0].chunk.text == "both"

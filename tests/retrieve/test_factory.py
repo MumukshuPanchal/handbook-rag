@@ -9,6 +9,8 @@ from handbook_rag.retrieve.dense import DenseRetriever
 from handbook_rag.retrieve.hybrid import HybridRetriever
 from handbook_rag.retrieve.rerank import RerankingRetriever
 from handbook_rag.retrieve.sparse import SparseRetriever
+from handbook_rag.retrieve.spread import PageSpread
+from tests.retrieve.test_default_search import BEFORE, stand_in_index
 from tests.support import FakeEmbedder, FakeReranker, FakeSparseEncoder, make_chunk
 
 
@@ -99,6 +101,82 @@ def test_a_run_description_defaults_to_the_settings() -> None:
 
     assert described["retrieval_mode"] == "sparse"
     assert described["rerank"] is True
+
+
+def test_the_rule_that_spreads_results_is_on_only_when_it_is_passed(loaded: list[str]) -> None:
+    store, embedder, sparse_encoder = stand_in_index()
+    question, before = next(iter(BEFORE.items()))
+    default = [text for _, text, _ in before]
+
+    def search(spread: PageSpread | None) -> list[tuple[str, str]]:
+        retriever = wiring.make_retriever(
+            Settings(), store=store, embedder=embedder, sparse_encoder=sparse_encoder, spread=spread
+        )
+        return [
+            (found.chunk.doc_id, found.chunk.text)
+            for found in retriever.retrieve(question, limit=8)
+        ]
+
+    assert [text for _, text in search(None)] == default
+    # The default has three chunks of the leave page in its first five. With two allowed,
+    # the third gives its place to the next page and comes sixth.
+    assert [text for _, text in search(PageSpread(per_page=2, within=5))] == [
+        *default[:3],
+        default[4],
+        default[5],
+        default[3],
+        *default[6:],
+    ]
+    # With one allowed, the first five results are of five pages.
+    one_of_a_page = search(PageSpread(per_page=1, within=5))
+    assert [text for _, text in one_of_a_page[:3]] == [default[0], default[2], default[4]]
+    assert len({doc_id for doc_id, _ in one_of_a_page[:5]}) == 5
+    assert loaded == []
+
+
+@pytest.mark.parametrize(
+    ("mode", "rerank"), [("dense", False), ("sparse", False), ("hybrid", True), ("sparse", True)]
+)
+def test_the_rule_is_refused_for_a_search_it_does_not_fit_before_anything_is_built(
+    loaded: list[str], mode: wiring.RetrievalMode, rerank: bool
+) -> None:
+    with pytest.raises(ValueError, match="in hybrid search without reranking only"):
+        wiring.make_retriever(Settings(), mode, rerank, spread=PageSpread(per_page=1, within=5))
+
+    assert loaded == []
+
+
+def test_the_rule_is_refused_when_the_settings_choose_a_search_it_does_not_fit(
+    loaded: list[str],
+) -> None:
+    for settings in (Settings(retrieval_mode="dense"), Settings(rerank=True)):
+        with pytest.raises(ValueError, match="in hybrid search without reranking only"):
+            wiring.make_retriever(settings, spread=PageSpread(per_page=2, within=5))
+
+    assert loaded == []
+
+
+def test_a_run_description_names_the_rule_only_when_it_is_on() -> None:
+    settings = Settings()
+    rule = PageSpread(per_page=2, within=5)
+
+    plain = wiring.describe_retrieval(settings, "hybrid", False)
+    spread = wiring.describe_retrieval(settings, "hybrid", False, spread=rule)
+
+    assert not [key for key in plain if key.startswith("spread")]
+    assert spread == {**plain, "spread_per_page": 2, "spread_within": 5}
+    # Listed with the other settings of the merge.
+    assert list(spread)[-5:] == [
+        "fusion_candidates",
+        "rrf_k",
+        "spread_per_page",
+        "spread_within",
+        "rerank",
+    ]
+    # A search that merges nothing has no rule to list.
+    assert wiring.describe_retrieval(settings, "dense", False, spread=rule) == (
+        wiring.describe_retrieval(settings, "dense", False)
+    )
 
 
 def test_a_retriever_built_from_existing_parts_searches_that_index_and_loads_nothing(

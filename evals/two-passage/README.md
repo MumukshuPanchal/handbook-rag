@@ -139,7 +139,7 @@ The default search, as counts of the 33 questions:
 
 - **These questions are easier for a search than real ones.** They were written by a model that had both passages in front of it. The comparisons name both of their subjects, and the questions share words with their evidence: 25% of a question's meaningful words on average are also in the quote it shares most words with, as `golden-check` counts it. The golden set's card says the same of its questions. The shares above are therefore more likely too high than too low.
 - **Nothing here is about answers.** Whether the model uses both passages when it is given both, and says so when it is given one, is a later step of the issue.
-- **Nothing here is about a change to the search.** These runs are the starting point for the changes the issue lists.
+- **Nothing here is about a change to the search.** These runs are the starting point for the changes the issue lists. The changes that need no request to a model were measured afterwards, and are in [`search-variants.md`](search-variants.md).
 
 ## How the golden set's scores are affected
 

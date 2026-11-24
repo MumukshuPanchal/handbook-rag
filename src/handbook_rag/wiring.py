@@ -36,6 +36,7 @@ from handbook_rag.retrieve.dense import DenseRetriever, Retriever
 from handbook_rag.retrieve.hybrid import HybridRetriever
 from handbook_rag.retrieve.rerank import CrossEncoderReranker, RerankingRetriever
 from handbook_rag.retrieve.sparse import SparseRetriever
+from handbook_rag.retrieve.spread import PageSpread
 
 RetrievalMode = Literal["dense", "sparse", "hybrid"]
 
@@ -303,12 +304,18 @@ def make_retriever_and_cache(
 
 
 def describe_retrieval(
-    settings: Settings, mode: RetrievalMode | None = None, rerank: bool | None = None
+    settings: Settings,
+    mode: RetrievalMode | None = None,
+    rerank: bool | None = None,
+    *,
+    spread: PageSpread | None = None,
 ) -> dict[str, object]:
     """The settings that decide what ``make_retriever`` returns, for recording with a run.
 
     Only what the configuration uses is listed: keyword search has no embedding model,
-    and fusion settings mean nothing outside hybrid search.
+    and fusion settings mean nothing outside hybrid search. The rule that spreads results
+    over pages is listed only when it is on, so a run of the default search is described
+    as it was before the rule existed.
     """
     mode = mode or settings.retrieval_mode
     reranked = settings.rerank if rerank is None else rerank
@@ -325,6 +332,9 @@ def describe_retrieval(
     if mode == "hybrid":
         described["fusion_candidates"] = settings.fusion_candidates
         described["rrf_k"] = settings.rrf_k
+        if spread is not None:
+            described["spread_per_page"] = spread.per_page
+            described["spread_within"] = spread.within
     described["rerank"] = reranked
     if reranked:
         described["rerank_model"] = settings.rerank_model
@@ -340,6 +350,7 @@ def make_retriever(
     store: VectorStore | None = None,
     embedder: Embedder | None = None,
     sparse_encoder: SparseEncoder | None = None,
+    spread: PageSpread | None = None,
 ) -> Retriever:
     """Build the retriever for ``mode`` and ``rerank``, or for the values in the settings.
 
@@ -349,8 +360,19 @@ def make_retriever(
     A caller that has just built an index passes the ``store``, ``embedder`` and
     ``sparse_encoder`` it used, so the retriever searches that index and no model is
     loaded a second time. Whatever is not passed is built from the settings.
+
+    ``spread`` is a variant, and off unless it is passed: the merged list of hybrid
+    search is spread over pages (see :mod:`handbook_rag.retrieve.spread`). No setting
+    turns it on. It is refused for a search that merges nothing, and with reranking,
+    which would put the results in another order again.
     """
     mode = mode or settings.retrieval_mode
+    reranked = settings.rerank if rerank is None else rerank
+    if spread is not None and (mode != "hybrid" or reranked):
+        raise ValueError(
+            "Results are spread over pages in hybrid search without reranking only, "
+            f"not in {mode} search{' with reranking' if reranked else ''}."
+        )
     if store is None:
         store = make_store(settings)
     retriever: Retriever
@@ -364,8 +386,9 @@ def make_retriever(
             SparseRetriever(sparse_encoder or make_sparse_encoder(settings), store),
             candidates=settings.fusion_candidates,
             rrf_k=settings.rrf_k,
+            spread=spread,
         )
-    if settings.rerank if rerank is None else rerank:
+    if reranked:
         retriever = RerankingRetriever(
             retriever, make_reranker(settings), candidates=settings.rerank_candidates
         )

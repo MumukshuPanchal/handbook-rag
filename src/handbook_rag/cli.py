@@ -62,6 +62,7 @@ from handbook_rag.evals.judging import (
 from handbook_rag.evals.metrics import Estimate
 from handbook_rag.evals.retrieval import (
     METRICS,
+    RETRIEVAL_DEPTH,
     FailedQuestion,
     evaluate_retrieval,
     several_passages_lines,
@@ -100,6 +101,7 @@ from handbook_rag.ingest.tokens import token_counter
 from handbook_rag.measuring import measuring_the_model
 from handbook_rag.pipeline import answer_question
 from handbook_rag.retrieve.dense import Retriever
+from handbook_rag.retrieve.spread import PageSpread
 from handbook_rag.tracing import record_query, record_results, stage, trace_id, tracing_session
 from handbook_rag.wiring import RetrievalMode
 
@@ -691,6 +693,72 @@ def _keep_standard_output_for_the_protocol() -> TextIO:
     return wire
 
 
+def _page_spread(per_page: int | None, within: int | None) -> PageSpread | None:
+    """The rule that spreads results over pages, if the command line asks for it.
+
+    The rule has two numbers and neither has a default, so the command that made a run
+    always says which rule it measured.
+    """
+    if per_page is None and within is None:
+        return None
+    if per_page is None or within is None:
+        raise typer.BadParameter(
+            "--spread-per-page and --spread-within are given together: at most so many "
+            "chunks of one page, among so many of the first results."
+        )
+    return PageSpread(per_page=per_page, within=within)
+
+
+def _search_variant(
+    fusion_candidates: int | None, rrf_k: int | None, spread: PageSpread | None
+) -> list[str]:
+    """What a run changes about hybrid search, in words. Empty for the search as it is set."""
+    changed: list[str] = []
+    if fusion_candidates is not None:
+        changed.append(f"{fusion_candidates} candidates from each search")
+    if rrf_k is not None:
+        changed.append(f"fusion constant {rrf_k}")
+    if spread is not None:
+        changed.append(
+            f"at most {spread.per_page} chunk{'' if spread.per_page == 1 else 's'} of a page "
+            f"among the first {spread.within} results"
+        )
+    return changed
+
+
+def _refuse_a_variant_that_would_not_be_measured(
+    mode: str,
+    *,
+    reranked: bool,
+    wanted: int,
+    fusion_candidates: int | None,
+    spread: PageSpread | None,
+) -> None:
+    """Stop before any work when a run would carry a variant's name and measure something else.
+
+    Dense search and keyword search merge nothing, so the option would change nothing
+    there. A merged list that is spread over pages and then reranked comes out in the
+    reranker's order, not the rule's. And each of the two searches is asked for at least
+    as many candidates as hybrid search is asked for results, which is ``wanted``, so a
+    smaller number of candidates would be measured as that many.
+    """
+    if fusion_candidates is not None and fusion_candidates < wanted:
+        raise typer.BadParameter(
+            f"--fusion-candidates below {wanted} cannot be measured: hybrid search is asked "
+            f"for {wanted} results here, and each of its two searches for at least as many."
+        )
+    if mode != "hybrid":
+        raise typer.BadParameter(
+            "--fusion-candidates, --rrf-k and --spread-per-page change how hybrid search "
+            f"merges its two lists, and this run is of {mode} search."
+        )
+    if spread is not None and reranked:
+        raise typer.BadParameter(
+            "--spread-per-page cannot be combined with reranking, which would put the "
+            "results in another order again. Add --no-rerank."
+        )
+
+
 @app.command(name="eval-retrieval")
 @measures
 def eval_retrieval(
@@ -734,19 +802,77 @@ def eval_retrieval(
             ),
         ),
     ] = False,
+    fusion_candidates: Annotated[
+        int | None,
+        typer.Option(
+            help=(
+                "A variant of hybrid search: how many candidates each of the two searches "
+                "hands to the merge. At least as many as hybrid search is asked for: the 10 "
+                "results that are scored, or what the reranker takes. Default: settings."
+            ),
+        ),
+    ] = None,
+    rrf_k: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help=(
+                "A variant of hybrid search: the constant of reciprocal rank fusion. "
+                "Default: settings."
+            ),
+        ),
+    ] = None,
+    spread_per_page: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help=(
+                "A variant of hybrid search, off unless given: at most this many chunks of "
+                "one page among the first results. A chunk over the limit moves down, and "
+                "none is dropped. Needs --spread-within."
+            ),
+        ),
+    ] = None,
+    spread_within: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="How many of the first results the limit of --spread-per-page holds for.",
+        ),
+    ] = None,
 ) -> None:
     """Score retrieval on the golden set: is the right passage found, and how high?"""
     settings = get_settings()
     chosen_mode = mode or settings.retrieval_mode
     reranked = settings.rerank if rerank is None else rerank
+    spread = _page_spread(spread_per_page, spread_within)
+    changed = _search_variant(fusion_candidates, rrf_k, spread)
+    if changed:
+        _refuse_a_variant_that_would_not_be_measured(
+            chosen_mode,
+            reranked=reranked,
+            # The evaluation scores ten results. A reranker takes more than that to choose from.
+            wanted=max(RETRIEVAL_DEPTH, settings.rerank_candidates if reranked else 0),
+            fusion_candidates=fusion_candidates,
+            spread=spread,
+        )
+        # A variant is the settings of this one run. Nothing else reads them.
+        settings = settings.model_copy(
+            update={
+                "fusion_candidates": fusion_candidates or settings.fusion_candidates,
+                "rrf_k": rrf_k or settings.rrf_k,
+            }
+        )
     if description is None:
         description = _RUN_DESCRIPTIONS[chosen_mode]
+        if changed:
+            description += f" Variant: {'; '.join(changed)}."
         if reranked:
             description += " Then reranked by a cross-encoder."
     try:
         questions = _load_questions(dataset)
         corpus = build_corpus(settings)
-        retriever = wiring.make_retriever(settings, mode, rerank)
+        retriever = wiring.make_retriever(settings, mode, rerank, spread=spread)
         report = evaluate_retrieval(
             questions, corpus.documents, retriever, reviewed_only=reviewed_only
         )
@@ -757,7 +883,7 @@ def eval_retrieval(
     if not report.results:
         typer.echo("error: no question could be scored.", err=True)
         raise typer.Exit(code=1)
-    config = wiring.describe_retrieval(settings, mode, rerank)
+    config = wiring.describe_retrieval(settings, mode, rerank, spread=spread)
     run_dir = write_run(report, output, variant, description, config)
 
     typer.echo(f"Retrieval evaluation: {variant}")
@@ -765,6 +891,8 @@ def eval_retrieval(
         f"  mode        {chosen_mode}"
         f"{', reranked with ' + settings.rerank_model if reranked else ''}"
     )
+    if changed:
+        typer.echo(f"  variant     {'; '.join(changed)}")
     typer.echo(f"  collection  {settings.collection_name}")
     typer.echo(
         f"  questions   {len(report.results)} scored, {len(report.failures)} failed, "

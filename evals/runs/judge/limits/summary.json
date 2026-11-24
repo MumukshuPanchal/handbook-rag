@@ -1,0 +1,112 @@
+{
+  "description": "gemini-3.5-flash-lite judging the labelled answers in evals/judge/limits/cases.jsonl.",
+  "criterion": "support",
+  "config": {
+    "judge_model": "gemini-3.5-flash-lite",
+    "judge_max_tokens": 2000,
+    "judge_instructions": "55cfbf9f3908dbee",
+    "judge_request": "e1dafe5ecd1168d3"
+  },
+  "answers_labelled": 120,
+  "answers_judged": 120,
+  "answers_failed": 0,
+  "attempts": 172,
+  "left_out_as_unclear": 1,
+  "agreement": {
+    "statements": 196,
+    "same_decision": {
+      "mean": 0.8673469387755102,
+      "low": 0.8127300064037267,
+      "high": 0.9078411944176938,
+      "count": 196
+    },
+    "recall": {
+      "mean": 0.3333333333333333,
+      "low": 0.20632956108003395,
+      "high": 0.4902260572517306,
+      "count": 39
+    },
+    "precision": {
+      "mean": 1.0,
+      "low": 0.7719046248681997,
+      "high": 1.0,
+      "count": 13
+    },
+    "kappa": 0.4448,
+    "caught": {
+      "how_much": [
+        1,
+        6
+      ],
+      "only_if": [
+        3,
+        7
+      ],
+      "unless": [
+        2,
+        6
+      ],
+      "what": [
+        0,
+        4
+      ],
+      "when": [
+        3,
+        4
+      ],
+      "where": [
+        1,
+        7
+      ],
+      "who": [
+        3,
+        5
+      ]
+    },
+    "matrix": {
+      "supported": {
+        "supported": 157,
+        "unsupported": 0,
+        "no_claim": 0
+      },
+      "unsupported": {
+        "supported": 26,
+        "unsupported": 13,
+        "no_claim": 0
+      },
+      "no_claim": {
+        "supported": 0,
+        "unsupported": 0,
+        "no_claim": 0
+      }
+    },
+    "answers": 120,
+    "same_answer": {
+      "mean": 0.7833333333333333,
+      "low": 0.7014563739698627,
+      "high": 0.8476327647908416,
+      "count": 120
+    },
+    "answer_recall": {
+      "mean": 0.3333333333333333,
+      "low": 0.20632956108003395,
+      "high": 0.4902260572517306,
+      "count": 39
+    },
+    "answer_precision": {
+      "mean": 1.0,
+      "low": 0.7719046248681997,
+      "high": 1.0,
+      "count": 13
+    },
+    "same_verdict": {
+      "mean": 0.8673469387755102,
+      "low": 0.8127300064037267,
+      "high": 0.9078411944176938,
+      "count": 196
+    }
+  },
+  "input_tokens": 139039,
+  "output_tokens": 13289,
+  "median_seconds": 1.73315
+}

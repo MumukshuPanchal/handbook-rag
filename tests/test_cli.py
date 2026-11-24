@@ -3690,6 +3690,7 @@ MEASURES = {
     "eval-support": [],
     "eval-correct": [],
     "eval-adversarial": [],
+    "eval-follow-ups": [],
     "eval-gate": [],
     "eval-cache": [],
     "golden-candidates": ["candidates.jsonl"],

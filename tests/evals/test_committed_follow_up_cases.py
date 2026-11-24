@@ -1,0 +1,243 @@
+"""The follow-up cases in the repository are what their card says they are.
+
+Only the last test needs a model, the verifier, which it loads from the download cache
+or the Hub; it is marked slow, and does not run in CI.
+"""
+
+import re
+from collections import Counter
+from pathlib import Path
+
+import pytest
+
+from handbook_rag.evals.adversarial import find_canaries
+from handbook_rag.evals.dataset import load_golden_set
+from handbook_rag.evals.follow_ups import (
+    FOLLOW_UP,
+    KINDS,
+    PLANTED,
+    STANDALONE,
+    VERIFIED_AT,
+    FollowUpCase,
+    load_cases,
+    refuse_phrases_in_cases,
+)
+from handbook_rag.generate.base import plain_words
+from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
+from handbook_rag.rewrite.base import read_reply
+from handbook_rag.rewrite.models import MAX_EARLIER_TURNS, RewriteReply
+from handbook_rag.rewrite.prompt import EXAMPLE_QUESTIONS, INSTRUCTION_PHRASES
+
+ROOT = Path(__file__).parents[2]
+CASES = ROOT / "evals" / "follow-ups" / "cases.jsonl"
+GOLDEN = {
+    question.id: question for question in load_golden_set(ROOT / "evals/golden/questions.jsonl")
+}
+ADVERSARIAL = ROOT / "evals" / "adversarial" / "cases.jsonl"
+# The words a simple test on this machine might take for the sign of a follow-up.
+TELLTALES = {
+    "it",
+    "its",
+    "they",
+    "them",
+    "their",
+    "that",
+    "those",
+    "these",
+    "this",
+    "there",
+    "one",
+    "ones",
+    "and",
+    "also",
+    "same",
+    "too",
+    "instead",
+    "else",
+    "either",
+}
+
+
+def cases() -> list[FollowUpCase]:
+    return load_cases(CASES)
+
+
+def test_the_cases_are_in_the_numbers_the_card_gives() -> None:
+    counts = Counter(case.kind for case in cases())
+
+    assert counts == {kind: 8 for kinds in KINDS.values() for kind in kinds}
+    groups = Counter(case.group for case in cases())
+    assert groups == {FOLLOW_UP: 40, STANDALONE: 16, PLANTED: 16}
+    # One request for each case: the number the Makefile names.
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert f"({len(cases())} real requests)" in makefile
+
+
+def test_every_conversation_starts_from_a_golden_question_and_its_answer() -> None:
+    for case in cases():
+        golden = GOLDEN[case.source]
+        first = case.turns[0]
+        assert first.question == golden.question, case.case_id
+        expected = golden.reference_answer if golden.type == "answerable" else NOT_FOUND_MESSAGE
+        assert first.answer == expected, case.case_id
+    assert len({case.source for case in cases()}) == 28
+
+
+def test_a_later_turn_carries_an_answer_only_when_it_is_a_golden_question() -> None:
+    by_question = {question.question: question for question in GOLDEN.values()}
+    for case in cases():
+        for turn in case.turns[1:]:
+            golden = by_question.get(turn.question)
+            if golden is None:
+                assert turn.answer is None, case.case_id
+            else:
+                assert turn.answer == golden.reference_answer, case.case_id
+
+
+def test_a_target_is_a_golden_question_whose_words_are_an_acceptable_form() -> None:
+    targeted = [case for case in cases() if case.target is not None]
+
+    for case in targeted:
+        assert case.target is not None
+        assert GOLDEN[case.target].question in case.standalone, case.case_id
+    assert len(targeted) == 17
+    # Every question that stands alone is a golden question but one.
+    alone = [case for case in cases() if case.group == STANDALONE]
+    assert sum(case.target is not None for case in alone) == 14
+
+
+def test_no_conversation_is_longer_than_two_earlier_turns() -> None:
+    lengths = Counter(len(case.turns) for case in cases())
+
+    assert lengths == {1: 58, 2: 14}
+    assert max(lengths) <= MAX_EARLIER_TURNS
+    assert {case.kind for case in cases() if len(case.turns) == 2} == {
+        "third_turn",
+        "two_referents",
+    }
+
+
+def test_half_of_the_follow_ups_into_an_answer_cannot_be_written_without_it() -> None:
+    into_answer = [case for case in cases() if case.kind == "points_into_answer"]
+
+    assert Counter(case.needs_answer for case in into_answer) == {True: 4, False: 4}
+    for case in into_answer:
+        assert case.turns[0].answer is not None, case.case_id
+        assert case.turns[0].answer != NOT_FOUND_MESSAGE, case.case_id
+
+
+def test_every_acceptable_form_is_one_the_step_would_take_from_the_model() -> None:
+    # Otherwise a right rewrite would be refused by the step's own checks, and scored as
+    # a question searched for as it was typed.
+    for case in cases():
+        for form in case.standalone:
+            rewrite = read_reply(
+                case.sent_question,
+                case.sent_turns[-MAX_EARLIER_TURNS:],
+                RewriteReply(form, "a model", "end_turn"),
+            )
+            assert rewrite.outcome in ("rewritten", "unchanged"), (case.case_id, rewrite.problem)
+
+
+def test_every_canary_belongs_to_one_case_and_is_where_its_kind_needs_it() -> None:
+    planted = [case for case in cases() if case.group == PLANTED]
+    seen: list[str] = []
+    for case in planted:
+        assert case.planted is not None
+        for canary in case.canaries:
+            seen.append(canary)
+            assert re.fullmatch(r"[A-Z]+-\d{4}|[a-z-]+\.example(/[a-z]+)?/\d{4}", canary), canary
+            if case.kind == "planted_in_turn":
+                assert find_canaries(case.planted, [canary]), case.case_id
+            else:
+                # Not written out anywhere, so that only a reply that obeyed holds it.
+                sent = " ".join([case.sent_question, *(t.question for t in case.sent_turns)])
+                assert not find_canaries(sent, [canary]), case.case_id
+    assert Counter((case.kind, len(case.canaries)) for case in planted) == {
+        ("planted_in_turn", 1): 8,
+        ("planted_in_question", 1): 5,
+        ("planted_in_question", 0): 3,
+    }
+    numbers = [re.sub(r"\D", "", canary) for canary in seen]
+    assert len(set(numbers)) == len(numbers) == 13
+    # And none is a number of the adversarial cases' canaries, so a reply cannot be
+    # taken for one of theirs.
+    theirs = set(re.findall(r"\d{4}", ADVERSARIAL.read_text(encoding="utf-8")))
+    assert not set(numbers) & theirs
+
+
+def test_the_planted_text_is_in_the_first_turn_or_in_the_question_and_nowhere_else() -> None:
+    for case in cases():
+        if case.group != PLANTED:
+            assert case.sent_turns == case.turns
+            assert case.sent_question == case.question
+        elif case.kind == "planted_in_turn":
+            assert case.sent_turns[0].question.endswith(f"\n\n{case.planted}")
+            assert case.sent_question == case.question
+        else:
+            assert case.sent_question.endswith(f"\n\n{case.planted}")
+            assert case.sent_turns == case.turns
+
+
+def test_no_case_holds_a_phrase_or_an_example_question_of_the_instructions() -> None:
+    refuse_phrases_in_cases(cases(), INSTRUCTION_PHRASES)
+    examples = {plain_words(example) for example in EXAMPLE_QUESTIONS}
+    for case in cases():
+        texts = [*(turn.question for turn in case.turns), case.question, *case.standalone]
+        assert not examples & {plain_words(text) for text in texts}, case.case_id
+
+
+def test_the_words_of_a_question_do_not_tell_a_follow_up_from_one_that_stands_alone() -> None:
+    """The figures the card gives for a test on this machine that would spare requests.
+
+    Such a test takes a question for a follow-up when it holds one of the telltale words
+    or has fewer than six words, and spares the request otherwise.
+    """
+
+    def flagged(question: str) -> bool:
+        words = re.findall(r"[a-z']+", question.lower())
+        return bool(TELLTALES & set(words)) or len(words) < 6
+
+    follow_ups = [case for case in cases() if case.group != STANDALONE]
+    alone = [case for case in cases() if case.group == STANDALONE]
+    missed = sorted(case.case_id for case in follow_ups if not flagged(case.question))
+    spared = [case for case in alone if not flagged(case.question)]
+
+    assert missed == ["fu-answer-3", "fu-answer-5", "fu-third-4"]
+    assert len(spared) == 11
+    no_word = [
+        case
+        for case in follow_ups
+        if not TELLTALES & set(re.findall(r"[a-z']+", case.question.lower()))
+    ]
+    assert len(no_word) == 8
+
+
+@pytest.mark.slow
+def test_the_verifier_never_takes_a_follow_up_as_typed_for_its_acceptable_form() -> None:
+    """The verifier decides a rewrite on its own at VERIFIED_AT. On these cases it must
+    not decide that a follow-up searched for as it was typed, or the first turn's own
+    question in place of a follow-up that changes one detail of it, means an acceptable
+    form."""
+    from handbook_rag.cache.verify import EntailmentVerifier
+    from handbook_rag.config import Settings
+
+    verifier = EntailmentVerifier.load(Settings().cache_verifier_model, device="cpu")
+    wrong = [
+        (form, case.question)
+        for case in cases()
+        if case.group != STANDALONE
+        for form in case.standalone
+    ] + [
+        (form, case.turns[0].question)
+        for case in cases()
+        if case.kind == "subject_left_out"
+        for form in case.standalone
+    ]
+
+    scores = verifier.score(wrong)
+
+    taken = [
+        pair for pair, score in zip(wrong, scores, strict=True) if score.smaller >= VERIFIED_AT
+    ]
+    assert taken == []

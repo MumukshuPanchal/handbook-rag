@@ -37,6 +37,9 @@ from handbook_rag.retrieve.hybrid import HybridRetriever
 from handbook_rag.retrieve.rerank import CrossEncoderReranker, RerankingRetriever
 from handbook_rag.retrieve.sparse import SparseRetriever
 from handbook_rag.retrieve.spread import PageSpread
+from handbook_rag.rewrite.base import Rewriter
+from handbook_rag.rewrite.claude import ClaudeRewriter
+from handbook_rag.rewrite.gemini import GeminiRewriter
 
 RetrievalMode = Literal["dense", "sparse", "hybrid"]
 
@@ -449,6 +452,39 @@ def make_generator(settings: Settings, *, attempts: int | None = None) -> Genera
         attempts=attempts or ANSWER_ATTEMPTS,
         deadline_seconds=settings.answer_deadline_seconds,
         fallback=fallback,
+    )
+
+
+def make_rewriter(settings: Settings) -> Rewriter:
+    """The model that rewrites a follow-up into a question that stands alone (issue 79).
+
+    It is the answer model, used a second time for a much smaller request, so its name
+    decides the provider as for an answer. Built as an evaluation builds the answer
+    model: its SDK sends each request once, and waits
+    :data:`EVALUATION_TIMEOUT_SECONDS` at most for the connection and for each next part
+    of a reply, so that a slow reply is measured and not cut off. Nothing asks again:
+    the rewriting step makes one request, and an evaluation tries a failed case again
+    itself. A service that rewrites before it answers will need a time limit of its own,
+    which belongs to the change that puts the step in front of ``POST /ask``.
+
+    A missing Gemini key is found here, as for the answer model. The Claude client's own
+    span is switched off: the step opens a span for its request itself.
+    """
+    if settings.answer_model.startswith("gemini-"):
+        return GeminiRewriter(
+            _gemini_client(settings, 1, timeout_seconds=EVALUATION_TIMEOUT_SECONDS),
+            model=settings.answer_model,
+        )
+    options: dict[str, Any] = {
+        "timeout": EVALUATION_TIMEOUT_SECONDS,
+        "max_retries": 0,
+        "open_telemetry": False,
+    }
+    key = settings.anthropic_api_key
+    if key is not None and key.get_secret_value():
+        options["api_key"] = key.get_secret_value()
+    return ClaudeRewriter(
+        anthropic.Anthropic(**options), model=settings.answer_model, effort=settings.answer_effort
     )
 
 

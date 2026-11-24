@@ -18,9 +18,9 @@ import typer
 from handbook_rag import __version__, wiring
 from handbook_rag.cache.answers import AnswerCache
 from handbook_rag.cache.store import QdrantAnswerStore, answer_collections
-from handbook_rag.cache.verify import VerifierError
+from handbook_rag.cache.verify import Verification, VerifierError
 from handbook_rag.config import Settings, get_settings
-from handbook_rag.evals import adversarial, cache_pairs, cache_replies
+from handbook_rag.evals import adversarial, cache_pairs, cache_replies, follow_ups
 from handbook_rag.evals import answers as answer_runs
 from handbook_rag.evals.agreement import measure_agreement
 from handbook_rag.evals.cache_report import report_lines
@@ -2084,6 +2084,203 @@ def _echo_adversarial_figures(report: adversarial.AdversarialReport) -> None:
     injected = report.figures.get(adversarial.INJECTED)
     if injected is not None:
         _echo_estimate("Kept its answer", injected.kept)
+
+
+@app.command(name="eval-follow-ups")
+@measures
+def eval_follow_ups(
+    cases: Annotated[
+        Path,
+        typer.Option(help="Follow-up cases: a JSON Lines file with one conversation per line."),
+    ] = follow_ups.CASES_PATH,
+    variant: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Name of this run. The default, 'current', is a scratch run that git "
+                "ignores. Name a run to keep it: 'baseline', then 'v1', 'v2' and so on."
+            )
+        ),
+    ] = "current",
+    output: Annotated[
+        Path, typer.Option(help="Directory that holds one sub-directory per variant.")
+    ] = Path("evals/runs/follow-ups"),
+    max_requests: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Stop after this many requests. Run the command again to continue the run.",
+        ),
+    ] = None,
+    pace: Annotated[
+        float | None,
+        typer.Option(help="Send at most this many requests a minute. Default: settings."),
+    ] = None,
+    restart: Annotated[
+        bool,
+        typer.Option(
+            "--restart",
+            help="Discard the replies this run has saved and their readings, and start again.",
+        ),
+    ] = False,
+) -> None:
+    """Rewrite follow-up questions so that they stand alone, and measure the rewrites.
+
+    One real request for each case, to the answer model, and none for a case that has a
+    saved reply. Replies are saved as they arrive, so a run that stops continues where it
+    left off. A rewrite that code cannot decide is set aside for a reader: each reading,
+    which names who made it, goes into readings.jsonl in the run's directory, and the
+    next run of the command takes them in. The verifier of the answer cache runs on this
+    machine to read some rewrites, and no answer cache is built.
+    """
+    settings = get_settings()
+    if pace is not None and pace <= 0:
+        typer.echo("error: --pace needs a positive number of requests a minute.", err=True)
+        raise typer.Exit(code=1)
+    per_minute = pace or settings.eval_requests_per_minute
+    claude = not settings.answer_model.startswith("gemini-")
+    config = follow_ups.describe_rewriting(
+        settings.answer_model, settings.answer_effort if claude else None
+    )
+    run_dir = output / variant
+    stage = follow_ups.follow_up_stage(run_dir)
+    try:
+        if not restart:
+            stage.check(config)
+        loaded = follow_ups.load_cases(cases)
+        phrases = follow_ups.step_phrases()
+        follow_ups.refuse_phrases_in_cases(loaded, phrases)
+        saved = {} if restart else follow_ups.load_replies(stage.rows_path)
+        readings = [] if restart else follow_ups.load_readings(run_dir / follow_ups.READINGS_FILE)
+        # A reading that is not of a saved reply is refused before any request.
+        follow_ups.check_readings(loaded, saved, readings)
+        answered = follow_ups.replies_to_current_cases(loaded, saved)
+        pending = [c for c in follow_ups.in_run_order(loaded) if c.case_id not in answered]
+        to_ask = pending if max_requests is None else pending[:max_requests]
+        # A run that only takes in readings needs no key.
+        rewriter = wiring.make_rewriter(settings) if to_ask else None
+        # Last, so that a run that cannot start leaves nothing behind.
+        stage.open(config, restart=restart)
+        saved = follow_ups.load_replies(stage.rows_path)
+    except (DatasetError, GenerationError, SavedRunError, follow_ups.ReadingError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    groups = {group: sum(case.group == group for case in loaded) for group in follow_ups.KINDS}
+    typer.echo(f"Follow-up questions: {variant}")
+    typer.echo(f"  model        {settings.answer_model}")
+    typer.echo(
+        f"  cases        {len(loaded)} in the file ({groups[follow_ups.FOLLOW_UP]} follow-ups, "
+        f"{groups[follow_ups.STANDALONE]} that stand alone, {groups[follow_ups.PLANTED]} with "
+        f"a planted instruction), {len(answered)} already answered, {len(to_ask)} to ask now"
+    )
+    if to_ask:
+        typer.echo(
+            f"  pace         at most {per_minute:g} requests a minute, so at least "
+            f"{max(1, round(len(to_ask) / per_minute))} min"
+        )
+
+    asked = 0
+
+    def keep(case: follow_ups.FollowUpCase, reply: follow_ups.FollowUpReply) -> None:
+        nonlocal asked
+        asked += 1
+        stage.append(dataclasses.asdict(reply))
+        rewrite = follow_ups.read_case_reply(case, reply)
+        typer.echo(
+            f"  {asked:>4}/{len(to_ask)}  {case.case_id:<26} {rewrite.outcome:<10} "
+            f"{reply.seconds:.1f} s"
+        )
+
+    def show_failure(failure: FailedQuestion) -> None:
+        typer.echo(f"        failed  {failure.question_id}  {failure.message}")
+
+    pacer = Pacer(per_minute)
+
+    def before_each_request() -> None:
+        pacer.wait()
+        # Counted before the request is sent, so an interrupted run has still counted it.
+        stage.add_attempts()
+
+    run = follow_ups.FollowUpRun(replies=saved)
+    if rewriter is not None:
+        run = follow_ups.run_cases(
+            loaded,
+            follow_ups.asker(rewriter),
+            saved=saved,
+            wait=before_each_request,
+            on_reply=keep,
+            on_failure=show_failure,
+            rest=lambda: pacer.rest(REST_AFTER_FAILURE_SECONDS),
+            max_attempts=max_requests,
+        )
+
+    try:
+        # The verifier is loaded only when a rewrite has the words of no acceptable form.
+        pairs = follow_ups.pairs_to_verify(loaded, run.replies)
+        verified: dict[tuple[str, str], Verification] = {}
+        if pairs:
+            verified = dict(zip(pairs, wiring.make_verifier(settings).score(pairs), strict=True))
+        report = follow_ups.summarise_follow_ups(
+            loaded, run.replies, verified, phrases, readings, run.failures
+        )
+    except (VerifierError, follow_ups.ReadingError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    if not report.results:
+        for failure in report.failures[:5]:
+            typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
+        typer.echo(f"error: no case was answered. {run.stopped or ''}".rstrip(), err=True)
+        raise typer.Exit(code=1)
+    attempts = stage.attempts()
+    summary = follow_ups.write_follow_up_run(
+        report,
+        run_dir,
+        description=(
+            f"Follow-up questions rewritten by {settings.answer_model} so that they stand "
+            "alone, read by code, by the verifier of the answer cache and by readers."
+        ),
+        config=config,
+        attempts=attempts,
+        verifier=settings.cache_verifier_model,
+        phrases=phrases,
+    )
+
+    typer.echo(
+        f"  replies      {len(report.results)} read, {len(report.failures)} failed, "
+        f"{report.not_asked} not asked yet"
+    )
+    typer.echo(f"  requests     at most {run.attempts} now, {attempts} for this run in all")
+    for line in follow_ups.report_lines(summary):
+        typer.echo(line)
+    if report.waiting:
+        typer.echo(
+            f"  final        not yet: {len(report.waiting)} "
+            f"{'case waits' if len(report.waiting) == 1 else 'cases wait'} for a reading. "
+            f"Write each to {run_dir / follow_ups.READINGS_FILE} and run the same command again:"
+        )
+        for result in report.waiting:
+            waits = [
+                *(["the question"] if result.meaning_waits else []),
+                *(["the instruction"] if result.instruction_waits else []),
+            ]
+            typer.echo(
+                f"    {result.case.case_id:<26} reply "
+                f"{follow_ups.reply_fingerprint(result.reply)}  {' and '.join(waits)}"
+            )
+    else:
+        typer.echo("  final        yes: every rewrite that code set aside has a reading")
+    typer.echo(f"  written to   {run_dir}")
+    if run.stopped is not None:
+        typer.echo(f"  stopped: {run.stopped}")
+    for failure in report.failures[:5]:
+        typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
+    if report.not_asked or report.failures:
+        typer.echo("  Run the same command again to continue this run.")
+    # A limit the caller set is a planned stop. Any other early end is a failure.
+    planned = max_requests is not None and run.attempts >= max_requests
+    if report.failures or (run.stopped is not None and not planned):
+        raise typer.Exit(code=1)
 
 
 @app.command(name="eval-gate")

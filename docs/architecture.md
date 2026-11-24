@@ -166,6 +166,8 @@ src/handbook_rag/
                         and the wrapper that asks again and falls back
     cache/              the answer cache: its two tiers, where it keeps answers,
                         and the second check on a stored question
+    rewrite/            the step that rewrites a follow-up into a question that stands alone,
+                        which nothing uses yet
     pipeline.py         the single entry point: question in, answer out
     api.py              the FastAPI application
     demo.py             serves the demo page and its two files, with their security headers
@@ -175,10 +177,11 @@ src/handbook_rag/
     tracing.py          tracing setup, and what each span records
     wiring.py           builds the parts from the settings
     cli.py              the handbook-rag command
-    evals/              metrics, runs, the two judges, adversarial tests,
-                        the cache measurement and the checks of the two-passage questions
+    evals/              metrics, runs, the two judges, adversarial tests, the cache measurement,
+                        the checks of the two-passage questions and the follow-up measurement
 evals/                  golden set, the two-passage questions, labelled answers, adversarial cases,
-                        saved runs and the question pairs of the cache measurement
+                        follow-up conversations, saved runs and the question pairs of the cache
+                        measurement
 tests/                  unit and integration tests
 docs/                   charter, architecture, roadmap, decision records, guides
 compose.yaml            API, Qdrant and trace backend

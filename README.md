@@ -291,6 +291,22 @@ The measurement of the last section was run twice more. Once with stored decline
 - **Checked with the real service**, on 24 November 2026, by hand: 13 questions, of which 7 cost a request. The same question again came back in 0.046 seconds against 1.236 for the first time. A rewording was served by meaning in 0.166 seconds. A near-miss about another kind of leave was turned down, and the model answered it. A stored decline was served to its own question and to no other. The model also answered a question it should have declined, and the cache kept that answer. That check was made with the defaults of that day, a threshold of 0.8669 and a floor of 0.5. After the fixes of the review it was made again, cold and with the defaults of today, by the session that coordinated this change: 4 questions, of which 2 cost a request. A repeat in other case was an exact match in 12.9 ms, a rewording was served by meaning in 152 ms, and a near-miss about another device was turned down ([the guide](docs/evaluation.md#checked-with-the-real-service)).
 - **What the default costs.** A third model, loaded when the service starts: 552 MiB on disk and 310 MiB of memory on the development laptop. It is downloaded the first time it is used: by the service when it first starts, and by `ask` at the first question that has a stored question near it. `HANDBOOK_RAG_CACHE_MODE=exact` serves the same question only and loads no third model, and `off` stores nothing.
 
+### Follow-up questions
+
+A question asked after another often leans on it: "And in Finland?" after a question about annual leave in the UK. Searched for by itself, it finds nothing useful. A rewriting step sends the earlier questions and the new one to the answer model, and gets back a question that stands alone. It is built and measured, and not yet wired into `POST /ask` or the demo page ([ADR 0022](docs/adr/0022-follow-up-questions-rewritten-before-the-search.md), [issue 79](https://github.com/MumukshuPanchal/handbook-rag/issues/79)). The cases are [72 conversations](evals/follow-ups/README.md), written by one model session and read again by a second, and no person has read them. The run, on the night of 24 to 25 November 2026 with `gemini-3.5-flash-lite`, is [`evals/runs/follow-ups/baseline`](evals/runs/follow-ups/baseline): code decided 53 of the rewrites, and one reader session decided the other 19.
+
+| | Right | Of | Share (95% interval) |
+|---|---|---|---|
+| Follow-ups rewritten to a question that means an acceptable form | 32 | 40 | 0.800 (0.652 to 0.895) |
+| Questions that stand alone, left alone | 15 | 16 | 0.938 (0.717 to 0.989) |
+| Planted instructions not followed | 16 | 16 | 1.000 (0.806 to 1.000) |
+
+The same test as for the tables above holds this table and the figures in the points below to the run.
+
+- **A follow-up that leans on an earlier question was rewritten right in 30 of 32 cases.** One that points into the previous answer was rewritten right in 2 of 8: the step is given the questions only, and 4 of those 8 cannot be written without the answer.
+- **One question that stood alone was changed**, and no planted instruction was followed or reached the search.
+- **A follow-up costs one more request.** In the run the median request took 1.49 s and 95% came within 16.94 s, on a night the model was overloaded. No answer was written for the rewritten questions, so whether they get the right answer is not known.
+
 ## Limitations
 
 What this version does not do, or does not show. Each point is already stated in the document it links to.
@@ -298,6 +314,7 @@ What this version does not do, or does not show. Each point is already stated in
 - **No person has verified the test questions, the labels or the readings.** The 165 test questions, the labelled answers both judges were checked against, and the readings of the five adversarial replies that code set aside were all made and checked by model sessions ([golden set](evals/golden/README.md), [labelled answers](evals/judge/README.md), [adversarial cases](evals/adversarial/README.md)). A person's check of a sample is what remains of [issue 8](https://github.com/MumukshuPanchal/handbook-rag/issues/8).
 - **Most test questions were written from their passage.** 122 of the 132 answerable questions were written by a model that could see the passage, and 10 without it, too few to compare searches on ([golden set](evals/golden/README.md), [issue 43](https://github.com/MumukshuPanchal/handbook-rag/issues/43)).
 - **A question that needs two passages often gets one of them.** The search gives the model both passages for 12 of 33 such questions, and none of the changes to the search that were tried finds them clearly more often. What the assistant then answers is not measured: no answer was written for these questions. A model wrote them with both passages in front of it, so the share is more likely too high than too low, and no person has read them ([two-passage questions](evals/two-passage/README.md), [ADR 0021](docs/adr/0021-two-passage-questions-and-the-search-as-it-is.md), [issue 78](https://github.com/MumukshuPanchal/handbook-rag/issues/78)).
+- **A follow-up question is still answered by itself.** The step that rewrites it into a question that stands alone is built and measured, and not wired in: `POST /ask` and the demo page take no earlier turns ([ADR 0022](docs/adr/0022-follow-up-questions-rewritten-before-the-search.md), [issue 79](https://github.com/MumukshuPanchal/handbook-rag/issues/79)).
 - **The judge is the answer model itself.** Both judges are `gemini-3.5-flash-lite`, and a model judging its own answers may be lenient. Labels from another model family are some protection ([ADR 0014](docs/adr/0014-answer-evaluation-in-stages.md)).
 - **The judges were checked on one model's answers, and not against planted instructions.** No figure says how either judge does on another model's answers ([labelled answers](evals/judge/README.md#known-limits)), and whether an instruction planted in a passage moves a judge is not tested ([adversarial cases](evals/adversarial/README.md#known-limits)).
 - **The first judge was told two rules fewer than its readers.** Its instructions lack two rules of its rubric, and in one long answer its numbering slipped. Putting the rules back makes another judge, which has to be checked again ([the guide](docs/evaluation.md#what-the-judge-decides), [issue 58](https://github.com/MumukshuPanchal/handbook-rag/issues/58)).
@@ -472,6 +489,7 @@ make eval-judge-correct  # check the second judge against its labelled answers: 
 make eval-correct    # judge the saved answers: does each one agree with the reference answer?
 make eval-judge-references  # check that the second judge passes every reference answer: 132 real requests
 make eval-adversarial  # planted instructions and questions outside the handbook: 36 real requests
+make eval-follow-ups   # rewrite follow-up questions so that they stand alone, and measure it: 72 real requests
 make eval-cache      # what a semantic cache would serve, on labelled pairs of questions: no request
 uv run handbook-rag eval-cache --no-declines   # the same, with stored declines left out by the label of each test question
 uv run handbook-rag eval-cache --replies evals/runs/answers/baseline   # the same, as the answer cache is built: filled with saved replies
@@ -528,5 +546,7 @@ The test questions in [`evals/golden/`](evals/golden/README.md) quote short pass
 The cache question pairs in [`evals/cache/`](evals/cache/README.md) are under CC BY-SA 4.0 too: the test questions in them are those of the golden set.
 
 So are the two-passage questions in [`evals/two-passage/`](evals/two-passage/README.md): they quote the handbook, and the readers' answers there restate it.
+
+So are the follow-up conversations in [`evals/follow-ups/`](evals/follow-ups/README.md): they start from the golden set's questions and reference answers.
 
 This project is not affiliated with or endorsed by GitLab.

@@ -61,6 +61,14 @@ SAME_WITH_A_DETAIL_ADDED = {
     "fu-pronoun-8",
 }
 ANOTHER_READING_FIRST = {"fu-ambiguous-8", "fu-planted-turn-5"}
+# The second model's weaker direction for the second reader's questions that add a
+# detail, as the documents give it: most at or under the first value, and the others at
+# these, to three places. The slow test below works them out with the model.
+DETAIL_LOW = "0.006"
+DETAIL_HIGH = ("0.958", "0.986")
+# A test on this machine that would spare a request takes a question for a follow-up when
+# it holds a telltale word, or has fewer words than this.
+FEWEST_WORDS = 6
 # The words a simple test on this machine might take for the sign of a follow-up.
 TELLTALES = {
     "it",
@@ -214,17 +222,19 @@ def test_no_case_holds_a_phrase_or_an_example_question_of_the_instructions() -> 
         assert not examples & {plain_words(text) for text in texts}, case.case_id
 
 
-def test_the_words_of_a_question_do_not_tell_a_follow_up_from_one_that_stands_alone() -> None:
-    """The figures the card gives for a test on this machine that would spare requests.
+def flagged_by_a_simple_test(question: str) -> bool:
+    """Whether a test on this machine would take a question for a follow-up, and ask.
 
-    Such a test takes a question for a follow-up when it holds one of the telltale words
-    or has fewer than six words, and spares the request otherwise.
+    It does when the question holds one of the telltale words or has fewer than
+    :data:`FEWEST_WORDS` words, and spares the request otherwise.
     """
+    words = re.findall(r"[a-z']+", question.lower())
+    return bool(TELLTALES & set(words)) or len(words) < FEWEST_WORDS
 
-    def flagged(question: str) -> bool:
-        words = re.findall(r"[a-z']+", question.lower())
-        return bool(TELLTALES & set(words)) or len(words) < 6
 
+def test_the_words_of_a_question_do_not_tell_a_follow_up_from_one_that_stands_alone() -> None:
+    """The figures the card gives for a test on this machine that would spare requests."""
+    flagged = flagged_by_a_simple_test
     follow_ups = [case for case in cases() if case.group != STANDALONE]
     alone = [case for case in cases() if case.group == STANDALONE]
     missed = sorted(case.case_id for case in follow_ups if not flagged(case.question))
@@ -326,17 +336,24 @@ def test_the_second_model_takes_a_rewording_and_not_a_question_with_a_detail_add
     from handbook_rag.config import Settings
 
     verifier = EntailmentVerifier.load(Settings().cache_verifier_model, device="cpu")
-    reached = set()
+    reached, with_a_detail = set(), []
     for case in cases():
         if case.case_id not in VERIFIED_BY_THE_SECOND_MODEL | SAME_WITH_A_DETAIL_ADDED:
             continue
         assert case.second is not None
         first = case.second.standalone[0]
         scores = verifier.score([(form, first) for form in makers_forms(case)])
-        if max(score.smaller for score in scores) >= VERIFIED_AT:
+        best = max(score.smaller for score in scores)
+        if best >= VERIFIED_AT:
             reached.add(case.case_id)
+        if case.case_id in SAME_WITH_A_DETAIL_ADDED:
+            with_a_detail.append(best)
 
     assert reached == VERIFIED_BY_THE_SECOND_MODEL
+    # The scores the documents give for the questions that add a detail.
+    low = [score for score in with_a_detail if score <= float(DETAIL_LOW)]
+    high = sorted(f"{score:.3f}" for score in with_a_detail if score > float(DETAIL_LOW))
+    assert (len(low), tuple(high)) == (len(with_a_detail) - len(DETAIL_HIGH), DETAIL_HIGH)
 
 
 @pytest.mark.slow

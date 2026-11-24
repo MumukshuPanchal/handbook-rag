@@ -846,6 +846,81 @@ def test_the_two_passage_section_is_the_committed_runs() -> None:
     assert "No person has read them, and no answer was written for them." in section
 
 
+def test_the_follow_up_section_is_the_committed_run() -> None:
+    """The section on follow-up questions, its line under Limitations and its command.
+
+    Every number in them is worked out from the saved run, as
+    ``tests/evals/test_follow_up_documents.py`` works out the other documents that give
+    these figures, and a line with a number that nothing works out fails.
+    """
+    # Imported here: that module imports this one's helpers.
+    from handbook_rag.evals.follow_ups import FOLLOW_UP, KINDS, PLANTED, STANDALONE
+    from tests.evals import test_follow_up_documents as documents
+
+    k = documents.figures()
+    section = readme().split("### Follow-up questions\n")[1].split("\n## ")[0]
+    rows = table(readme(), "| | Right | Of | Share (95% interval) |")
+    planted = k["planted"]
+
+    def right(group: str) -> str:
+        return str(sum(k["right"][kind] for kind in KINDS[group]))
+
+    assert rows == [
+        [
+            "Follow-ups rewritten to a question that means an acceptable form",
+            right(FOLLOW_UP),
+            str(k["groups"][FOLLOW_UP]),
+            documents.shown(k["follow"]["same"]),
+        ],
+        [
+            "Questions that stand alone, left alone",
+            right(STANDALONE),
+            str(k["groups"][STANDALONE]),
+            documents.shown(k["alone"]["same"]),
+        ],
+        [
+            "Planted instructions not followed",
+            str(planted["held_by_code"] + planted["read_held"]),
+            str(k["groups"][PLANTED]),
+            documents.shown(planted["held"]),
+        ],
+    ]
+    assert_numbers(
+        section,
+        {
+            "A question asked after another often leans on it": [
+                documents.RECORD,
+                documents.FOLLOW_UPS,
+                str(k["cases"]),
+                *documents.NIGHT,
+                *k["model"],
+                str(k["decided"]),
+                str(k["set_aside"]),
+            ],
+            "- **A follow-up that leans on an earlier question was rewritten right in": [
+                str(k["leaning_right"]),
+                str(k["leaning_of"]),
+                str(k["right"]["points_into_answer"]),
+                str(k["into_answer"]),
+                str(k["needs_answer"]),
+                str(k["into_answer"]),
+            ],
+            "- **A follow-up costs one more request.**": [k["median"], k["p95"]],
+        },
+    )
+    assert "no person has read them" in section
+    assert "No answer was written for the rewritten questions" in section
+    assert (planted["broke_by_code"], planted["reached_search"]) == (0, 0)
+    assert "no planted instruction was followed or reached the search" in section
+    # Under Limitations: the step is not wired in.
+    limitation = line_starting(readme(), "- **A follow-up question is still answered by itself.**")
+    assert numbers(limitation) == [documents.RECORD, documents.FOLLOW_UPS]
+    assert "not wired in" in limitation
+    # The command, with one real request for each case.
+    command = line_starting(readme(), "make eval-follow-ups")
+    assert command.endswith(f"and measure it: {k['cases']} real requests")
+
+
 def test_every_link_to_a_file_or_a_heading_leads_to_one() -> None:
     for target in re.findall(r"\]\(([^)\s]+)\)", readme()):
         if target.startswith(("http://", "https://")):

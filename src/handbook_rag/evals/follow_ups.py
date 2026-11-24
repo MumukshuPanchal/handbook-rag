@@ -100,10 +100,35 @@ _BASE_FIELDS = frozenset(
 )
 _PLANTED_FIELDS = frozenset({"planted", "canaries"})
 _ANSWER_FIELDS = frozenset({"needs_answer"})
+# A case that was labelled a second time has all three, and one that was not has none.
+_SECOND_FIELDS = frozenset({"second", "agreed", "forms_from_second"})
+_SECOND_READING_FIELDS = frozenset(
+    {"id", "standalone", "stands_alone_already", "needs_the_answer", "planted_text", "note"}
+)
 
 
 class ReadingError(ValueError):
     """A reading cannot be used: it is malformed, or not of a reply that is saved now."""
+
+
+@dataclass(frozen=True, slots=True)
+class SecondReading:
+    """What a second reader wrote for a case, given the conversation without its labels.
+
+    It is the reader's own line, word for word, so that a test can hold the case to the
+    reader's file (``evals/follow-ups/second-reading.jsonl``).
+    """
+
+    name: str
+    """The neutral name the reader knew the conversation by, such as ``c18``."""
+    standalone: tuple[str, ...]
+    """The question or questions the reader wrote for the search, the one it prefers first."""
+    stands_alone_already: bool
+    needs_the_answer: bool
+    """Whether what the new question points at is named only in an earlier answer."""
+    planted_text: bool
+    """Whether the conversation holds text addressed to an assistant."""
+    note: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +158,13 @@ class FollowUpCase:
     """For a follow-up that points into the previous answer: whether every acceptable
     form needs what only the answer says. The step never sends answers, so it cannot
     reach those."""
+    second: SecondReading | None = None
+    """What a second reader wrote, when the case was labelled a second time."""
+    agreed: bool | None = None
+    """Whether the second reader's first question is one of the acceptable forms."""
+    forms_from_second: tuple[str, ...] = ()
+    """The acceptable forms that were taken from the second reading, word for word. The
+    others are the maker's, so how far the two agreed before any was added stays known."""
 
     @property
     def group(self) -> str:
@@ -216,6 +248,8 @@ def _case(row: object) -> FollowUpCase:
         allowed |= _PLANTED_FIELDS
     if kind == "points_into_answer":
         allowed |= _ANSWER_FIELDS
+    if _SECOND_FIELDS & set(row):
+        allowed |= _SECOND_FIELDS
     # A misspelt or missing field would otherwise be ignored, and the case would test less.
     if set(row) != allowed:
         raise ValueError(f"a {kind} case has the fields {sorted(allowed)}, not {sorted(row)}")
@@ -223,6 +257,9 @@ def _case(row: object) -> FollowUpCase:
     needs_answer = row.get("needs_answer")
     if kind == "points_into_answer" and not isinstance(needs_answer, bool):
         raise TypeError(f"needs_answer must be true or false, not {needs_answer!r}")
+    agreed = row.get("agreed")
+    if "agreed" in row and not isinstance(agreed, bool):
+        raise TypeError(f"agreed must be true or false, not {agreed!r}")
     return FollowUpCase(
         case_id=_text(row["case"]),
         kind=kind,
@@ -235,6 +272,30 @@ def _case(row: object) -> FollowUpCase:
         planted=_text(row["planted"]) if "planted" in row else None,
         canaries=tuple(_text(canary) for canary in _list(row.get("canaries", []))),
         needs_answer=needs_answer if isinstance(needs_answer, bool) else None,
+        second=_second_reading(row["second"]) if "second" in row else None,
+        agreed=agreed if isinstance(agreed, bool) else None,
+        forms_from_second=tuple(_text(form) for form in _list(row.get("forms_from_second", []))),
+    )
+
+
+def _second_reading(value: object) -> SecondReading:
+    if not isinstance(value, dict) or set(value) != _SECOND_READING_FIELDS:
+        raise TypeError(
+            f"a second reading has the fields {sorted(_SECOND_READING_FIELDS)}, not {value!r}"
+        )
+    flags = [value[name] for name in ("stands_alone_already", "needs_the_answer", "planted_text")]
+    if not all(isinstance(flag, bool) for flag in flags):
+        raise TypeError(f"the flags of a second reading are true or false, not {flags!r}")
+    questions = tuple(_text(question) for question in _list(value["standalone"]))
+    if not questions:
+        raise ValueError("a second reading holds at least one question")
+    return SecondReading(
+        name=_text(value["id"]),
+        standalone=questions,
+        stands_alone_already=value["stands_alone_already"],
+        needs_the_answer=value["needs_the_answer"],
+        planted_text=value["planted_text"],
+        note=_text(value["note"]),
     )
 
 
@@ -263,9 +324,37 @@ def _fault_in_case(case: FollowUpCase) -> str | None:
     if case.group != STANDALONE and plain_words(case.sent_question) in words:
         # A follow-up given back as it was asked has not been made to stand alone.
         return "lists the question as it is asked among its acceptable forms"
+    if case.second is not None:
+        problem = _fault_in_second_reading(case, words)
+        if problem:
+            return problem
     if case.group == PLANTED:
         assert case.planted is not None  # set for every planted case by _case
         return _fault_in_canaries(case)
+    return None
+
+
+def _fault_in_second_reading(case: FollowUpCase, words: Sequence[str]) -> str | None:
+    """What makes a case's record of its second reading untrue, if anything.
+
+    ``agreed`` says whether the reader's first question is an acceptable form, so it has
+    to be true exactly when that question has the words of one. A form taken from the
+    reading has to be one of the reader's questions word for word, and listed.
+    """
+    assert case.second is not None
+    first_is_acceptable = plain_words(case.second.standalone[0]) in words
+    if case.agreed != first_is_acceptable:
+        return (
+            f"says agreed is {str(case.agreed).lower()}, and the second reader's first "
+            f"question {'is' if first_is_acceptable else 'is not'} an acceptable form"
+        )
+    if len(set(case.forms_from_second)) != len(case.forms_from_second):
+        return "names one form from the second reading twice"
+    for form in case.forms_from_second:
+        if form not in case.second.standalone:
+            return f"takes {form!r} from the second reading, which the reader did not write"
+        if form not in case.standalone:
+            return f"takes {form!r} from the second reading, and does not list it"
     return None
 
 

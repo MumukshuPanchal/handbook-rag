@@ -1,9 +1,10 @@
 """The follow-up cases in the repository are what their card says they are.
 
-Only the last test needs a model, the verifier, which it loads from the download cache
-or the Hub; it is marked slow, and does not run in CI.
+Only the last two tests need a model, the verifier, which they load from the download
+cache or the Hub; they are marked slow, and do not run in CI.
 """
 
+import json
 import re
 from collections import Counter
 from pathlib import Path
@@ -34,6 +35,32 @@ GOLDEN = {
     question.id: question for question in load_golden_set(ROOT / "evals/golden/questions.jsonl")
 }
 ADVERSARIAL = ROOT / "evals" / "adversarial" / "cases.jsonl"
+SECOND_READING = ROOT / "evals" / "follow-ups" / "second-reading.jsonl"
+# The second reader's first question had the words of none of the maker's forms here.
+# The second model took the first six for the same, both ways, at 0.99 or more. The maker
+# read the next ten as the same question with a detail from an earlier answer or turn.
+# The last two differ in the reading the reader put first.
+VERIFIED_BY_THE_SECOND_MODEL = {
+    "fu-answer-5",
+    "fu-pronoun-1",
+    "fu-pronoun-4",
+    "fu-third-1",
+    "fu-third-3",
+    "fu-third-6",
+}
+SAME_WITH_A_DETAIL_ADDED = {
+    "fu-answer-1",
+    "fu-answer-3",
+    "fu-answer-6",
+    "fu-answer-7",
+    "fu-answer-8",
+    "fu-ambiguous-3",
+    "fu-ambiguous-7",
+    "fu-planted-question-8",
+    "fu-planted-turn-8",
+    "fu-pronoun-8",
+}
+ANOTHER_READING_FIRST = {"fu-ambiguous-8", "fu-planted-turn-5"}
 # The words a simple test on this machine might take for the sign of a follow-up.
 TELLTALES = {
     "it",
@@ -211,6 +238,105 @@ def test_the_words_of_a_question_do_not_tell_a_follow_up_from_one_that_stands_al
         if not TELLTALES & set(re.findall(r"[a-z']+", case.question.lower()))
     ]
     assert len(no_word) == 8
+
+
+def reader_lines() -> tuple[dict[str, object], list[dict[str, object]]]:
+    """The second reader's own file: the line that names the reader, and its readings."""
+    lines = [json.loads(line) for line in SECOND_READING.read_text(encoding="utf-8").splitlines()]
+    return lines[0], lines[1:]
+
+
+def makers_forms(case: FollowUpCase) -> list[str]:
+    """The acceptable forms the maker wrote, without those taken from the second reading."""
+    return [form for form in case.standalone if form not in case.forms_from_second]
+
+
+def test_every_case_records_the_second_readers_own_line_for_it() -> None:
+    header, readings = reader_lines()
+
+    assert header == {"reader": "claude-opus-5-5, one session, 24 November 2026"}
+    by_name = {str(reading["id"]): reading for reading in readings}
+    assert len(by_name) == len(readings) == 72
+    recorded = {}
+    for case in cases():
+        second = case.second
+        assert second is not None, case.case_id
+        recorded[second.name] = case.case_id
+        assert by_name[second.name] == {
+            "id": second.name,
+            "standalone": list(second.standalone),
+            "stands_alone_already": second.stands_alone_already,
+            "needs_the_answer": second.needs_the_answer,
+            "planted_text": second.planted_text,
+            "note": second.note,
+        }, case.case_id
+    # Each line of the reader's file is the record of exactly one case.
+    assert sorted(recorded) == sorted(by_name)
+
+
+def test_the_second_readers_flags_agree_with_the_kinds_of_the_cases() -> None:
+    needs = set()
+    for case in cases():
+        assert case.second is not None
+        assert case.second.stands_alone_already == (case.group == STANDALONE), case.case_id
+        assert case.second.planted_text == (case.group == PLANTED), case.case_id
+        if case.second.needs_the_answer:
+            needs.add(case.case_id)
+
+    into_answer = {case.case_id for case in cases() if case.kind == "points_into_answer"}
+    assert needs == into_answer | ANOTHER_READING_FIRST
+    # The reader's flag says that the thing pointed at is named only in an answer. The
+    # maker's says that no acceptable form can do without the answer: true for 4 of the 8.
+    assert sum(bool(case.needs_answer) for case in cases() if case.case_id in needs) == 4
+
+
+def test_the_second_readers_first_question_against_the_makers_forms() -> None:
+    by_words = set()
+    for case in cases():
+        assert case.second is not None
+        first = plain_words(case.second.standalone[0])
+        if first in {plain_words(form) for form in makers_forms(case)}:
+            by_words.add(case.case_id)
+            assert case.forms_from_second == (), case.case_id
+
+    assert len(by_words) == 54
+    rest = {case.case_id for case in cases()} - by_words
+    assert rest == VERIFIED_BY_THE_SECOND_MODEL | SAME_WITH_A_DETAIL_ADDED | ANOTHER_READING_FIRST
+    taken = {case.case_id: case.forms_from_second for case in cases() if case.forms_from_second}
+    assert set(taken) == rest
+    assert sum(len(forms) for forms in taken.values()) == 19
+    by_id = {case.case_id: case for case in cases()}
+    # Both readings of the two-referent follow-up are acceptable.
+    ambiguous = by_id["fu-ambiguous-8"].second
+    assert ambiguous is not None
+    assert taken["fu-ambiguous-8"] == ambiguous.standalone
+    # The first reading narrows by what only the answer says, and is not taken.
+    narrowed = by_id["fu-planted-turn-5"].second
+    assert narrowed is not None
+    assert taken["fu-planted-turn-5"] == narrowed.standalone[1:]
+    assert [case.case_id for case in cases() if not case.agreed] == ["fu-planted-turn-5"]
+
+
+@pytest.mark.slow
+def test_the_second_model_takes_a_rewording_and_not_a_question_with_a_detail_added() -> None:
+    """The evidence the card gives: of the second reader's questions that the maker reads
+    as the same as one of the maker's forms, the second model takes the plain rewordings
+    at VERIFIED_AT, and none of those that add a detail from an earlier answer or turn."""
+    from handbook_rag.cache.verify import EntailmentVerifier
+    from handbook_rag.config import Settings
+
+    verifier = EntailmentVerifier.load(Settings().cache_verifier_model, device="cpu")
+    reached = set()
+    for case in cases():
+        if case.case_id not in VERIFIED_BY_THE_SECOND_MODEL | SAME_WITH_A_DETAIL_ADDED:
+            continue
+        assert case.second is not None
+        first = case.second.standalone[0]
+        scores = verifier.score([(form, first) for form in makers_forms(case)])
+        if max(score.smaller for score in scores) >= VERIFIED_AT:
+            reached.add(case.case_id)
+
+    assert reached == VERIFIED_BY_THE_SECOND_MODEL
 
 
 @pytest.mark.slow

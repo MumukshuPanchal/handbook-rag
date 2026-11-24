@@ -214,6 +214,96 @@ def test_a_case_that_holds_a_phrase_of_the_instructions_is_refused() -> None:
         refuse_phrases_in_cases([case], PHRASES)
 
 
+FINNISH = "How many days of paid annual leave do Finnish team members get?"
+
+
+def second(*questions: str, **flags: Any) -> dict[str, Any]:
+    """A second reader's line, a follow-up that needs nothing but the questions by default."""
+    return {
+        "id": "c07",
+        "standalone": list(questions),
+        "stands_alone_already": False,
+        "needs_the_answer": False,
+        "planted_text": False,
+        "note": "The country of the follow-up, with the first turn's subject.",
+        **flags,
+    }
+
+
+def test_a_second_reading_is_read_with_the_forms_taken_from_it(tmp_path: Path) -> None:
+    path = write_cases(
+        tmp_path / "cases.jsonl",
+        row(
+            standalone=[FINLAND, FINNISH],
+            second=second(FINNISH, "A second reading?"),
+            agreed=True,
+            forms_from_second=[FINNISH],
+        ),
+    )
+
+    (case,) = load_cases(path)
+
+    assert case.second is not None
+    assert case.second.name == "c07"
+    assert case.second.standalone == (FINNISH, "A second reading?")
+    assert (case.second.stands_alone_already, case.second.needs_the_answer) == (False, False)
+    assert case.agreed is True
+    assert case.forms_from_second == (FINNISH,)
+    # A second reading decides how a reply is read, not what is sent.
+    assert case.fingerprint == case_of().fingerprint
+
+
+@pytest.mark.parametrize(
+    ("fields", "problem"),
+    [
+        ({"second": second(FINLAND), "agreed": True}, "has the fields"),
+        ({"agreed": True, "forms_from_second": []}, "has the fields"),
+        (
+            {"second": {**second(FINLAND), "extra": 1}, "agreed": True, "forms_from_second": []},
+            "a second reading has the fields",
+        ),
+        (
+            {"second": second(FINLAND, planted_text="no"), "agreed": True, "forms_from_second": []},
+            "true or false",
+        ),
+        ({"second": second(), "agreed": True, "forms_from_second": []}, "at least one question"),
+        ({"second": second(FINLAND), "agreed": "yes", "forms_from_second": []}, "agreed must be"),
+        (
+            {"second": second(FINNISH), "agreed": True, "forms_from_second": []},
+            "says agreed is true, and the second reader's first question is not an acceptable form",
+        ),
+        (
+            {"second": second(FINLAND.upper()), "agreed": False, "forms_from_second": []},
+            "says agreed is false, and the second reader's first question is an acceptable form",
+        ),
+        (
+            {"second": second(FINLAND), "agreed": True, "forms_from_second": [FINNISH]},
+            "which the reader did not write",
+        ),
+        (
+            {"second": second(FINLAND, FINNISH), "agreed": True, "forms_from_second": [FINNISH]},
+            "and does not list it",
+        ),
+        (
+            {
+                "standalone": [FINLAND, FINNISH],
+                "second": second(FINNISH),
+                "agreed": True,
+                "forms_from_second": [FINNISH, FINNISH],
+            },
+            "names one form from the second reading twice",
+        ),
+    ],
+)
+def test_a_second_reading_that_is_recorded_untruly_is_refused(
+    tmp_path: Path, fields: dict[str, Any], problem: str
+) -> None:
+    path = write_cases(tmp_path / "cases.jsonl", row(**fields))
+
+    with pytest.raises(DatasetError, match=re.escape(problem)):
+        load_cases(path)
+
+
 def test_the_fingerprint_follows_what_is_sent_and_nothing_else() -> None:
     base = case_of()
 

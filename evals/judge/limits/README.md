@@ -2,7 +2,7 @@
 
 120 answers that test one decision of the judge and no other. Each cites a handbook passage that states a rule with a limit, an exception or a condition. Some answers keep the limit and some leave it out. The set exists because this is the one kind of fault the answer evaluation found in real answers and could not measure: the judge passed all three real cases, and the readers of [the first set](../README.md) split on them ([issue 59](https://github.com/MumukshuPanchal/handbook-rag/issues/59)). Making these examples is the first step of that issue. Measuring the judge on them is the second, and has not been done.
 
-> **Status: written and labelled by one model session, and read by no one else.** One session of `claude-fable-5-2` chose the passages, wrote every answer and gave every label, on 24 November 2026. A second labelling, by a reader who is not shown these labels, is planned and has not been made. No person has read any of it. The judge has not been run on it.
+> **Status: written and labelled by one model session, and labelled again by three reader sessions that did not see those labels, each on a third of the answers. No person has read it.** One session of `claude-fable-5-2` chose the passages, wrote every answer and gave every label, on 24 November 2026. The same day, three reader sessions labelled all 197 statements again, from the passage and the rubric alone. They agree with the first labels on 196. The statement they split on is labelled `unclear` and is not counted. All four sessions are models, and a model's check is not a person's review. The judge has not been run on the file.
 
 ## What is in it
 
@@ -14,14 +14,15 @@
 | Answers, three for each passage | 120 |
 | Statements in all | 197 |
 | labelled `supported` | 157 |
-| labelled `unsupported` | 40 |
+| labelled `unsupported` | 39 |
+| labelled `unclear`, and not counted | 1 |
 
 Each passage has one answer of each kind:
 
 | Kind | What the answer does | Its labels | Answers |
 |---|---|---|---|
 | `kept` | Gives the rule with its limit | Every statement `supported` | 40 |
-| `dropped` | Gives the rule and leaves the limit out. Nothing else in it is wrong | One statement `unsupported`, the others `supported` | 40 |
+| `dropped` | Gives the rule and leaves the limit out. Nothing else in it is wrong | One statement `unsupported`, the others `supported`. In one of the 40 that statement is `unclear`, because the readers split on it | 40 |
 | `harmless` | Leaves out something that does not limit what it says | Every statement `supported` | 40 |
 
 The `harmless` answers are there so that a judge which faults every omission is not rewarded. They come in two forms. In 10 the statement gives the limited rule with its limit and leaves out something beside it. In 30 it gives another rule or fact of the passage and does not speak of the limited rule at all. The second form is the sharper control: the passage states a limit, the statement does not mention it, and the statement is still supported.
@@ -33,17 +34,17 @@ The `harmless` answers are there so that a judge which faults every omission is 
 | `detail` | 3 |
 | `other_rule` | 30 |
 
-The limits are of seven kinds:
+The limits are of seven kinds. The last column is what a check of the judge counts and prints a line for. It is one short for `when`, because the statement the readers split on is not counted.
 
-| Kind of limit | What the passage limits the rule to | Passages |
-|---|---|---|
-| `who` | Some people: those who leave by their own choice, managers, four named teams | 5 |
-| `where` | A country or a company entity | 7 |
-| `when` | A period: the first year, onboarding, accounts created after a date | 5 |
-| `how_much` | An amount or a count that decides whether the rule applies at all | 6 |
-| `unless` | An exception: "unless", "exempt", "most, but not all" | 6 |
-| `only_if` | A condition: "as long as", "provided that", "only if", "only in exceptional cases" | 7 |
-| `what` | One product, plan, kind of deal or kind of feature | 4 |
+| Kind of limit | What the passage limits the rule to | Passages | Faults a check counts |
+|---|---|---|---|
+| `who` | Some people: those who leave by their own choice, managers, four named teams | 5 | 5 |
+| `where` | A country or a company entity | 7 | 7 |
+| `when` | A period: the first year, onboarding, accounts created after a date | 5 | 4 |
+| `how_much` | An amount or a count that decides whether the rule applies at all | 6 | 6 |
+| `unless` | An exception: "unless", "exempt", "most, but not all" | 6 | 6 |
+| `only_if` | A condition: "as long as", "provided that", "only if", "only in exceptional cases" | 7 | 7 |
+| `what` | One product, plan, kind of deal or kind of feature | 4 | 4 |
 
 The passages come from 16 of the handbook's 34 sections:
 
@@ -79,17 +80,21 @@ A statement names its passage by number. The passage is recorded by chunk id, wi
 | Field | Where | Meaning |
 |---|---|---|
 | `case` | Answer | `lim-001` to `lim-120`. The number says nothing of the kind: the answers were shuffled, and the three answers of a passage are at least five lines apart |
-| `kind` | Answer | `kept`, `dropped` or `harmless` |
+| `kind` | Answer | `kept`, `dropped` or `harmless`: what the answer was written to be |
 | `section` | Answer | The handbook section of the passage |
 | `limit_kind` | Answer | The kind of limit, as in the table above |
 | `limit` | Answer | The limit in the passage's own words. The same for the three answers of a passage |
 | `limit_where` | Answer | `text` or `title`: where the passage states the limit |
 | `kept_in` | `kept` answers | `statement` or `question`: where the answer carries the limit |
 | `left_out`, `left_out_kind` | `harmless` answers | Words of the passage that the answer leaves out, and what they are. For `other_rule` they are words of the limited rule |
-| `why` | Answer | One sentence: why the labels follow from the rubric |
+| `why` | Answer | One sentence by the first reader: why its labels follow from the rubric |
+| `second_session` | Answer | 1, 2 or 3: which of the three reader sessions gave this answer its second labels |
 | `question`, `passages`, `statements` | Answer | What the judge reads, as in the first set |
-| `expected`, `readers` | Statement | The label, and who gave it: `first` alone so far |
-| `planted`, `change` | The `unsupported` statement of a `dropped` answer | The kind of limit that was left out, and what was left out. `eval-judge` counts what a judge caught by `planted`, so a check prints a line for each kind of limit |
+| `expected` | Statement | The label a judge is checked against: the one both readers gave, or `unclear` where they differ |
+| `readers` | Statement | Both labels: `first`, by the session that wrote the answers, and `second`, by the reader session |
+| `second_confidence` | Statement | `high`, `medium` or `low`: how sure the second reader said it was |
+| `planted` | The 39 statements labelled `unsupported` | The kind of limit that was left out. `eval-judge` counts what a judge caught by this field, so a check prints a line for each kind of limit |
+| `change` | The statement of each `dropped` answer that leaves the limit out, all 40 | What was left out |
 
 ## How it was made
 
@@ -102,20 +107,68 @@ The labels follow [the rubric](../rubric.md) as it stood on 24 November 2026, ab
 5. **Checks by code.** The limit's words and the left-out words are in the passage, word for word. No `dropped` answer holds the limit's words. No number in a statement is absent from its passage and its question. No statement that leaves out a limit holds a widening word that its passage lacks. A test repeats these four checks. A list of the words of each statement that are not in its passage was also made by code, and read by the same session.
 6. **Order.** The 120 answers were shuffled with a fixed seed until the three answers of every passage were at least five lines apart.
 
+### The second labelling: three readers, each on a third
+
+| Step | Reader | What happened |
+|---|---|---|
+| 1 | First: one session of `claude-fable-5-2` | Chose the passages, wrote the 120 answers and labelled their 197 statements: 157 supported and 40 unsupported. Listed eleven of the 40 as open to dispute |
+| 2 | Second: three reader sessions of `claude-fable-5-2`, the model that wrote the answers | Each labelled the 40 answers of its third, and said of every label how sure it was. Their labels and reasons are in [`second-labelling.jsonl`](second-labelling.jsonl). A reader was given the question, the passage with its title, the statements and the rubric, and nothing else: no label, no kind, no note, and no word of how many answers leave a limit out |
+
+The answers were dealt by their place in the file. Of the three answers of a passage, the first went to reader 1, the second to reader 2 and the third to reader 3. So no reader saw two answers about one passage, and none could find a fault by laying answers side by side. Each reader had answers of all three kinds.
+
+| Reader session | Answers | Statements | Statements given the first reader's label |
+|---|---|---|---|
+| Reader 1 | 40 | 64 | 63 |
+| Reader 2 | 40 | 70 | 70 |
+| Reader 3 | 40 | 63 | 63 |
+
+What the comparison showed:
+
+- **The two labellings agree on 196 of 197 statements** (0.995, Cohen's kappa 0.984). No reader gave a statement `no_claim`.
+
+  | The first reader's label | Second reader: `supported` | Second reader: `unsupported` |
+  |---|---|---|
+  | `supported` | 157 | 0 |
+  | `unsupported` | 1 | 39 |
+
+- **The readers found 39 of the 40 statements that leave a limit out**, without being told that any did. That is the evidence that each of the 39 is a fault a reader can find from the passage and the rubric.
+- **They raised no alarm on a `kept` or a `harmless` answer.** All 129 statements of those 80 answers got the first reader's label.
+
+  | Kind of answer | Statements | Statements with the same label | Answers | Answers with the same labels throughout |
+  |---|---|---|---|---|
+  | In `kept` answers | 69 | 69 | 40 | 40 |
+  | In `dropped` answers | 68 | 67 | 40 | 39 |
+  | In `harmless` answers | 60 | 60 | 40 | 40 |
+
+- **The readers were sure of most labels, and said where they were not.** The ten labels below `high` are listed under the known limits, with what each reader's reason turns on.
+
+  | The second reader's confidence | Statements |
+  |---|---|
+  | `high` | 187 |
+  | `medium` | 9 |
+  | `low` | 1 |
+
+- **The statement they split on is statement 1 of `lim-026`**: "Yes. New team members get a stipend of $1,500 USD, or the local currency equivalent, for their home office set up." Its passage says the stipend is "only available during their first year of employment". The first reader labelled it `unsupported`: the passage gives the stipend a period, and the statement gives the stipend without it. The second reader labelled it `supported`, with medium confidence: the statement "keeps 'new team members' but leaves out that the stipend is only available during the first year of employment, which I read as left-out detail because the rule is not given for team members in general". The first reader had itself listed this answer among those a careful reader could call supported. No third reader was asked. As with the disputed statements of the first set, the statement keeps both labels, is labelled `unclear`, and is left out of every agreement figure. Its answer is still given to a judge and counts through its second statement, which both readers call supported.
+
+**What the second labels rest on.** For each answer a reader had the one passage it cites, and the rubric. It did not have the rest of the handbook, the other two answers about the passage, or the first reader's reasons. So a second label says whether a statement is backed by its passage as the rubric defines that, and nothing more. It is also one session's label: no answer was read by two of the three readers.
+
 ## How to use it
 
 `make eval-judge-limits` checks the first judge on this file and writes to `evals/runs/judge/limits`. It costs 120 real requests when none fails. It prints the faults caught in all and for each kind of limit. Alarms on `kept` and `harmless` answers are false alarms. `disagreements.jsonl` names the case of each, and the kind of a case is in this file.
 
-Two fixed points for reading a result. A judge that passes everything agrees on 157 of 197 statements (0.797) and on 80 of 120 answers, and catches none of the 40. A judge that faults every statement catches all 40, and 40 of its 197 alarms are right (0.203).
+Two fixed points for reading a result. The check compares 196 statements and leaves out the one whose label is unclear. A judge that passes everything agrees on 157 of the 196 (0.801) and on 81 of 120 answers, and catches none of the 39. A judge that faults every statement catches all 39, and 39 of its 196 alarms are right (0.199).
 
-**For a second reader**, show only what a judge reads: `case`, `question`, `passages`, and of each statement `number`, `text` and `cites`. Everything else tells the label or the kind. The three answers of a passage can still be found by their passage, and laying them side by side gives the fault away. So a reader should be told to judge each answer by itself, or be given the answers in three parts with one answer of each passage in each.
+**For a further reading**, show only what a judge reads, as was done for the second labelling: `case`, `question`, `passages`, and of each statement `number`, `text` and `cites`. Everything else tells the label or the kind. The three answers of a passage can still be found by their passage, and laying them side by side gives the fault away. So a reader should be given one answer of each passage and no more.
 
 ## Known limits
 
-- **One model session made all of it.** The same session chose the passages, wrote the answers and labelled them. Its labels cannot disagree with what it meant to write, only with the rubric, and nobody has checked that yet.
-- **A written fault is not a fault a model makes by itself.** The `dropped` answers were written by a model in order to carry a fault. A model that drops a limit while answering may do it in other ways, and may word the rest of the answer differently as well. Nor are the 40 equally hard: in some the limit sits in the sentence that states the rule, in others in a heading, a line of a list or the title. The check says how a judge does on these 40. The three real cases are not in this file. They stay labelled `unclear` in the first set, and are the one test of whether a result here carries over to real answers.
-- **Eleven `dropped` answers that a careful reader could call supported.** They are labelled `unsupported` because the rubric's rule on limits, as written, covers them. They are listed below with the reason a reader might differ.
-- **Answers labelled `supported` that lean on their context.** The rubric reads a statement in the context of its question and of the statements before it. A reader who does not would fault the four `kept` answers whose limit is in the question only (`lim-060`, `lim-066`, `lim-078`, `lim-116`), three statements that lean on the statement before them for the limit (statement 2 of `lim-015`, `lim-030` and `lim-034`), and the answers whose question names the entity or team of the passage's title (point 3 of how it was made). `lim-050` is doubtful in another way: it gives the length of a trial from a passage that also says who may have one.
+- **No person has read anything.** One model session wrote the answers and labelled them, and three model sessions labelled them again. Where models share a blind spot, their agreement proves nothing.
+- **Agreement shows that these readers apply the rubric alike, not that the labels are right.** It says nothing of how hard the 39 faults are for the judge either, which is another model and has passed three real cases of this fault.
+- **One second reader for each answer.** Each answer was read by one of the three reader sessions. No answer has two second labels, and no third reader settled the statement they split on.
+- **A written fault is not a fault a model makes by itself.** The `dropped` answers were written by a model in order to carry a fault. A model that drops a limit while answering may do it in other ways, and may word the rest of the answer differently as well. Nor are the 40 equally hard: in some the limit sits in the sentence that states the rule, in others in a heading, a line of a list or the title. The check says how a judge does on these answers. The three real cases are not in this file. They stay labelled `unclear` in the first set, and are the one test of whether a result here carries over to real answers.
+- **Eleven `dropped` answers that the first reader thought a careful reader could call supported.** The second readers called ten of them unsupported and one supported. That one is the statement now labelled `unclear`. They are listed below.
+- **Answers labelled `supported` that lean on their context.** The rubric reads a statement in the context of its question and of the statements before it. A reader who does not would fault the four `kept` answers whose limit is in the question only (`lim-060`, `lim-066`, `lim-078`, `lim-116`), three statements that lean on the statement before them for the limit (statement 2 of `lim-015`, `lim-030` and `lim-034`), and the answers whose question names the entity or team of the passage's title (point 3 of how it was made). `lim-050` is doubtful in another way: it gives the length of a trial from a passage that also says who may have one. The second readers called every one of these supported, `lim-066` with low confidence and the rest with high.
+- **Two statements have a slip in their wording.** In statement 2 of `lim-037`, "in Proposal stage (Stage-4) and beyond" can be read with one of the two kinds of opportunity before it or with both. Statement 1 of `lim-086` shortens an example of the passage, "existing production data accessed by our users", to "existing production data". Their readers called both supported, with medium confidence. The words were left as the readers read them, because a label is about exact words.
 - **The kinds differ on the surface.** The statements of a `harmless` answer have 17.6 words on average, those of a `kept` answer 21.4 and those of a `dropped` answer 20.9. No `harmless` answer has three statements. A judge or a reader could lean on that.
 - **Three answers share each passage.** There are 120 answers but 40 passages, and each kind of limit has 4 to 7 passages. An interval worked out as if the answers were independent is too narrow, and a figure for one kind of limit says little.
 - **Not a sample of the handbook.** Sections are not weighted by their size: `engineering` holds about a third of the chunks and 3 of the 40 passages. Pages on benefits by country are over-represented, because that is where the real faults were.
@@ -123,23 +176,50 @@ Two fixed points for reading a result. A judge that passes everything agrees on 
 - **The questions were written to fit.** A `dropped` answer needs a question that does not name the limit. People often do name their country or their role, and then the same statement is supported.
 - **Tied to one snapshot and one chunking.** After a change to either, the passages have to be found again and the labels checked.
 
-### The eleven `dropped` answers a careful reader could call supported
+### The eleven `dropped` answers the first reader listed as open to dispute
 
-| Case | Why a reader could differ |
-|---|---|
-| `lim-004`, `lim-057`, `lim-088` | The limit is only in the passage's title. A reader who does not apply the rule that a title is part of the passage finds no limit in the text |
-| `lim-077` | The limit is in a heading and the title, not in the sentence that states the rule |
-| `lim-014` | The exemption is a sentence of its own, and the statement repeats the sentence before it word for word |
-| `lim-103` | The sentence it repeats has no limit of its own. The limit is in the heading and the two sentences before |
-| `lim-090` | It drops "most, but not all". The rubric's rule on hedges speaks of a hedge that a statement adds, not of one it drops |
-| `lim-118` | The passage says that managers can submit the request. It does not say that only managers can |
-| `lim-026` | It says "new team members", which a reader may take to stand for "during their first year of employment" |
-| `lim-082` | "May be in cash" is not false: cash may be considered, in exceptional cases |
-| `lim-110` | It says the additional money "is available" and does not say for which expenses |
+The first two columns were written before the second labelling, and the third after it.
+
+| Case | Why a reader could differ | What the second reader said |
+|---|---|---|
+| `lim-004`, `lim-057`, `lim-088` | The limit is only in the passage's title. A reader who does not apply the rule that a title is part of the passage finds no limit in the text | Unsupported, all three |
+| `lim-077` | The limit is in a heading and the title, not in the sentence that states the rule | Unsupported |
+| `lim-014` | The exemption is a sentence of its own, and the statement repeats the sentence before it word for word | Unsupported |
+| `lim-103` | The sentence it repeats has no limit of its own. The limit is in the heading and the two sentences before | Unsupported, with medium confidence |
+| `lim-090` | It drops "most, but not all". The rubric's rule on hedges speaks of a hedge that a statement adds, not of one it drops | Unsupported |
+| `lim-118` | The passage says that managers can submit the request. It does not say that only managers can | Unsupported |
+| `lim-026` | It says "new team members", which a reader may take to stand for "during their first year of employment" | Supported, with medium confidence. The statement is now `unclear` |
+| `lim-082` | "May be in cash" is not false: cash may be considered, in exceptional cases | Unsupported |
+| `lim-110` | It says the additional money "is available" and does not say for which expenses | Unsupported |
+
+### Where the second readers were unsure
+
+Five places where the rubric did not decide a label by itself, as the readers' reasons show.
+
+- **A limit that only the question carries, under a statement worded as a general rule.** The rubric says "Read a statement in its context", and it says that a statement which gives a rule without its limit is "wider than the passage". All three readers followed the first sentence, and their reasons say so: reader 1 in `lim-001`, `lim-003`, `lim-012`, `lim-017` and `lim-051`, reader 2 in `lim-028`, `lim-031`, `lim-060` and `lim-068`, reader 3 in `lim-055`, `lim-066`, `lim-078`, `lim-109`, `lim-110`, `lim-116` and `lim-119`. Only one voiced a doubt: reader 3 gave `lim-066` the one `low` of the set, because its statement "is backed only when read as being about the asker's account". A reader who asked for the limit inside the statement would fault every one of these.
+- **An exception that the passage attaches to the sentence next to the one a statement gives.** Statement 2 of `lim-006` and of `lim-114` says that laptop wipes must be performed by scheduling an appointment with an IT analyst. The passage's exception, a wipe "at the request of IT", belongs to its sentence about wiping the laptop yourself. Both readers took it not to reach the sentence about the appointment and called the statement supported, reader 1 with high confidence and reader 3 with medium. The rubric does not say how far an exception reaches.
+- **A statement that can itself be read in two ways.** Statement 2 of `lim-037`, as said above. The rubric's rule on two readings speaks of a passage, not of a statement. Reader 2 took the reading that matches the passage.
+- **An instruction made from a "can" sentence.** The passage of `lim-102` says that requests "can be submitted" with a template, and the statement says "Submit the request using the `application_integration_request` template." The rubric says that permission is not obligation. Reader 2 read the instruction as the answer to a how-to question, "not as an added obligation".
+- **A limit kept in a weaker word.** "New team members" for "only available during their first year of employment", in `lim-026`. This is the statement the readers split on.
+
+The ten labels that came with less than high confidence:
+
+| Case | Statement | Confidence | Second label | What the reader's reason turns on |
+|---|---|---|---|---|
+| `lim-026` | 1 | medium | supported | "New team members" read as carrying the first-year limit. The readers split here |
+| `lim-037` | 2 | medium | supported | "In Proposal stage (Stage-4) and beyond" read as covering both kinds of opportunity before it |
+| `lim-040` | 1 | medium | supported | The statement gives when a claim can be made, and no other condition, "without saying that every customer is eligible" |
+| `lim-066` | 1 | low | supported | The limit is in the question only |
+| `lim-083` | 1 | medium | unsupported | It drops "for First Order deals". The reason states the fault and no doubt |
+| `lim-086` | 1 | medium | supported | A shortened example, read "as left-out detail of an example and not as a limit on the rule" |
+| `lim-091` | 1 | medium | unsupported | It drops "This page only applies to Zendesk Global". The reason states the fault and no doubt |
+| `lim-102` | 1 | medium | supported | An instruction made from "can be submitted" |
+| `lim-103` | 1 | medium | unsupported | The limit is in the title and the opening sentences. The reason states the fault and no doubt |
+| `lim-114` | 2 | medium | supported | The exception belongs to the other sentence, about wiping the laptop yourself |
 
 ### Where the rubric's rule on limits leaves room
 
-Found while the set was made. The pages named in brackets were left out because of these questions. No label rests on them, except where a case is named.
+Found by the first reader while the set was made. The pages named in brackets were left out because of these questions. No label rests on them, except where a case is named.
 
 - **A limit that comes in a later statement.** The rubric reads a statement in the context of the question and of the statements before it. It does not say how to read an answer whose first statement gives a rule and whose second gives the exemption from it. No answer here is built that way.
 - **A requirement in the next sentence.** "You can take breaks during your shift. You need to ensure that you are able to acknowledge a page within 15 minutes and be back at your desk shortly thereafter." Is the second sentence a condition on the first, or a second rule? (On-Call Processes and Policies.)

@@ -1,6 +1,6 @@
 # Labelled answers for checking the judges
 
-Answers whose verdicts are known. They are what a judge is checked against before any score it gives is reported: `eval-judge` gives the judge these answers and counts how often it reaches the labelled verdict. There are two sets, one for each thing a judge decides. The first is described from here on. The second, for whether an answer agrees with its reference answer, has [a section of its own](#the-second-set-answers-against-their-reference-answers) further down, with [a control](#a-control-the-reference-answers-themselves) beside it: the reference answers themselves, given as the answer. The reasoning is in [ADR 0014](../../docs/adr/0014-answer-evaluation-in-stages.md), and the commands are in the [evaluation guide](../../docs/evaluation.md).
+Answers whose verdicts are known. They are what a judge is checked against before any score it gives is reported: `eval-judge` gives the judge these answers and counts how often it reaches the labelled verdict. There are two sets, one for each thing a judge decides. The first is described from here on. The second, for whether an answer agrees with its reference answer, has [a section of its own](#the-second-set-answers-against-their-reference-answers) further down, with [a control](#a-control-the-reference-answers-themselves) beside it: the reference answers themselves, given as the answer. A further file for the first judge tests one fault alone, the limit an answer leaves out. It has [a card of its own](limits/README.md), and a lower status than the two sets. The reasoning is in [ADR 0014](../../docs/adr/0014-answer-evaluation-in-stages.md), and the commands are in the [evaluation guide](../../docs/evaluation.md).
 
 > **Status of both sets: labelled by independent model sessions, not by a person.** One model session labelled every statement, a second labelled them again without seeing the first one's labels, and a third settled the cases they left open. No person has labelled any of them. All three sessions were Claude models, which is another model family than the judge, a Gemini model.
 
@@ -64,6 +64,10 @@ The rubric changed while the labels were made. The first reader's notes showed w
 - **Dropped limits are where the rubric still leaves room.** All three unclear statements are of that kind, and so was the rule that had to be written twice.
 - **The set is tied to one snapshot and one chunking.** After a change to either, the passages have to be found again and the labels checked.
 - **The real answers come from one run of one model.** A judge that does well on them has not been shown to do well on another model's answers.
+
+### A further file for one fault: the limit an answer leaves out
+
+[`limits/cases.jsonl`](limits/cases.jsonl) holds 120 answers written to test the fault this set could not settle: 40 that keep the limit their passage states, 40 that leave it out, and 40 that leave out something harmless. It is in the format of this set and has [a card of its own](limits/README.md). **Its status is lower than that of the two sets: one model session wrote and labelled it, a second labelling is planned and not made, and no person has read it.** The status line at the top of this page does not cover it. The judge has not been checked on it. `make eval-judge-limits` would do that, for 120 real requests when none fails.
 
 ## The second set: answers against their reference answers
 
@@ -131,6 +135,6 @@ Run with `make eval-judge-references`, which costs 132 requests when none fails.
 
 ## Licence and attribution
 
-The statements and answers are replies of this project's assistant, and edits of those replies. The questions and reference answers in the second set are those of the [golden set](../golden/README.md). Some repeat a few words of the [GitLab Handbook](https://handbook.gitlab.com/), © GitLab and its contributors, used under the [Creative Commons Attribution-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-sa/4.0/) licence. The file holds no passage of the handbook: passages are named by id and read from the snapshot.
+The statements and answers are replies of this project's assistant, and edits of those replies. Those in `limits/` are neither: a model wrote them for the purpose, as [their card](limits/README.md) says. The questions and reference answers in the second set are those of the [golden set](../golden/README.md). Some repeat a few words of the [GitLab Handbook](https://handbook.gitlab.com/), © GitLab and its contributors, used under the [Creative Commons Attribution-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-sa/4.0/) licence. The file holds no passage of the handbook: passages are named by id and read from the snapshot.
 
 The files in this directory are licensed under CC BY-SA 4.0, separately from the code, which is under the MIT licence. This project is not affiliated with or endorsed by GitLab. The basis for using the handbook is recorded in [ADR 0002](../../docs/adr/0002-handbook-corpus.md).

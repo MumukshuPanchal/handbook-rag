@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve mcp eval-retrieval eval-answers eval-judge eval-judge-correct eval-judge-references eval-support eval-correct eval-adversarial eval-follow-ups eval-cache eval-compare eval-table eval-gate golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve mcp eval-retrieval eval-answers eval-judge eval-judge-correct eval-judge-references eval-judge-limits eval-support eval-correct eval-adversarial eval-follow-ups eval-cache eval-compare eval-table eval-gate golden-check golden-review
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -76,6 +76,9 @@ eval-judge-correct: ## Check the correctness judge against its labelled answers 
 
 eval-judge-references: ## Check that the correctness judge passes every reference answer given as the answer (132 real requests)
 	uv run handbook-rag eval-judge --criterion correct --cases evals/judge/correct/references.jsonl --variant references
+
+eval-judge-limits: ## Check the support judge on answers that keep or leave out a limit their passage states (120 real requests)
+	uv run handbook-rag eval-judge --cases evals/judge/limits/cases.jsonl --variant limits
 
 eval-support: ## Judge the saved answers of the scratch run: is each statement backed by its passage?
 	uv run handbook-rag eval-support

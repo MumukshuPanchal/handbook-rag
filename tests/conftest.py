@@ -1,6 +1,7 @@
 """Fixtures shared by the test suite."""
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -13,29 +14,39 @@ from tests.support import Upstream, git
 
 
 @pytest.fixture(autouse=True)
-def isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def isolated_environment(tmp_path: Path) -> Iterator[None]:
     """Make every test independent of the machine it runs on.
 
     Tests run in an empty directory, see none of the developer's application settings,
     and ignore the developer's git configuration. Without this, a local ``.env`` file or
-    a global git option could make a test pass on one machine and fail on another.
+    a global git option could make a test pass on one machine and fail on another. On
+    the developer's machine the project folder holds a ``.env`` with a real API key, so
+    the isolation is also what keeps a test from sending a real request.
+
+    It has a patcher of its own, not the test's ``monkeypatch``. Several tests call
+    ``monkeypatch.undo()`` to take back a patch of their own; on a shared patcher that
+    also took back the isolation, and the rest of the test ran in the project folder,
+    where settings read the real ``.env``.
     """
-    workdir = tmp_path / "workdir"
-    workdir.mkdir()
-    monkeypatch.chdir(workdir)
+    with pytest.MonkeyPatch.context() as isolation:
+        workdir = tmp_path / "workdir"
+        workdir.mkdir()
+        isolation.chdir(workdir)
 
-    for name in os.environ:
-        if name.startswith(("HANDBOOK_RAG_", "ANTHROPIC_", "GEMINI_", "GOOGLE_")):
-            monkeypatch.delenv(name)
+        for name in os.environ:
+            if name.startswith(("HANDBOOK_RAG_", "ANTHROPIC_", "GEMINI_", "GOOGLE_")):
+                isolation.delenv(name)
+        get_settings.cache_clear()
+
+        empty_git_config = tmp_path / "gitconfig"
+        empty_git_config.write_text("")
+        isolation.setenv("GIT_CONFIG_GLOBAL", str(empty_git_config))
+        isolation.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        for role in ("AUTHOR", "COMMITTER"):
+            isolation.setenv(f"GIT_{role}_NAME", "Test")
+            isolation.setenv(f"GIT_{role}_EMAIL", "test@example.com")
+        yield
     get_settings.cache_clear()
-
-    empty_git_config = tmp_path / "gitconfig"
-    empty_git_config.write_text("")
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty_git_config))
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    for role in ("AUTHOR", "COMMITTER"):
-        monkeypatch.setenv(f"GIT_{role}_NAME", "Test")
-        monkeypatch.setenv(f"GIT_{role}_EMAIL", "test@example.com")
 
 
 @pytest.fixture

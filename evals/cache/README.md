@@ -1,6 +1,6 @@
 # Cache question pairs
 
-Pairs of questions for choosing the similarity threshold of the semantic cache. [`pairs.jsonl`](pairs.jsonl) holds 200 of them, one on each line. Each pair puts a question of the [golden set](../golden/README.md) next to another question. In half of the pairs the other question means the same and needs exactly the golden question's answer. In the other half it only looks the same, and needs another answer or none. The task is [issue 24](https://github.com/MumukshuPanchal/handbook-rag/issues/24). What has been measured with the pairs so far is [further down](#what-has-been-measured-with-the-pairs).
+Pairs of questions for choosing the similarity threshold of the semantic cache. [`pairs.jsonl`](pairs.jsonl) holds 200 of them, one on each line. Each pair puts a question of the [golden set](../golden/README.md) next to another question. In half of the pairs the other question means the same and needs exactly the golden question's answer. In the other half it only looks the same, and needs another answer or none. The task is [issue 24](https://github.com/MumukshuPanchal/handbook-rag/issues/24). What has been measured with the pairs is [further down](#what-has-been-measured-with-the-pairs), first before the cache was built and then [as it is built](#measured-again-for-the-cache-as-it-is-built).
 
 > **Status: written and labelled by one model session, labelled again blind by a second model session, not read by a person.** Every pair, its labels and its note were written by a Claude model (`claude-opus-5-5`) in one session. A second model session labelled all 200 again without seeing those labels, and the two agree on 198 of 200 (see [the second labelling](#the-second-labelling)). No person has read the pairs. A model's check is not a person's review.
 
@@ -169,7 +169,7 @@ Two cautions:
 
 ## What has been measured with the pairs
 
-No cache is built yet. On 24 November 2026 `handbook-rag eval-cache` measured what a cache would serve, with these pairs, and saved the run as [`evals/runs/cache/baseline`](../runs/cache/baseline). It sent no request to any model API. [The evaluation guide](../../docs/evaluation.md#a-semantic-cache-measured-before-it-is-built) gives the method, every result and what the run does not show. Every figure below is from that run.
+No cache was built when this was measured. On 24 November 2026 `handbook-rag eval-cache` measured what a cache would serve, with these pairs, and saved the run as [`evals/runs/cache/baseline`](../runs/cache/baseline). It sent no request to any model API. [The evaluation guide](../../docs/evaluation.md#a-semantic-cache-measured-before-it-is-built) gives the method, every result and what the run does not show. Every figure below is from that run.
 
 The run follows the four steps above and goes further in three ways:
 
@@ -213,10 +213,20 @@ By `source`, over all agreed `different` pairs, with the number on each half:
 | `written` | 87 | 0.673 | 0.918 | 0.994 | 0.989 | 46 | 41 |
 
 - **A single pair decides each threshold.** Step 4 warns that one group can. For the similarity it is `d012`, which changes one word, "doesn't" to "does", and has the highest similarity on the choosing half. For the second model it is `d067`, an `aspect` pair that asks for which quarters a budget was allocated where its golden question asks how much.
-- **The two `different` pairs the second model scores highest are stored declines.** `d067` and `d081` are the only ones it scores above 0.9. In both, the golden question is one the handbook does not answer (`u004` and `u046`), so what a cache holds for it is a decline, and by the pair's note the other question has an answer. A cache that stores no declines would have met neither of them. That was not measured.
+- **The two `different` pairs the second model scores highest are stored declines.** `d067` and `d081` are the only ones it scores above 0.9. In both, the golden question is one the handbook does not answer (`u004` and `u046`), so what a cache holds for it is a decline, and by the pair's note the other question has an answer. A cache that stores no declines would have met neither of them. That was not measured. It was measured afterwards, for [the cache as it is built](#measured-again-for-the-cache-as-it-is-built).
 - **The second model passes plain rewordings, and few others.** On the reporting half it served 2 of the 5 `reworded` and 5 of the 13 `synonyms` questions, and none of the 31 `short`, `long` and `indirect` ones. On the choosing half it served one of the 27 of those three kinds, `s062`. Most of them have at least one direction of entailment that is low, as the medians show.
 - **The 13 `golden` pairs are not close.** Two golden questions on neighbouring subjects are far apart for a near-miss, as the table by `source` shows, and 9 of them are among the 50 `different` pairs of the reporting half. The hard cases are among the 87 `written` pairs.
 - **The set is hard on purpose.** Each rate is per `different` question asked or per `same` question asked, not per question a real user asks. Whether a threshold chosen here is stricter than real use needs is not measured.
+
+## Measured again for the cache as it is built
+
+The cache was built after the measurement above ([ADR 0020](../../docs/adr/0020-an-answer-cache-that-matches-by-meaning.md)). It keeps a decline for the very question that was declined and never offers it to another question. So `handbook-rag eval-cache --no-declines` measured the pairs once more with that one change, on 24 November 2026, and saved the run as [`evals/runs/cache/no-decline-candidates`](../runs/cache/no-decline-candidates). [The evaluation guide](../../docs/evaluation.md#the-answer-cache-measured-as-it-is-built) gives every result. Every figure below is from that run.
+
+- **What changed.** The 33 stored questions that the handbook does not answer are left out of every question's candidates, and each question meets the 3 nearest of the other 132. That such a question holds a decline is the golden set's label, and no model was asked. Pairs, split, rule and models are those of the first run.
+- **The threshold is lower: 0.8669 by the weaker direction.** It is set by `d004`, a `region` pair, at 0.8206. The cache's default threshold is this number.
+- **On the reporting half it served 16 of the 49 `same` questions right, none of the 50 `different` ones, and no `same` question another stored question's answer.**
+- **That half held nothing hard near the threshold.** The highest score at which a `different` pair of it would be served is 0.143. A `same` pair, `s073`, would be served another stored question's answer up to 0.854.
+- **On 200 other splits of the same pairs the rule served something wrong on the reporting half in 91.**
 
 ## Format
 

@@ -18,6 +18,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from handbook_rag.config import Settings
 from handbook_rag.evals.compare import compare_runs
 
 ROOT = Path(__file__).parents[1]
@@ -542,6 +543,65 @@ def test_the_cache_measurement_is_the_committed_run() -> None:
         str(cache["stored_questions"]),
     ]
     assert "Whether the threshold is stricter than real use needs is not measured." in said(start)
+
+
+def test_the_answer_cache_section_is_the_second_committed_cache_run() -> None:
+    """The cache as it is built: its row, its default threshold, and what did not test it.
+
+    The figures of the one check with the real service, and what the default costs on
+    the development laptop, were measured by hand and are held by no run.
+    """
+    run = summary("cache/no-decline-candidates")
+    cache = run["cache_view"]
+    assert cache["chosen_policy"] == "entails_min"
+    weaker = cache["policies"]["entails_min"]
+    same, different = weaker["reporting"]["same"], weaker["reporting"]["different"]
+    threshold = Settings().cache_threshold
+    start = readme().index("### The answer cache\n")
+    section = readme()[start : readme().index("## Limitations\n")]
+
+    def counted(count: int, of: int, estimate: Any) -> str:
+        return f"{count} of {of}: {with_interval(estimate)}"
+
+    (row,) = table(readme(), "| As the cache is built | Threshold |")
+    assert row == [
+        "Second check, weaker direction",
+        f"{weaker['threshold']:.4f}",
+        counted(same["right"], same["pairs"], same["right_share"]),
+        counted(same["wrong"], same["pairs"], same["wrong_share"]),
+        counted(different["wrong"], different["pairs"], different["wrong_share"]),
+    ]
+    assert f"{weaker['threshold']:.4f}" == str(threshold), "the setting is the run's threshold"
+    assert "(evals/runs/cache/no-decline-candidates)" in section
+    assert "with stored declines left out of the candidates" in section
+    assert cache["stored_declines"]["left_out"] == cache["stored_unanswered"]
+
+    def says(start: str) -> list[str]:
+        return numbers(line_starting(section, start))
+
+    assert says("- **The cache's default threshold is that") == [str(threshold)]
+    assert "there is none about real questions" in line_starting(
+        section, "- **The cache's default threshold is that"
+    )
+    hardest = weaker["highest_wrong"]["reporting"]
+    over = cache["other_splits"]["policies"]["entails_min"]
+    start_of_line = "- **That half did not test the threshold hard.**"
+    assert says(start_of_line) == [
+        three(hardest["different"]["score"]),
+        three(hardest["same"]["score"]),
+        three(threshold - hardest["same"]["score"]),
+        str(cache["other_splits"]["splits"]),
+        str(over["splits_with_something_wrong"]),
+    ]
+    assert f"`{hardest['same']['pair']}`" in line_starting(section, start_of_line)
+    assert hardest["same"]["own"] is False, "another stored question's answer"
+    # The trade-off is said once, plainly, and the cache is nowhere called safe.
+    assert section.count("will sometimes be served its answer") == 1
+    for word in ("safe", "guarantee", "proves"):
+        assert word not in section.lower(), word
+    # The day of the check by hand is the day of the run.
+    year, month, day = run["measured_on"].split("-")
+    assert f"on {int(day)} {MONTHS.split()[int(month) - 1]} {year}, by hand" in section
 
 
 def test_every_link_to_a_file_or_a_heading_leads_to_one() -> None:

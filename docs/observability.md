@@ -102,6 +102,62 @@ Token counts, model names and passage ids are always recorded. A model call that
 
 The `ask` command and `/ask` count tokens read from the cache apart from the others, because they are billed at another price. The trace counts them in, so the two can differ when the provider served part of a prompt from its cache.
 
+## The trace of a cached answer
+
+The command line and the API hand `answer_question` the answer cache ([ADR 0020](adr/0020-an-answer-cache-that-matches-by-meaning.md)). Its lookup is the first span under `answer`, `cache.lookup`. When the cache holds an answer, the trace ends there: no search and no request to the model follow, and the `answer` span records 0 requests.
+
+Three real lookups, from the check of the cache with the real service on 24 November 2026 ([the evaluation guide](evaluation.md#checked-once-with-the-real-service)). The spans of the web framework around them are left out, and so are the search's own spans.
+
+The same question asked a second time, served by the exact tier:
+
+```
+answer                                    29.1 ms   0 requests
+  cache.lookup                            28.8 ms   hit, tier exact
+    vector_store.retrieve                 27.9 ms   the entry under the question's key
+```
+
+A rewording, served by meaning:
+
+```
+answer                                   163.0 ms   0 requests
+  cache.lookup                           162.9 ms   hit, tier semantic, 1 candidate
+    vector_store.retrieve                 17.8 ms   nothing under the question's own key
+    embed.query                           24.2 ms   the question's vector
+    vector_store.query                    29.5 ms   the nearest stored questions
+    cache.verify                          90.4 ms   the second model, 1 pair read both ways
+```
+
+A near-miss that the second model turned down, so that the answer was written as always:
+
+```
+answer                                  1781.9 ms   1 request
+  cache.lookup                           268.9 ms   miss, 1 candidate
+    vector_store.retrieve                 49.5 ms
+    embed.query                           56.9 ms
+    vector_store.query                    30.8 ms
+    cache.verify                         130.3 ms
+  search                                 141.9 ms
+    ...
+  generate_content gemini-3.5-flash-lite  1370.0 ms
+```
+
+| Attribute of `cache.lookup` | What it says |
+|---|---|
+| `handbook_rag.mode` | The cache's mode: `exact` or `semantic` |
+| `handbook_rag.cache.read` | False when the caller asked for a fresh answer, so that nothing was looked up |
+| `handbook_rag.cache.hit` | Whether a stored answer was served |
+| `handbook_rag.cache.tier` | On a hit: `exact` or `semantic` |
+| `handbook_rag.cache.candidates` | How many stored questions the second model was asked about |
+| `handbook_rag.cache.similarities` | The cosine of each candidate, nearest first |
+| `handbook_rag.cache.entails_forward`, `handbook_rag.cache.entails_backward` | What the second model said of each candidate, in the same order: that the stored question implies the new one, and the other way round. The weaker of the two is compared with the threshold |
+| `handbook_rag.cache.failure` | When a tier could not be asked: the kind of error. The lookup then counts as a miss, and the span is not marked as failed |
+
+For the near-miss above the three lists held one entry each: a cosine of 0.895544, and 0.092647 and 0.042248 from the second model. With them a trace says why a stored answer was served or was not. `cache.verify` records the second model's name and how many pairs it read. The two calls to the vector store name the cache's own collection in `db.collection.name`.
+
+**The stored questions are questions that people asked**, so they are recorded only when content is on: `handbook_rag.cache.questions` then lists the stored question of each candidate. In the check, with content off, none of the questions asked was in any span.
+
+The answer is stored after the `answer` span has closed, by a thread of its own, and leaves no span: a failure to store is logged. When the service starts, loading the second model and asking it once is the span `cache.warm_up`, which took 1,106.0 ms in the check.
+
 ## Through the HTTP API
 
 A request to the API is traced the same way. Its response carries the trace id in `trace_id` and in the `X-Trace-Id` header, and the header is also on a failed request, which is the one a caller most needs an id for. The web framework adds its own spans around ours: the trace starts with `POST /search` or `POST /ask`, which records the method, the route and the status code, and our spans sit inside it.
@@ -117,6 +173,8 @@ Start the service with `HANDBOOK_RAG_TRACING=true make serve`.
 | Span | What it covers | Worth looking at |
 |---|---|---|
 | `answer` | One question, from search to answer | `answered`, `query.chars`, `requests`, `fallback` |
+| `cache.lookup` | What the answer cache did with the question, when the caller has a cache | The table in the section on a cached answer, above |
+| `cache.verify` | The cache's second model, when a stored question was near | `model` and `pairs` |
 | `generate_content <model>` or `chat <model>` | One request to the language model; an answer can have several | The table in the section above |
 | `search` | The whole search: the request to `/search`, or the search inside an answer | `mode` (for `/search`), and the ids, pages and scores of what was returned |
 | `retrieve.reranked` | Search plus reranking, when reranking is on | The final order |
@@ -137,10 +195,11 @@ A trace holds ids, scores, sizes, token counts and timings, and the names of thi
 - **The question** is recorded as its length only. Questions can contain personal or confidential details, and traces are usually kept longer and read by more people than the application's own data.
 - **The answer's text** is left out for the same reason: it can repeat what the question said.
 - **Chunk text** is never copied into a trace. A chunk id leads back to the text in the index.
+- **The stored questions** that the answer cache compared a new question with are left out, like the question itself: only their number and their scores are recorded.
 - **The prompt** sent to the model is not recorded. It is the question, the instructions and the passages, and the passages can be found by their ids.
 - **An error** is recorded as its kind only, for example `handbook_rag.index.store.VectorStoreError`. An error message can quote the input that caused it, and a stack trace holds file paths from the machine it ran on.
 
-`HANDBOOK_RAG_TRACE_CONTENT=true` adds the question's text, the answer's text with its citation markers (on the `answer` span), and the full message and stack trace of an error, for debugging on your own machine.
+`HANDBOOK_RAG_TRACE_CONTENT=true` adds the question's text, the answer's text with its citation markers (on the `answer` span), the stored questions the cache compared it with (on `cache.lookup`), and the full message and stack trace of an error, for debugging on your own machine.
 
 ## Using a trace to debug
 
@@ -203,4 +262,5 @@ The span of a model call carries the names of OpenTelemetry's conventions for ge
 ## Not traced yet
 
 - **Evaluation runs and indexing.** An evaluation run records per-question latency in its own files. An evaluation calls the same pipeline, so with tracing switched on each question would leave a trace, but nothing switches it on there.
+- **Storing an answer in the cache.** It happens after the answer's trace has ended, and a failure is logged.
 - **The prompt sent to the model**, by design, and the answer's text unless content is switched on: see what is not recorded, above.

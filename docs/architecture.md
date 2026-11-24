@@ -15,7 +15,7 @@ Two further parts keep the system honest: an **evaluation harness** that measure
 
 1. **Measure first.** A change to any stage must show up in the evaluation. A baseline is measured before anything is optimised.
 2. **Replaceable stages.** Each stage sits behind a small interface, so one can change without the others noticing.
-3. **One code path.** The answer evaluation and the API call the same pipeline function. We never measure a copy of the system.
+3. **One code path.** The answer evaluation and the API call the same pipeline function. We never measure a copy of the system. The evaluation calls it without the answer cache, which only the command line and the API pass: an answer that was stored says nothing about the model.
 4. **Reproducible.** The handbook is pinned to a commit, chunk IDs are deterministic, dependencies are locked.
 5. **Observable.** With tracing switched on, every request produces a trace. It is off by default and on in Docker Compose. Debugging starts from data.
 
@@ -47,8 +47,10 @@ flowchart LR
     F --> G["Generate<br/>Gemini or Claude, with citations"]
     RR -.-> G
     G --> API
+    API <--> AC["Answer cache<br/>the same question, or one that means the same"]
     R1 <--> Q[("Qdrant")]
     R2 <--> Q
+    AC <--> Q
     API -. "spans" .-> T["Trace backend<br/>(OTLP)"]
 ```
 
@@ -65,6 +67,8 @@ flowchart LR
 
 Steps 2 to 6 are one function, `answer_question` in `pipeline.py`, which the command line, the API and the answer evaluation all call. It also opens the spans of the answer, so every caller leaves the same trace. The wrapper that repeats requests opens the span of each request itself, and the pipeline opens the one span of a generator that is not wrapped, such as the evaluation's. The API runs it in a worker thread for each answer, because the generators block while the model writes, and a setting caps how many run at once.
 
+**The answer cache comes before step 2.** When the command line or the API asks, `answer_question` first looks the question up among the answers stored earlier: by a key, for the very same question, and then, in the default mode, among the stored questions nearest to it, each read together with the new one by a second model. A stored answer is returned without a search and without a request to the model. It says that it is one, and names the question it was written for. Otherwise the answer is written as described above, and kept if it is a whole answer of the answer model. The answers are kept in Qdrant, in a collection of its own beside the index, whose name changes with everything that decides an answer. A question that only looks like a stored one will sometimes be served its answer, which is why a cached answer names its question. Details, with the measured risk: [ADR 0020](adr/0020-an-answer-cache-that-matches-by-meaning.md).
+
 The first working version (the baseline) used dense search only and skipped steps 3 and 4. Hybrid search is now the default, and reranking is available but switched off. Both decisions, with the measurements and the judgement behind them, are in [ADR 0011](adr/0011-hybrid-retrieval-by-default.md).
 
 ## Components
@@ -77,6 +81,7 @@ The first working version (the baseline) used dense search only and skipped step
 | Vector store | Store and search vectors with metadata | Qdrant | [ADR 0004](adr/0004-qdrant-as-vector-store.md) |
 | Fusion | Merge dense and sparse rankings | Our own code (reciprocal rank fusion) | [ADR 0003](adr/0003-own-pipeline-code-instead-of-a-framework.md) |
 | Reranker | Re-score candidates against the question | sentence-transformers cross-encoder | [ADR 0005](adr/0005-local-embedding-and-reranking-models.md) |
+| Answer cache | Serve a stored answer again, to the same question or to one that means the same, and say so | Our own code, a Qdrant collection of its own, and a cross-encoder trained for natural language inference as the second check | [ADR 0020](adr/0020-an-answer-cache-that-matches-by-meaning.md) |
 | Generator | Write a grounded, cited answer, within time limits, with an optional fallback model | Gemini through Google's API by default, or Claude through the Anthropic API | [ADR 0013](adr/0013-gemini-free-tier-with-marker-citations.md), [ADR 0006](adr/0006-claude-with-native-citations-for-generation.md), [ADR 0010](adr/0010-search-result-blocks-and-declining.md), [ADR 0018](adr/0018-time-limits-retries-and-a-fallback.md) |
 | API | HTTP interface: `POST /ask` (JSON or server-sent events), `POST /search` and `GET /health` | FastAPI | [ADR 0015](adr/0015-answers-over-http.md) |
 | MCP server | Handbook search as one read-only tool for AI assistants, over standard input and output. Added after version 1.0.0 | The official MCP SDK for Python, its low-level server | [ADR 0017](adr/0017-an-mcp-server-for-search.md) |
@@ -132,7 +137,7 @@ Details and reasoning: [ADR 0007](adr/0007-evaluation-strategy.md).
 
 ## Observability
 
-With tracing switched on, each request produces one trace with a span per stage: dense search, sparse search, fusion, rerank when it is on, and one span for each request to the language model. Tracing is off by default (`HANDBOOK_RAG_TRACING`) and on in Docker Compose. Spans record what is needed to explain an answer: which chunks were retrieved with which scores, which model was called, how many tokens were used, and whether the assistant abstained.
+With tracing switched on, each request produces one trace with a span per stage: the answer cache's lookup, dense search, sparse search, fusion, rerank when it is on, and one span for each request to the language model. Tracing is off by default (`HANDBOOK_RAG_TRACING`) and on in Docker Compose. Spans record what is needed to explain an answer: which chunks were retrieved with which scores, which model was called, how many tokens were used, and whether the assistant abstained.
 
 Spans are exported over OTLP to a local trace backend, and to any other OTLP-compatible backend by changing configuration.
 
@@ -157,7 +162,8 @@ src/handbook_rag/
     retrieve/           dense, sparse, fusion, rerank
     generate/           prompt assembly, one generator per provider, citation mapping,
                         and the wrapper that asks again and falls back
-    cache/              the second check a semantic cache would make; no cache is built yet
+    cache/              the answer cache: its two tiers, where it keeps answers,
+                        and the second check on a stored question
     pipeline.py         the single entry point: question in, answer out
     api.py              the FastAPI application
     demo.py             serves the demo page and its two files, with their security headers
@@ -178,14 +184,14 @@ compose.yaml            API, Qdrant and trace backend
 
 ## Deployment view
 
-`docker compose up` starts three containers: the API, Qdrant, and the trace backend. Indexing is a one-off command run against the same Qdrant instance. Embedding and reranking models run inside the API process, and in the container on the CPU. Outside a container the API, and the MCP server, still run the embedding model on the CPU, because they embed one question at a time, unless `HANDBOOK_RAG_EMBEDDING_DEVICE` names another device; the reranker, loaded only when reranking is on, uses a GPU when there is one. An AI assistant starts the MCP server itself, as a child process on the same machine: it loads models of its own, in the background so that its handshake does not wait, and searches the same Qdrant. The image is built in two stages and runs as an unprivileged user; the handbook snapshot and the model files live in volumes, so they are downloaded once.
+`docker compose up` starts three containers: the API, Qdrant, and the trace backend. Indexing is a one-off command run against the same Qdrant instance. Embedding and reranking models run inside the API process, and in the container on the CPU. So does the answer cache's second model, which the API loads when it starts in the mode `semantic` with an answer model, and always on the CPU. Outside a container the API, and the MCP server, still run the embedding model on the CPU, because they embed one question at a time, unless `HANDBOOK_RAG_EMBEDDING_DEVICE` names another device; the reranker, loaded only when reranking is on, uses a GPU when there is one. An AI assistant starts the MCP server itself, as a child process on the same machine: it loads models of its own, in the background so that its handshake does not wait, and searches the same Qdrant. The image is built in two stages and runs as an unprivileged user; the handbook snapshot and the model files live in volumes, so they are downloaded once.
 
 ## Security and safety
 
 - **Retrieved text is data, not instructions.** Handbook text is passed to the model in blocks of its own, separate from the instructions: search result blocks for Claude, tagged blocks for Gemini. The instructions say to treat anything inside them as content, never as commands. For Gemini, text in a passage that looks like one of the block's tags is made harmless first. This limits prompt injection through corpus content. How far it holds against the real model is measured by the [adversarial tests](evaluation.md#adversarial-tests), which plant instructions in passages. The MCP tool hands passages to a model that is not this project's, so its description tells that model the same: the passages are material to quote, never instructions to follow. Whether that model holds to it is not measured.
 - **Abstention over invention.** When the retrieved passages do not contain the answer, the assistant says so. This behaviour is tested with unanswerable questions.
 - **No secrets in git.** Credentials live in the environment.
-- **Minimal data retention.** Questions and answers are not stored outside traces, and traces record metadata only unless content recording is switched on for local debugging.
+- **What is kept.** The answer cache keeps each question with its answer in the vector store, until the cache is emptied or a setting that decides an answer changes. A stored question is shown to whoever is served its answer, and a question can hold personal details. `HANDBOOK_RAG_CACHE_MODE=off` keeps nothing, and `exact` shows a reader only their own question. Traces record metadata only unless content recording is switched on for local debugging.
 - **Fixed words for callers.** A failure is reported to a caller of the API, or of the MCP tool, in words chosen in advance. The error's own message, which can name files, settings and internal addresses, goes to the log with the trace ID.
 - **The demo page shows what the API sends as text.** An answer is written by a model from pages anyone can edit, and the adversarial tests saw a planted link reach the answer. So the page's script builds each element and sets its text, never reads text as HTML or code, and never takes the reader to another page; an address in an answer is not a link, and the only links are the sources' pages, for `https://` and `http://` addresses. A strict content security policy, sent as a header, lets the page run only its own script and style and talk only to its own server, and forbids framing. A test reads the script for the calls it must not make. Details: [ADR 0016](adr/0016-a-demo-page-without-a-build-step.md).
 - **Not in scope for the first version.** User authentication, rate limiting for each caller and per-document permissions. The demo page adds none of them, so it is for the machine the service runs on. The corpus is public, so no access control is needed to read it. The API caps how many answers it writes at once, which protects the model's allowance from a burst, not from one caller who keeps asking.
@@ -210,6 +216,8 @@ compose.yaml            API, Qdrant and trace backend
 | Reciprocal rank fusion | A way to merge ranked lists using only each item's rank, so scores on different scales need no calibration |
 | Cross-encoder | A model that reads a question and a passage together and scores the match; more accurate than comparing embeddings, but slower |
 | Grounded | Every claim in the answer is supported by the retrieved passages |
+| Answer cache | Answers stored once and served again without asking the model: to the same question, or to one that a second model judges to mean the same |
+| Natural language inference | Deciding whether one sentence follows from another. The answer cache's second model is trained for it, and is asked in both directions |
 | Golden set | A fixed set of test questions with known good answers, each checked before use. Here the checks were made by model sessions, and not yet by a person |
 | Hit@k | Share of questions for which a relevant passage appears in the top k results |
 | Recall@k | Share of a question's evidence that appears in the top k results. Equal to Hit@k when every question has one piece of evidence |

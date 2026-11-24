@@ -15,6 +15,7 @@ from google import genai
 from google.genai import types as genai_types
 from qdrant_client import QdrantClient
 
+from handbook_rag.cache.verify import EntailmentVerifier
 from handbook_rag.config import Settings
 from handbook_rag.evals.judging import Criterion, Judge, JudgedCase
 from handbook_rag.generate.base import GenerationError, Generator
@@ -53,6 +54,8 @@ GEMINI_RETRY_STATUS_CODES = [408, 500, 502, 503, 504]
 # requests a minute, and a steady stream of questions that fail quickly, one after
 # another in the four slots, can send more than that in a minute.
 ANSWER_ATTEMPTS = 3
+# Where the verifier of a semantic cache runs (see make_verifier).
+VERIFIER_DEVICE = "cpu"
 
 
 def make_embedder(settings: Settings) -> SentenceTransformerEmbedder:
@@ -112,6 +115,16 @@ def make_sparse_encoder(settings: Settings) -> Bm25Encoder:
 
 def make_reranker(settings: Settings) -> CrossEncoderReranker:
     return CrossEncoderReranker(settings.rerank_model)
+
+
+def make_verifier(settings: Settings) -> EntailmentVerifier:
+    """The second check on a stored question, for a semantic cache and its measurement.
+
+    It runs on the CPU. It reads a handful of short pairs for each question, the kind of
+    work for which the service already embeds on the CPU (see
+    :func:`settings_for_serving`), and the one measurement of it was made there.
+    """
+    return EntailmentVerifier.load(settings.cache_verifier_model, device=VERIFIER_DEVICE)
 
 
 def describe_retrieval(

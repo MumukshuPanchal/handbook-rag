@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve mcp eval-retrieval eval-answers eval-judge eval-judge-correct eval-judge-references eval-support eval-correct eval-adversarial eval-compare eval-table eval-gate golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve mcp eval-retrieval eval-answers eval-judge eval-judge-correct eval-judge-references eval-support eval-correct eval-adversarial eval-cache eval-compare eval-table eval-gate golden-check golden-review
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -85,6 +85,9 @@ eval-correct: ## Judge the saved answers of the scratch run: does each one agree
 
 eval-adversarial: ## Plant instructions in passages and ask questions outside the handbook (one real request each)
 	uv run handbook-rag eval-adversarial
+
+eval-cache: ## Measure what a semantic cache would serve, on labelled pairs of questions (no request to a model API)
+	uv run handbook-rag eval-cache
 
 eval-compare: ## Compare two runs: make eval-compare base=baseline candidate=v1
 	uv run handbook-rag eval-compare $(base) $(candidate)

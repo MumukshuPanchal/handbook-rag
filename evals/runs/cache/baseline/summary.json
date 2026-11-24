@@ -1,0 +1,2001 @@
+{
+  "description": "The cosine of two question embeddings, and an entailment check in both directions, as the test of a semantic cache.",
+  "config": {
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "embedding_query_prefix": "Represent this sentence for searching relevant passages: ",
+    "embedding_device": "cpu",
+    "verifier_model": "cross-encoder/nli-deberta-v3-small",
+    "verifier_device": "cpu",
+    "verifier_outputs": [
+      "contradiction",
+      "entailment",
+      "neutral"
+    ],
+    "verifier_entailment_output": 1,
+    "pairs_fingerprint": "0045c3c13f4b975a",
+    "stored_questions_fingerprint": "83b6d025ee5b34b1",
+    "candidates": 3,
+    "floor": 0.5,
+    "split_seed": "cache-pairs-split-1",
+    "other_splits": 200
+  },
+  "pairs": {
+    "in_file": 200,
+    "agreed": 198,
+    "same": 98,
+    "different": 100,
+    "disputed": [
+      "s078",
+      "s100"
+    ],
+    "other_is_a_stored_question": 13
+  },
+  "pair_view": {
+    "what": "Each agreed pair by itself: the scores of its golden question against its other question. A description of all agreed pairs, not a held-out result.",
+    "scores": {
+      "cosine": {
+        "area_under_curve": 0.5457142857142857,
+        "by_kind": {
+          "same": {
+            "pairs": 98,
+            "min": 0.7370349057001755,
+            "median": 0.9174871749601181,
+            "max": 0.9909282189661826
+          },
+          "different": {
+            "pairs": 100,
+            "min": 0.49744712125935453,
+            "median": 0.899826765672141,
+            "max": 0.993528535448292
+          }
+        },
+        "by_how": {
+          "reworded": {
+            "pairs": 20,
+            "min": 0.8438564777087905,
+            "median": 0.9636957498324147,
+            "max": 0.9909282189661826
+          },
+          "short": {
+            "pairs": 20,
+            "min": 0.7528846834982025,
+            "median": 0.8930191715467442,
+            "max": 0.9521728487788466
+          },
+          "long": {
+            "pairs": 20,
+            "min": 0.7999431025980298,
+            "median": 0.9062094280454427,
+            "max": 0.9686367448275596
+          },
+          "synonyms": {
+            "pairs": 20,
+            "min": 0.7612319771199179,
+            "median": 0.9071771862145915,
+            "max": 0.9603798869566667
+          },
+          "indirect": {
+            "pairs": 18,
+            "min": 0.7370349057001755,
+            "median": 0.8894833917344429,
+            "max": 0.9602954684863416
+          }
+        },
+        "by_what_differs": {
+          "region": {
+            "pairs": 13,
+            "min": 0.6637333395827243,
+            "median": 0.911839313700318,
+            "max": 0.9802713121237548
+          },
+          "number": {
+            "pairs": 12,
+            "min": 0.7626888588108155,
+            "median": 0.9382410677690634,
+            "max": 0.993528535448292
+          },
+          "entity": {
+            "pairs": 20,
+            "min": 0.49744712125935453,
+            "median": 0.8493647093480252,
+            "max": 0.9178833708368301
+          },
+          "negation": {
+            "pairs": 15,
+            "min": 0.8726141792868,
+            "median": 0.9341110707250859,
+            "max": 0.992366914591555
+          },
+          "scope": {
+            "pairs": 15,
+            "min": 0.8149127875811417,
+            "median": 0.9688526248073467,
+            "max": 0.9914531744338733
+          },
+          "aspect": {
+            "pairs": 25,
+            "min": 0.6045740295780405,
+            "median": 0.8404005491583506,
+            "max": 0.9615801859563433
+          }
+        },
+        "at_or_above": [
+          {
+            "threshold": 0.5,
+            "same": 98,
+            "different": 99
+          },
+          {
+            "threshold": 0.6,
+            "same": 98,
+            "different": 98
+          },
+          {
+            "threshold": 0.7,
+            "same": 98,
+            "different": 92
+          },
+          {
+            "threshold": 0.8,
+            "same": 92,
+            "different": 80
+          },
+          {
+            "threshold": 0.85,
+            "same": 80,
+            "different": 71
+          },
+          {
+            "threshold": 0.9,
+            "same": 58,
+            "different": 50
+          },
+          {
+            "threshold": 0.925,
+            "same": 40,
+            "different": 38
+          },
+          {
+            "threshold": 0.95,
+            "same": 25,
+            "different": 25
+          },
+          {
+            "threshold": 0.975,
+            "same": 5,
+            "different": 11
+          },
+          {
+            "threshold": 0.99,
+            "same": 1,
+            "different": 3
+          },
+          {
+            "threshold": 0.995,
+            "same": 0,
+            "different": 0
+          },
+          {
+            "threshold": 0.999,
+            "same": 0,
+            "different": 0
+          }
+        ]
+      },
+      "entails_forward": {
+        "area_under_curve": 0.8797959183673469,
+        "by_kind": {
+          "same": {
+            "pairs": 98,
+            "min": 0.0005861791432835162,
+            "median": 0.9588448107242584,
+            "max": 0.9984616041183472
+          },
+          "different": {
+            "pairs": 100,
+            "min": 2.2078604160924442e-05,
+            "median": 0.0012046106858178973,
+            "max": 0.9943538904190063
+          }
+        },
+        "by_how": {
+          "reworded": {
+            "pairs": 20,
+            "min": 0.6689452528953552,
+            "median": 0.9954437613487244,
+            "max": 0.9984616041183472
+          },
+          "short": {
+            "pairs": 20,
+            "min": 0.0075342063792049885,
+            "median": 0.9671626091003418,
+            "max": 0.994902491569519
+          },
+          "long": {
+            "pairs": 20,
+            "min": 0.0006578097236342728,
+            "median": 0.03942972049117088,
+            "max": 0.9896531701087952
+          },
+          "synonyms": {
+            "pairs": 20,
+            "min": 0.001964462921023369,
+            "median": 0.979723334312439,
+            "max": 0.998067319393158
+          },
+          "indirect": {
+            "pairs": 18,
+            "min": 0.0005861791432835162,
+            "median": 0.007346708094701171,
+            "max": 0.9913132786750793
+          }
+        },
+        "by_what_differs": {
+          "region": {
+            "pairs": 13,
+            "min": 3.142347122775391e-05,
+            "median": 0.00022017961600795388,
+            "max": 0.820620059967041
+          },
+          "number": {
+            "pairs": 12,
+            "min": 0.00026048877043649554,
+            "median": 0.0019089633133262396,
+            "max": 0.8613435626029968
+          },
+          "entity": {
+            "pairs": 20,
+            "min": 5.285014776745811e-05,
+            "median": 0.001370642683468759,
+            "max": 0.8016265034675598
+          },
+          "negation": {
+            "pairs": 15,
+            "min": 9.33480478124693e-05,
+            "median": 0.0012130985269322991,
+            "max": 0.9253694415092468
+          },
+          "scope": {
+            "pairs": 15,
+            "min": 0.00012711889576166868,
+            "median": 0.0010965137043967843,
+            "max": 0.8983570337295532
+          },
+          "aspect": {
+            "pairs": 25,
+            "min": 2.2078604160924442e-05,
+            "median": 0.00506479199975729,
+            "max": 0.9943538904190063
+          }
+        },
+        "at_or_above": [
+          {
+            "threshold": 0.5,
+            "same": 69,
+            "different": 13
+          },
+          {
+            "threshold": 0.6,
+            "same": 68,
+            "different": 12
+          },
+          {
+            "threshold": 0.7,
+            "same": 65,
+            "different": 11
+          },
+          {
+            "threshold": 0.8,
+            "same": 63,
+            "different": 10
+          },
+          {
+            "threshold": 0.85,
+            "same": 61,
+            "different": 8
+          },
+          {
+            "threshold": 0.9,
+            "same": 58,
+            "different": 5
+          },
+          {
+            "threshold": 0.925,
+            "same": 56,
+            "different": 5
+          },
+          {
+            "threshold": 0.95,
+            "same": 52,
+            "different": 3
+          },
+          {
+            "threshold": 0.975,
+            "same": 43,
+            "different": 1
+          },
+          {
+            "threshold": 0.99,
+            "same": 29,
+            "different": 1
+          },
+          {
+            "threshold": 0.995,
+            "same": 14,
+            "different": 0
+          },
+          {
+            "threshold": 0.999,
+            "same": 0,
+            "different": 0
+          }
+        ]
+      },
+      "entails_backward": {
+        "area_under_curve": 0.8637755102040816,
+        "by_kind": {
+          "same": {
+            "pairs": 98,
+            "min": 0.0001168705421150662,
+            "median": 0.9621284902095795,
+            "max": 0.9983184337615967
+          },
+          "different": {
+            "pairs": 100,
+            "min": 1.950163823494222e-05,
+            "median": 0.0006591541459783912,
+            "max": 0.988816499710083
+          }
+        },
+        "by_how": {
+          "reworded": {
+            "pairs": 20,
+            "min": 0.004826853983104229,
+            "median": 0.9902392029762268,
+            "max": 0.9979721903800964
+          },
+          "short": {
+            "pairs": 20,
+            "min": 0.0001168705421150662,
+            "median": 0.007511308416724205,
+            "max": 0.9752336740493774
+          },
+          "long": {
+            "pairs": 20,
+            "min": 0.018777765333652496,
+            "median": 0.9872328639030457,
+            "max": 0.9983184337615967
+          },
+          "synonyms": {
+            "pairs": 20,
+            "min": 0.00024778046645224094,
+            "median": 0.9856707751750946,
+            "max": 0.9982613921165466
+          },
+          "indirect": {
+            "pairs": 18,
+            "min": 0.00022376212291419506,
+            "median": 0.007745480397716165,
+            "max": 0.9947029948234558
+          }
+        },
+        "by_what_differs": {
+          "region": {
+            "pairs": 13,
+            "min": 2.068809226329904e-05,
+            "median": 0.0002306506794411689,
+            "max": 0.9595061540603638
+          },
+          "number": {
+            "pairs": 12,
+            "min": 0.0001397468731738627,
+            "median": 0.000812748825410381,
+            "max": 0.9188678860664368
+          },
+          "entity": {
+            "pairs": 20,
+            "min": 1.950163823494222e-05,
+            "median": 0.0008320667839143425,
+            "max": 0.8889930844306946
+          },
+          "negation": {
+            "pairs": 15,
+            "min": 7.427194941556081e-05,
+            "median": 0.00031808018684387207,
+            "max": 0.9470947980880737
+          },
+          "scope": {
+            "pairs": 15,
+            "min": 0.0006068708607926965,
+            "median": 0.0033286649268120527,
+            "max": 0.9431536197662354
+          },
+          "aspect": {
+            "pairs": 25,
+            "min": 6.453043170040473e-05,
+            "median": 0.0003552930720616132,
+            "max": 0.988816499710083
+          }
+        },
+        "at_or_above": [
+          {
+            "threshold": 0.5,
+            "same": 59,
+            "different": 10
+          },
+          {
+            "threshold": 0.6,
+            "same": 59,
+            "different": 9
+          },
+          {
+            "threshold": 0.7,
+            "same": 56,
+            "different": 9
+          },
+          {
+            "threshold": 0.8,
+            "same": 56,
+            "different": 9
+          },
+          {
+            "threshold": 0.85,
+            "same": 55,
+            "different": 9
+          },
+          {
+            "threshold": 0.9,
+            "same": 55,
+            "different": 8
+          },
+          {
+            "threshold": 0.925,
+            "same": 54,
+            "different": 5
+          },
+          {
+            "threshold": 0.95,
+            "same": 52,
+            "different": 2
+          },
+          {
+            "threshold": 0.975,
+            "same": 44,
+            "different": 1
+          },
+          {
+            "threshold": 0.99,
+            "same": 26,
+            "different": 0
+          },
+          {
+            "threshold": 0.995,
+            "same": 16,
+            "different": 0
+          },
+          {
+            "threshold": 0.999,
+            "same": 0,
+            "different": 0
+          }
+        ]
+      },
+      "entails_min": {
+        "area_under_curve": 0.865204081632653,
+        "by_kind": {
+          "same": {
+            "pairs": 98,
+            "min": 0.0001168705421150662,
+            "median": 0.07004792429506779,
+            "max": 0.998067319393158
+          },
+          "different": {
+            "pairs": 100,
+            "min": 1.950163823494222e-05,
+            "median": 0.000416646187659353,
+            "max": 0.988816499710083
+          }
+        },
+        "by_how": {
+          "reworded": {
+            "pairs": 20,
+            "min": 0.004826853983104229,
+            "median": 0.9889636039733887,
+            "max": 0.9979721903800964
+          },
+          "short": {
+            "pairs": 20,
+            "min": 0.0001168705421150662,
+            "median": 0.007186906179413199,
+            "max": 0.9752336740493774
+          },
+          "long": {
+            "pairs": 20,
+            "min": 0.0006578097236342728,
+            "median": 0.03942972049117088,
+            "max": 0.9861344695091248
+          },
+          "synonyms": {
+            "pairs": 20,
+            "min": 0.00024778046645224094,
+            "median": 0.9120146632194519,
+            "max": 0.998067319393158
+          },
+          "indirect": {
+            "pairs": 18,
+            "min": 0.00022376212291419506,
+            "median": 0.0014481289545074105,
+            "max": 0.9913132786750793
+          }
+        },
+        "by_what_differs": {
+          "region": {
+            "pairs": 13,
+            "min": 2.068809226329904e-05,
+            "median": 0.00013508160191122442,
+            "max": 0.820620059967041
+          },
+          "number": {
+            "pairs": 12,
+            "min": 0.0001397468731738627,
+            "median": 0.000409208339988254,
+            "max": 0.1426519751548767
+          },
+          "entity": {
+            "pairs": 20,
+            "min": 1.950163823494222e-05,
+            "median": 0.0003902800817741081,
+            "max": 0.49459847807884216
+          },
+          "negation": {
+            "pairs": 15,
+            "min": 7.427194941556081e-05,
+            "median": 0.00031808018684387207,
+            "max": 0.005261075682938099
+          },
+          "scope": {
+            "pairs": 15,
+            "min": 0.00012711889576166868,
+            "median": 0.0008471672190353274,
+            "max": 0.13393014669418335
+          },
+          "aspect": {
+            "pairs": 25,
+            "min": 2.2078604160924442e-05,
+            "median": 0.00021668433328159153,
+            "max": 0.988816499710083
+          }
+        },
+        "at_or_above": [
+          {
+            "threshold": 0.5,
+            "same": 45,
+            "different": 3
+          },
+          {
+            "threshold": 0.6,
+            "same": 44,
+            "different": 3
+          },
+          {
+            "threshold": 0.7,
+            "same": 39,
+            "different": 3
+          },
+          {
+            "threshold": 0.8,
+            "same": 38,
+            "different": 3
+          },
+          {
+            "threshold": 0.85,
+            "same": 37,
+            "different": 2
+          },
+          {
+            "threshold": 0.9,
+            "same": 36,
+            "different": 2
+          },
+          {
+            "threshold": 0.925,
+            "same": 35,
+            "different": 2
+          },
+          {
+            "threshold": 0.95,
+            "same": 34,
+            "different": 1
+          },
+          {
+            "threshold": 0.975,
+            "same": 29,
+            "different": 1
+          },
+          {
+            "threshold": 0.99,
+            "same": 15,
+            "different": 0
+          },
+          {
+            "threshold": 0.995,
+            "same": 8,
+            "different": 0
+          },
+          {
+            "threshold": 0.999,
+            "same": 0,
+            "different": 0
+          }
+        ]
+      },
+      "entails_mean": {
+        "area_under_curve": 0.914795918367347,
+        "by_kind": {
+          "same": {
+            "pairs": 98,
+            "min": 0.0011061216937378049,
+            "median": 0.5163966156542301,
+            "max": 0.9982168972492218
+          },
+          "different": {
+            "pairs": 100,
+            "min": 3.137917701678816e-05,
+            "median": 0.0014473221526714042,
+            "max": 0.9915851950645447
+          }
+        },
+        "by_how": {
+          "reworded": {
+            "pairs": 20,
+            "min": 0.4998844317160547,
+            "median": 0.9917352497577667,
+            "max": 0.9982168972492218
+          },
+          "short": {
+            "pairs": 20,
+            "min": 0.010722055798396468,
+            "median": 0.490007778047584,
+            "max": 0.9770759642124176
+          },
+          "long": {
+            "pairs": 20,
+            "min": 0.01540273753926158,
+            "median": 0.5163966156542301,
+            "max": 0.98789381980896
+          },
+          "synonyms": {
+            "pairs": 20,
+            "min": 0.0011061216937378049,
+            "median": 0.9490228891372681,
+            "max": 0.9981643557548523
+          },
+          "indirect": {
+            "pairs": 18,
+            "min": 0.001132124540163204,
+            "median": 0.09651978744659573,
+            "max": 0.9930081367492676
+          }
+        },
+        "by_what_differs": {
+          "region": {
+            "pairs": 13,
+            "min": 3.137917701678816e-05,
+            "median": 0.00018286614067619666,
+            "max": 0.8612417578697205
+          },
+          "number": {
+            "pairs": 12,
+            "min": 0.0003667247365228832,
+            "median": 0.00809508003294468,
+            "max": 0.45964272190758493
+          },
+          "entity": {
+            "pairs": 20,
+            "min": 3.6175893001200166e-05,
+            "median": 0.0010563418036326766,
+            "max": 0.6384186893701553
+          },
+          "negation": {
+            "pairs": 15,
+            "min": 8.380999861401506e-05,
+            "median": 0.0012861152354162186,
+            "max": 0.4761779368855059
+          },
+          "scope": {
+            "pairs": 15,
+            "min": 0.0003669948782771826,
+            "median": 0.0021633319556713104,
+            "max": 0.5161435902118683
+          },
+          "aspect": {
+            "pairs": 25,
+            "min": 4.330451793066459e-05,
+            "median": 0.002668304252438247,
+            "max": 0.9915851950645447
+          }
+        },
+        "at_or_above": [
+          {
+            "threshold": 0.5,
+            "same": 55,
+            "different": 5
+          },
+          {
+            "threshold": 0.6,
+            "same": 46,
+            "different": 4
+          },
+          {
+            "threshold": 0.7,
+            "same": 44,
+            "different": 3
+          },
+          {
+            "threshold": 0.8,
+            "same": 41,
+            "different": 3
+          },
+          {
+            "threshold": 0.85,
+            "same": 39,
+            "different": 3
+          },
+          {
+            "threshold": 0.9,
+            "same": 38,
+            "different": 2
+          },
+          {
+            "threshold": 0.925,
+            "same": 37,
+            "different": 2
+          },
+          {
+            "threshold": 0.95,
+            "same": 36,
+            "different": 2
+          },
+          {
+            "threshold": 0.975,
+            "same": 31,
+            "different": 1
+          },
+          {
+            "threshold": 0.99,
+            "same": 20,
+            "different": 1
+          },
+          {
+            "threshold": 0.995,
+            "same": 10,
+            "different": 0
+          },
+          {
+            "threshold": 0.999,
+            "same": 0,
+            "different": 0
+          }
+        ]
+      }
+    }
+  },
+  "cache_view": {
+    "stored_questions": 165,
+    "candidates": 3,
+    "floor": 0.5,
+    "own_question": {
+      "same": {
+        "pairs": 98,
+        "nearest": 98,
+        "among_candidates": 98
+      },
+      "different": {
+        "pairs": 100,
+        "nearest": 94,
+        "among_candidates": 95
+      }
+    },
+    "questions_with_fewer_candidates": 0,
+    "stored_above_floor": {
+      "min": 6,
+      "median": 66.0,
+      "max": 129
+    },
+    "split": {
+      "seed": "cache-pairs-split-1",
+      "groups": 117,
+      "largest_group": 10,
+      "choosing": {
+        "pairs": 99,
+        "same": 49,
+        "different": 50,
+        "groups": 64
+      },
+      "reporting": {
+        "pairs": 99,
+        "same": 49,
+        "different": 50,
+        "groups": 53
+      }
+    },
+    "policies": {
+      "cosine": {
+        "threshold": null,
+        "decided_by": {
+          "pair": "d012",
+          "kind": "different",
+          "group": "negation",
+          "served": "q021",
+          "own": true,
+          "score": 0.992366914591555
+        },
+        "choosing": {
+          "same": {
+            "pairs": 49,
+            "right": 0,
+            "wrong": 0,
+            "missed": 49
+          },
+          "different": {
+            "pairs": 50,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 50
+          }
+        },
+        "reporting": {
+          "same": {
+            "pairs": 49,
+            "right": 0,
+            "wrong": 0,
+            "missed": 49,
+            "right_share": {
+              "mean": 0.0,
+              "low": 0.0,
+              "high": 0.07269782028398425,
+              "count": 49
+            },
+            "wrong_share": {
+              "mean": 0.0,
+              "low": 0.0,
+              "high": 0.07269782028398425,
+              "count": 49
+            },
+            "missed_share": {
+              "mean": 1.0,
+              "low": 0.9273021797160157,
+              "high": 1.0,
+              "count": 49
+            }
+          },
+          "different": {
+            "pairs": 50,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 50,
+            "wrong_share": {
+              "mean": 0.0,
+              "low": 0.0,
+              "high": 0.07134760017861413,
+              "count": 50
+            }
+          }
+        },
+        "reporting_by_how": {
+          "reworded": {
+            "pairs": 5,
+            "right": 0,
+            "wrong": 0,
+            "missed": 5
+          },
+          "short": {
+            "pairs": 9,
+            "right": 0,
+            "wrong": 0,
+            "missed": 9
+          },
+          "long": {
+            "pairs": 10,
+            "right": 0,
+            "wrong": 0,
+            "missed": 10
+          },
+          "synonyms": {
+            "pairs": 13,
+            "right": 0,
+            "wrong": 0,
+            "missed": 13
+          },
+          "indirect": {
+            "pairs": 12,
+            "right": 0,
+            "wrong": 0,
+            "missed": 12
+          }
+        },
+        "reporting_by_what_differs": {
+          "region": {
+            "pairs": 10,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 10
+          },
+          "number": {
+            "pairs": 7,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 7
+          },
+          "entity": {
+            "pairs": 9,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 9
+          },
+          "negation": {
+            "pairs": 7,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 7
+          },
+          "scope": {
+            "pairs": 8,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 8
+          },
+          "aspect": {
+            "pairs": 9,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 9
+          }
+        },
+        "wrong_on_reporting": []
+      },
+      "entails_min": {
+        "threshold": 0.9893561601638794,
+        "decided_by": {
+          "pair": "d067",
+          "kind": "different",
+          "group": "aspect",
+          "served": "u004",
+          "own": true,
+          "score": 0.988816499710083
+        },
+        "choosing": {
+          "same": {
+            "pairs": 49,
+            "right": 10,
+            "wrong": 0,
+            "missed": 39
+          },
+          "different": {
+            "pairs": 50,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 50
+          }
+        },
+        "reporting": {
+          "same": {
+            "pairs": 49,
+            "right": 7,
+            "wrong": 0,
+            "missed": 42,
+            "right_share": {
+              "mean": 0.14285714285714285,
+              "low": 0.0709642368177327,
+              "high": 0.2666770633851132,
+              "count": 49
+            },
+            "wrong_share": {
+              "mean": 0.0,
+              "low": 0.0,
+              "high": 0.07269782028398425,
+              "count": 49
+            },
+            "missed_share": {
+              "mean": 0.8571428571428571,
+              "low": 0.7333229366148867,
+              "high": 0.9290357631822672,
+              "count": 49
+            }
+          },
+          "different": {
+            "pairs": 50,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 50,
+            "wrong_share": {
+              "mean": 0.0,
+              "low": 0.0,
+              "high": 0.07134760017861413,
+              "count": 50
+            }
+          }
+        },
+        "reporting_by_how": {
+          "reworded": {
+            "pairs": 5,
+            "right": 2,
+            "wrong": 0,
+            "missed": 3
+          },
+          "short": {
+            "pairs": 9,
+            "right": 0,
+            "wrong": 0,
+            "missed": 9
+          },
+          "long": {
+            "pairs": 10,
+            "right": 0,
+            "wrong": 0,
+            "missed": 10
+          },
+          "synonyms": {
+            "pairs": 13,
+            "right": 5,
+            "wrong": 0,
+            "missed": 8
+          },
+          "indirect": {
+            "pairs": 12,
+            "right": 0,
+            "wrong": 0,
+            "missed": 12
+          }
+        },
+        "reporting_by_what_differs": {
+          "region": {
+            "pairs": 10,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 10
+          },
+          "number": {
+            "pairs": 7,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 7
+          },
+          "entity": {
+            "pairs": 9,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 9
+          },
+          "negation": {
+            "pairs": 7,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 7
+          },
+          "scope": {
+            "pairs": 8,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 8
+          },
+          "aspect": {
+            "pairs": 9,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 9
+          }
+        },
+        "wrong_on_reporting": []
+      },
+      "entails_mean": {
+        "threshold": 0.9917868226766586,
+        "decided_by": {
+          "pair": "d067",
+          "kind": "different",
+          "group": "aspect",
+          "served": "u004",
+          "own": true,
+          "score": 0.9915851950645447
+        },
+        "choosing": {
+          "same": {
+            "pairs": 49,
+            "right": 10,
+            "wrong": 0,
+            "missed": 39
+          },
+          "different": {
+            "pairs": 50,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 50
+          }
+        },
+        "reporting": {
+          "same": {
+            "pairs": 49,
+            "right": 7,
+            "wrong": 0,
+            "missed": 42,
+            "right_share": {
+              "mean": 0.14285714285714285,
+              "low": 0.0709642368177327,
+              "high": 0.2666770633851132,
+              "count": 49
+            },
+            "wrong_share": {
+              "mean": 0.0,
+              "low": 0.0,
+              "high": 0.07269782028398425,
+              "count": 49
+            },
+            "missed_share": {
+              "mean": 0.8571428571428571,
+              "low": 0.7333229366148867,
+              "high": 0.9290357631822672,
+              "count": 49
+            }
+          },
+          "different": {
+            "pairs": 50,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 50,
+            "wrong_share": {
+              "mean": 0.0,
+              "low": 0.0,
+              "high": 0.07134760017861413,
+              "count": 50
+            }
+          }
+        },
+        "reporting_by_how": {
+          "reworded": {
+            "pairs": 5,
+            "right": 2,
+            "wrong": 0,
+            "missed": 3
+          },
+          "short": {
+            "pairs": 9,
+            "right": 0,
+            "wrong": 0,
+            "missed": 9
+          },
+          "long": {
+            "pairs": 10,
+            "right": 0,
+            "wrong": 0,
+            "missed": 10
+          },
+          "synonyms": {
+            "pairs": 13,
+            "right": 5,
+            "wrong": 0,
+            "missed": 8
+          },
+          "indirect": {
+            "pairs": 12,
+            "right": 0,
+            "wrong": 0,
+            "missed": 12
+          }
+        },
+        "reporting_by_what_differs": {
+          "region": {
+            "pairs": 10,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 10
+          },
+          "number": {
+            "pairs": 7,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 7
+          },
+          "entity": {
+            "pairs": 9,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 9
+          },
+          "negation": {
+            "pairs": 7,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 7
+          },
+          "scope": {
+            "pairs": 8,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 8
+          },
+          "aspect": {
+            "pairs": 9,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 9
+          }
+        },
+        "wrong_on_reporting": []
+      }
+    },
+    "chosen_policy": "entails_min",
+    "zero_wrong_allows": {
+      "near_misses": 50,
+      "up_to": 0.07134760017861413
+    },
+    "whole_set": {
+      "what": "All agreed pairs at fixed thresholds, and at the threshold the rule would choose with all of them in view. A description: these thresholds are scored on the pairs they are read from.",
+      "curves": {
+        "cosine": [
+          {
+            "threshold": 0.5,
+            "same": {
+              "pairs": 98,
+              "right": 98,
+              "wrong": 0,
+              "missed": 0
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 100,
+              "wrong_own": 94,
+              "wrong_other": 6,
+              "not_served": 0
+            }
+          },
+          {
+            "threshold": 0.6,
+            "same": {
+              "pairs": 98,
+              "right": 98,
+              "wrong": 0,
+              "missed": 0
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 99,
+              "wrong_own": 94,
+              "wrong_other": 5,
+              "not_served": 1
+            }
+          },
+          {
+            "threshold": 0.7,
+            "same": {
+              "pairs": 98,
+              "right": 98,
+              "wrong": 0,
+              "missed": 0
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 96,
+              "wrong_own": 92,
+              "wrong_other": 4,
+              "not_served": 4
+            }
+          },
+          {
+            "threshold": 0.8,
+            "same": {
+              "pairs": 98,
+              "right": 92,
+              "wrong": 0,
+              "missed": 6
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 81,
+              "wrong_own": 80,
+              "wrong_other": 1,
+              "not_served": 19
+            }
+          },
+          {
+            "threshold": 0.85,
+            "same": {
+              "pairs": 98,
+              "right": 80,
+              "wrong": 0,
+              "missed": 18
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 71,
+              "wrong_own": 71,
+              "wrong_other": 0,
+              "not_served": 29
+            }
+          },
+          {
+            "threshold": 0.9,
+            "same": {
+              "pairs": 98,
+              "right": 58,
+              "wrong": 0,
+              "missed": 40
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 50,
+              "wrong_own": 50,
+              "wrong_other": 0,
+              "not_served": 50
+            }
+          },
+          {
+            "threshold": 0.925,
+            "same": {
+              "pairs": 98,
+              "right": 40,
+              "wrong": 0,
+              "missed": 58
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 38,
+              "wrong_own": 38,
+              "wrong_other": 0,
+              "not_served": 62
+            }
+          },
+          {
+            "threshold": 0.95,
+            "same": {
+              "pairs": 98,
+              "right": 25,
+              "wrong": 0,
+              "missed": 73
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 25,
+              "wrong_own": 25,
+              "wrong_other": 0,
+              "not_served": 75
+            }
+          },
+          {
+            "threshold": 0.975,
+            "same": {
+              "pairs": 98,
+              "right": 5,
+              "wrong": 0,
+              "missed": 93
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 11,
+              "wrong_own": 11,
+              "wrong_other": 0,
+              "not_served": 89
+            }
+          },
+          {
+            "threshold": 0.99,
+            "same": {
+              "pairs": 98,
+              "right": 1,
+              "wrong": 0,
+              "missed": 97
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 3,
+              "wrong_own": 3,
+              "wrong_other": 0,
+              "not_served": 97
+            }
+          },
+          {
+            "threshold": 0.995,
+            "same": {
+              "pairs": 98,
+              "right": 0,
+              "wrong": 0,
+              "missed": 98
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 0,
+              "wrong_own": 0,
+              "wrong_other": 0,
+              "not_served": 100
+            }
+          },
+          {
+            "threshold": 0.999,
+            "same": {
+              "pairs": 98,
+              "right": 0,
+              "wrong": 0,
+              "missed": 98
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 0,
+              "wrong_own": 0,
+              "wrong_other": 0,
+              "not_served": 100
+            }
+          }
+        ],
+        "entails_min": [
+          {
+            "threshold": 0.5,
+            "same": {
+              "pairs": 98,
+              "right": 45,
+              "wrong": 1,
+              "missed": 52
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 3,
+              "wrong_own": 3,
+              "wrong_other": 0,
+              "not_served": 97
+            }
+          },
+          {
+            "threshold": 0.6,
+            "same": {
+              "pairs": 98,
+              "right": 44,
+              "wrong": 1,
+              "missed": 53
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 3,
+              "wrong_own": 3,
+              "wrong_other": 0,
+              "not_served": 97
+            }
+          },
+          {
+            "threshold": 0.7,
+            "same": {
+              "pairs": 98,
+              "right": 39,
+              "wrong": 1,
+              "missed": 58
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 3,
+              "wrong_own": 3,
+              "wrong_other": 0,
+              "not_served": 97
+            }
+          },
+          {
+            "threshold": 0.8,
+            "same": {
+              "pairs": 98,
+              "right": 38,
+              "wrong": 1,
+              "missed": 59
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 3,
+              "wrong_own": 3,
+              "wrong_other": 0,
+              "not_served": 97
+            }
+          },
+          {
+            "threshold": 0.85,
+            "same": {
+              "pairs": 98,
+              "right": 37,
+              "wrong": 1,
+              "missed": 60
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 2,
+              "wrong_own": 2,
+              "wrong_other": 0,
+              "not_served": 98
+            }
+          },
+          {
+            "threshold": 0.9,
+            "same": {
+              "pairs": 98,
+              "right": 36,
+              "wrong": 0,
+              "missed": 62
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 2,
+              "wrong_own": 2,
+              "wrong_other": 0,
+              "not_served": 98
+            }
+          },
+          {
+            "threshold": 0.925,
+            "same": {
+              "pairs": 98,
+              "right": 35,
+              "wrong": 0,
+              "missed": 63
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 2,
+              "wrong_own": 2,
+              "wrong_other": 0,
+              "not_served": 98
+            }
+          },
+          {
+            "threshold": 0.95,
+            "same": {
+              "pairs": 98,
+              "right": 34,
+              "wrong": 0,
+              "missed": 64
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 1,
+              "wrong_own": 1,
+              "wrong_other": 0,
+              "not_served": 99
+            }
+          },
+          {
+            "threshold": 0.975,
+            "same": {
+              "pairs": 98,
+              "right": 29,
+              "wrong": 0,
+              "missed": 69
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 1,
+              "wrong_own": 1,
+              "wrong_other": 0,
+              "not_served": 99
+            }
+          },
+          {
+            "threshold": 0.99,
+            "same": {
+              "pairs": 98,
+              "right": 15,
+              "wrong": 0,
+              "missed": 83
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 0,
+              "wrong_own": 0,
+              "wrong_other": 0,
+              "not_served": 100
+            }
+          },
+          {
+            "threshold": 0.995,
+            "same": {
+              "pairs": 98,
+              "right": 8,
+              "wrong": 0,
+              "missed": 90
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 0,
+              "wrong_own": 0,
+              "wrong_other": 0,
+              "not_served": 100
+            }
+          },
+          {
+            "threshold": 0.999,
+            "same": {
+              "pairs": 98,
+              "right": 0,
+              "wrong": 0,
+              "missed": 98
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 0,
+              "wrong_own": 0,
+              "wrong_other": 0,
+              "not_served": 100
+            }
+          }
+        ],
+        "entails_mean": [
+          {
+            "threshold": 0.5,
+            "same": {
+              "pairs": 98,
+              "right": 55,
+              "wrong": 1,
+              "missed": 42
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 4,
+              "wrong_own": 4,
+              "wrong_other": 0,
+              "not_served": 96
+            }
+          },
+          {
+            "threshold": 0.6,
+            "same": {
+              "pairs": 98,
+              "right": 46,
+              "wrong": 1,
+              "missed": 51
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 3,
+              "wrong_own": 3,
+              "wrong_other": 0,
+              "not_served": 97
+            }
+          },
+          {
+            "threshold": 0.7,
+            "same": {
+              "pairs": 98,
+              "right": 44,
+              "wrong": 1,
+              "missed": 53
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 3,
+              "wrong_own": 3,
+              "wrong_other": 0,
+              "not_served": 97
+            }
+          },
+          {
+            "threshold": 0.8,
+            "same": {
+              "pairs": 98,
+              "right": 41,
+              "wrong": 1,
+              "missed": 56
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 3,
+              "wrong_own": 3,
+              "wrong_other": 0,
+              "not_served": 97
+            }
+          },
+          {
+            "threshold": 0.85,
+            "same": {
+              "pairs": 98,
+              "right": 39,
+              "wrong": 1,
+              "missed": 58
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 3,
+              "wrong_own": 3,
+              "wrong_other": 0,
+              "not_served": 97
+            }
+          },
+          {
+            "threshold": 0.9,
+            "same": {
+              "pairs": 98,
+              "right": 38,
+              "wrong": 1,
+              "missed": 59
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 2,
+              "wrong_own": 2,
+              "wrong_other": 0,
+              "not_served": 98
+            }
+          },
+          {
+            "threshold": 0.925,
+            "same": {
+              "pairs": 98,
+              "right": 37,
+              "wrong": 0,
+              "missed": 61
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 2,
+              "wrong_own": 2,
+              "wrong_other": 0,
+              "not_served": 98
+            }
+          },
+          {
+            "threshold": 0.95,
+            "same": {
+              "pairs": 98,
+              "right": 36,
+              "wrong": 0,
+              "missed": 62
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 2,
+              "wrong_own": 2,
+              "wrong_other": 0,
+              "not_served": 98
+            }
+          },
+          {
+            "threshold": 0.975,
+            "same": {
+              "pairs": 98,
+              "right": 31,
+              "wrong": 0,
+              "missed": 67
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 1,
+              "wrong_own": 1,
+              "wrong_other": 0,
+              "not_served": 99
+            }
+          },
+          {
+            "threshold": 0.99,
+            "same": {
+              "pairs": 98,
+              "right": 20,
+              "wrong": 0,
+              "missed": 78
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 1,
+              "wrong_own": 1,
+              "wrong_other": 0,
+              "not_served": 99
+            }
+          },
+          {
+            "threshold": 0.995,
+            "same": {
+              "pairs": 98,
+              "right": 10,
+              "wrong": 0,
+              "missed": 88
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 0,
+              "wrong_own": 0,
+              "wrong_other": 0,
+              "not_served": 100
+            }
+          },
+          {
+            "threshold": 0.999,
+            "same": {
+              "pairs": 98,
+              "right": 0,
+              "wrong": 0,
+              "missed": 98
+            },
+            "different": {
+              "pairs": 100,
+              "wrong": 0,
+              "wrong_own": 0,
+              "wrong_other": 0,
+              "not_served": 100
+            }
+          }
+        ]
+      },
+      "chosen_on_all_pairs": {
+        "cosine": {
+          "threshold": null,
+          "same": {
+            "pairs": 98,
+            "right": 0,
+            "wrong": 0,
+            "missed": 98
+          },
+          "different": {
+            "pairs": 100,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 100
+          }
+        },
+        "entails_min": {
+          "threshold": 0.9893129467964172,
+          "same": {
+            "pairs": 98,
+            "right": 17,
+            "wrong": 0,
+            "missed": 81
+          },
+          "different": {
+            "pairs": 100,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 100
+          }
+        },
+        "entails_mean": {
+          "threshold": 0.9917868226766586,
+          "same": {
+            "pairs": 98,
+            "right": 17,
+            "wrong": 0,
+            "missed": 81
+          },
+          "different": {
+            "pairs": 100,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 100
+          }
+        }
+      }
+    },
+    "other_splits": {
+      "splits": 200,
+      "policies": {
+        "cosine": {
+          "chosen": 0,
+          "splits_without_a_threshold": 183,
+          "right_share": {
+            "min": 0.0,
+            "median": 0.0,
+            "max": 0.04081632653061224
+          },
+          "wrong_share_of_different": {
+            "min": 0.0,
+            "median": 0.0,
+            "max": 0.14285714285714285
+          },
+          "splits_with_nothing_wrong": 183,
+          "splits_with_something_wrong": 17
+        },
+        "entails_min": {
+          "chosen": 127,
+          "splits_without_a_threshold": 0,
+          "right_share": {
+            "min": 0.08163265306122448,
+            "median": 0.22448979591836735,
+            "max": 0.5
+          },
+          "wrong_share_of_different": {
+            "min": 0.0,
+            "median": 0.0,
+            "max": 0.061224489795918366
+          },
+          "splits_with_nothing_wrong": 103,
+          "splits_with_something_wrong": 97
+        },
+        "entails_mean": {
+          "chosen": 73,
+          "splits_without_a_threshold": 0,
+          "right_share": {
+            "min": 0.10204081632653061,
+            "median": 0.226828231292517,
+            "max": 0.6938775510204082
+          },
+          "wrong_share_of_different": {
+            "min": 0.0,
+            "median": 0.0,
+            "max": 0.08
+          },
+          "splits_with_nothing_wrong": 103,
+          "splits_with_something_wrong": 97
+        }
+      },
+      "chosen_policy": {
+        "splits_without_a_choice": 0,
+        "right_share": {
+          "min": 0.08163265306122448,
+          "median": 0.22448979591836735,
+          "max": 0.6938775510204082
+        },
+        "wrong_share_of_different": {
+          "min": 0.0,
+          "median": 0.0,
+          "max": 0.08
+        },
+        "splits_with_nothing_wrong": 103,
+        "splits_with_something_wrong": 97
+      }
+    }
+  },
+  "disputed": [
+    {
+      "pair": "s078",
+      "kind": "same",
+      "second_label": "different",
+      "cosine": 0.9625905984155888,
+      "entails_forward": 0.9753197431564331,
+      "entails_backward": 0.035150300711393356,
+      "entails_min": 0.035150300711393356,
+      "entails_mean": 0.5052350219339132,
+      "served": {
+        "cosine": null,
+        "entails_min": null,
+        "entails_mean": null
+      }
+    },
+    {
+      "pair": "s100",
+      "kind": "same",
+      "second_label": "different",
+      "cosine": 0.8928704927343831,
+      "entails_forward": 0.015149165876209736,
+      "entails_backward": 0.06476297974586487,
+      "entails_min": 0.015149165876209736,
+      "entails_mean": 0.0399560728110373,
+      "served": {
+        "cosine": null,
+        "entails_min": null,
+        "entails_mean": null
+      }
+    }
+  ],
+  "timing": {
+    "questions_embedded": 352,
+    "embedding_seconds": 7.3,
+    "embedding_ms_per_question": 20.6,
+    "pairs_verified": 605,
+    "verifying_seconds": 16.1,
+    "verifying_ms_per_pair": 26.6
+  }
+}

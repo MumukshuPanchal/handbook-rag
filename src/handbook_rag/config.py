@@ -142,6 +142,16 @@ class Settings(BaseSettings):
             "Reciprocal rank fusion constant. Larger values flatten the advantage of top ranks."
         ),
     )
+    cache_verifier_model: str = Field(
+        default="cross-encoder/nli-deberta-v3-small",
+        description=(
+            "Cross-encoder that checks whether a stored question and a new one imply each "
+            "other, the second check a semantic cache would make before serving a stored "
+            "answer. It must be a model trained for natural language inference whose "
+            "configuration names one output 'entailment'. No cache is built yet: only "
+            "`handbook-rag eval-cache`, which measures the check, loads it."
+        ),
+    )
 
     embedding_device: str | None = Field(
         default=None,

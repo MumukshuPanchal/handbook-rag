@@ -14,10 +14,12 @@ from typing import Annotated, Any, Literal, TextIO
 import typer
 
 from handbook_rag import __version__, wiring
+from handbook_rag.cache.verify import VerifierError
 from handbook_rag.config import Settings, get_settings
-from handbook_rag.evals import adversarial
+from handbook_rag.evals import adversarial, cache_pairs
 from handbook_rag.evals import answers as answer_runs
 from handbook_rag.evals.agreement import measure_agreement
+from handbook_rag.evals.cache_report import report_lines
 from handbook_rag.evals.careful import Pacer
 from handbook_rag.evals.compare import (
     ComparisonError,
@@ -1917,6 +1919,86 @@ def eval_gate(
             typer.echo(f"  {problem}", err=True)
         raise typer.Exit(code=1)
     typer.echo("Gate passed.")
+
+
+@app.command(name="eval-cache")
+def eval_cache(
+    pairs: Annotated[
+        Path, typer.Option(help="Cache question pairs: a JSON Lines file with one pair per line.")
+    ] = cache_pairs.PAIRS_PATH,
+    dataset: Annotated[
+        Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
+    ] = Path("evals/golden/questions.jsonl"),
+    variant: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Name of this run. The default, 'current', is a scratch run that git "
+                "ignores. Name a run to keep it: 'baseline', then 'v1', 'v2' and so on."
+            )
+        ),
+    ] = "current",
+    output: Annotated[
+        Path, typer.Option(help="Directory that holds one sub-directory per variant.")
+    ] = Path("evals/runs/cache"),
+    candidates: Annotated[
+        int,
+        typer.Option(
+            min=1, help="How many of the nearest stored questions a question is checked against."
+        ),
+    ] = cache_pairs.CANDIDATES,
+    floor: Annotated[
+        float,
+        typer.Option(
+            min=-1.0, max=1.0, help="The cosine below which a stored question is no candidate."
+        ),
+    ] = cache_pairs.FLOOR,
+) -> None:
+    """Measure what a semantic cache would serve, on labelled pairs of questions.
+
+    No cache is built, and no request goes to any model API: the embedding model and the
+    verifier run on this machine. A cache holding the golden questions is simulated, a
+    threshold is chosen for each score on one half of the pairs, and the result is
+    reported on the other half.
+    """
+    settings = get_settings()
+    try:
+        questions = _load_questions(dataset)
+        loaded = cache_pairs.load_pairs(pairs, questions)
+        # A cache would sit in the service, which embeds one question at a time on the CPU.
+        embedder = wiring.make_embedder(wiring.settings_for_serving(settings))
+        verifier = wiring.make_verifier(settings)
+        measured = cache_pairs.measure(
+            loaded,
+            questions,
+            embedder=embedder,
+            verifier=verifier,
+            candidates=candidates,
+            floor=floor,
+        )
+        summary = cache_pairs.write_cache_run(
+            measured,
+            output / variant,
+            description=(
+                "The cosine of two question embeddings, and an entailment check in both "
+                "directions, as the test of a semantic cache."
+            ),
+            config={
+                "embedding_model": settings.embedding_model,
+                "embedding_query_prefix": settings.embedding_query_prefix,
+                "embedding_device": embedder.device,
+                "verifier_model": settings.cache_verifier_model,
+                "verifier_device": wiring.VERIFIER_DEVICE,
+                **verifier.describe(),
+                **cache_pairs.data_fingerprints(loaded, questions),
+            },
+        )
+    except (DatasetError, VerifierError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    for line in report_lines(summary):
+        typer.echo(line)
+    typer.echo(f"  written to   {output / variant}")
 
 
 @app.command(name="golden-candidates")

@@ -53,9 +53,16 @@ PINNED = {
     "index/store.py": "86a0c12a6e4089f6",
     "retrieve/dense.py": "cf0501885eedfb43",
     "retrieve/fusion.py": "b5ca10d9b6f801eb",
-    "retrieve/hybrid.py": "88568557c1520ab8",
+    "retrieve/hybrid.py": "01adfb6f4a8cdfeb",
     "retrieve/rerank.py": "82d23821dd25f851",
     "retrieve/sparse.py": "8da43720d6b1ac7d",
+    # The search variants of issue 78 (a limit on chunks of one page, the number of
+    # candidates, the fusion's constant) changed hybrid.py and make_retriever and added
+    # this module. They are options of `eval-retrieval` only and off by default, and
+    # tests/retrieve/test_default_search.py pins the default search's rankings. So no
+    # stored answer was found by another search than today's default, and the version
+    # stays as it is.
+    "retrieve/spread.py": "b5ebb11203841b0a",
 }
 # How the settings become what finds passages and what writes an answer. Of wiring.py
 # only these functions are pinned, each by itself. The rest of that module connects to
@@ -67,7 +74,7 @@ PINNED_FUNCTIONS = {
         "make_embedder": "339a3818501b98e2",
         "make_sparse_encoder": "d5a50d71900c780a",
         "make_reranker": "218b8bc4eb480919",
-        "make_retriever": "b9087122c1135f59",
+        "make_retriever": "60c64124baf7cf64",
         "make_generator": "e6b04c84df123dd4",
         "_model_generator": "c9dfe91f30cf9a08",
         "_make_claude_generator": "89a6b7e2538f22ac",

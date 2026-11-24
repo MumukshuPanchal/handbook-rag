@@ -70,7 +70,12 @@ from handbook_rag.evals.retrieval import (
 from handbook_rag.evals.review import render_review_page
 from handbook_rag.evals.stage import SavedRunError, Stage
 from handbook_rag.evals.support import SUPPORT
-from handbook_rag.evals.two_passage import check_two_passage_set, kinds_of, load_reasons
+from handbook_rag.evals.two_passage import (
+    check_two_passage_set,
+    kinds_of,
+    load_reasons,
+    reading_of,
+)
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.models import Answer, CacheHit
 from handbook_rag.generate.pricing import cost_usd
@@ -719,6 +724,16 @@ def eval_retrieval(
             help="Re-score the candidates with a cross-encoder. Default: settings.",
         ),
     ] = None,
+    reviewed_only: Annotated[
+        bool,
+        typer.Option(
+            "--reviewed-only",
+            help=(
+                "Leave out the questions whose review is still pending: those no independent "
+                "checker has accepted, or one has disputed. The run names them."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Score retrieval on the golden set: is the right passage found, and how high?"""
     settings = get_settings()
@@ -732,7 +747,9 @@ def eval_retrieval(
         questions = _load_questions(dataset)
         corpus = build_corpus(settings)
         retriever = wiring.make_retriever(settings, mode, rerank)
-        report = evaluate_retrieval(questions, corpus.documents, retriever)
+        report = evaluate_retrieval(
+            questions, corpus.documents, retriever, reviewed_only=reviewed_only
+        )
     except (DatasetError, CorpusError, VectorStoreError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=1) from error
@@ -753,6 +770,11 @@ def eval_retrieval(
         f"  questions   {len(report.results)} scored, {len(report.failures)} failed, "
         f"{report.not_scored} unanswerable (not scored)"
     )
+    if report.left_out:
+        typer.echo(
+            f"  left out    {len(report.left_out)} with review pending: "
+            f"{', '.join(report.left_out)}"
+        )
     for metric in METRICS:
         estimate = report.summary[str(metric["id"])]
         typer.echo(
@@ -2213,6 +2235,7 @@ def golden_check(
     typer.echo(f"  type      {counts(report.by_type)}")
     if why is not None:
         typer.echo(f"  kinds     {counts(kinds_of(questions, why))}")
+        typer.echo(f"  reading   {counts(reading_of(questions, why))}")
     if report.by_unanswerable_kind:
         typer.echo(f"  declining {counts(report.by_unanswerable_kind)}")
     typer.echo(f"  origin    {counts(report.by_origin)}")

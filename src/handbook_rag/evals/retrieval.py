@@ -126,12 +126,18 @@ class RetrievalReport:
     by_group: dict[str, dict[str, dict[str, Estimate]]] = field(default_factory=dict)
     several: SeveralPassages | None = None
     """``None`` when no scored question needs more than one passage."""
+    left_out: tuple[str, ...] | None = None
+    """``None``: every answerable question was scored, whatever its review. Otherwise the
+    run was asked for reviewed questions only, and these are the ids of the answerable
+    questions it left out because their review is still pending. They are in no score."""
 
 
 def evaluate_retrieval(
     questions: Sequence[GoldenQuestion],
     documents: Sequence[Document],
     retriever: Retriever,
+    *,
+    reviewed_only: bool = False,
 ) -> RetrievalReport:
     """Score the retriever on every answerable question.
 
@@ -139,9 +145,18 @@ def evaluate_retrieval(
     and never counted as a miss: a score must say something about the retriever, not
     about the plumbing around it. A broken label, such as a quote that is not in its
     page, stops the run, because every number that depends on it would be wrong.
+
+    With ``reviewed_only``, a question whose review is still ``pending`` is left out. No
+    independent checker has accepted its label, or one has disputed it, and a score on
+    it would rest on a label that is open. The report names the questions left out.
     """
     pages = {document.doc_id: document for document in documents}
-    answerable = [q for q in questions if q.type == "answerable"]
+    left_out = tuple(
+        q.id
+        for q in questions
+        if reviewed_only and q.type == "answerable" and q.review == "pending"
+    )
+    answerable = [q for q in questions if q.type == "answerable" and q.id not in left_out]
     spans_by_question = {q.id: locate_evidence(q, pages) for q in answerable}
 
     results: list[QuestionResult] = []
@@ -196,13 +211,14 @@ def evaluate_retrieval(
     return RetrievalReport(
         results=results,
         failures=failures,
-        not_scored=len(questions) - len(answerable),
+        not_scored=sum(q.type != "answerable" for q in questions),
         summary=_summarise(results),
         by_group={
             "origin": _summarise_groups(results, lambda r: r.question.origin),
             "section": _summarise_groups(results, lambda r: r.question.section),
         },
         several=_summarise_several(results),
+        left_out=left_out if reviewed_only else None,
     )
 
 
@@ -309,6 +325,9 @@ def write_run(
     of them the results held all, some or none of the passages, and at which rank the
     last one came. Every row says where each of its passages first came, and where the
     first chunk of that passage's page came.
+
+    A run that scored reviewed questions only names the questions it left out, under
+    ``questions_left_out``. They have no row.
     """
     run_dir = flow_dir / variant
     (run_dir / "traces").mkdir(parents=True, exist_ok=True)
@@ -378,14 +397,18 @@ def write_run(
         "questions_scored": len(report.results),
         "questions_failed": len(report.failures),
         "questions_not_scored": report.not_scored,
-        "metrics": {name: asdict(estimate) for name, estimate in report.summary.items()},
-        "by_group": {
-            group: {
-                name: {metric: asdict(estimate) for metric, estimate in estimates.items()}
-                for name, estimates in members.items()
-            }
-            for group, members in report.by_group.items()
-        },
+    }
+    if report.left_out is not None:
+        # Only a run that was asked for reviewed questions has this: the answerable
+        # questions it left out because their review is still pending.
+        summary["questions_left_out"] = list(report.left_out)
+    summary["metrics"] = {name: asdict(estimate) for name, estimate in report.summary.items()}
+    summary["by_group"] = {
+        group: {
+            name: {metric: asdict(estimate) for metric, estimate in estimates.items()}
+            for name, estimates in members.items()
+        }
+        for group, members in report.by_group.items()
     }
     if report.several is not None:
         # Counts, for the questions whose answer needs two or more passages. JSON turns

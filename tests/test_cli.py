@@ -434,6 +434,7 @@ def test_golden_check_holds_a_two_passage_set_to_two_pages_and_a_reason_for_each
     assert result.exit_code == 0, result.output
     assert "Golden set: 1 questions" in result.output
     assert "kinds     1 comparison" in result.output
+    assert "reading   1 not read a second time" in result.output
     assert "every quote was found in its page, and on no other page" in result.output
     assert "every question has two, on two pages, and a reason for each" in result.output
     # The same file is an ordinary golden set to a check that is given no reasons.
@@ -457,6 +458,30 @@ def test_golden_check_fails_a_two_passage_question_whose_passages_share_a_page(
 
 
 @pytest.mark.usefixtures("fake_pipeline")
+def test_golden_check_holds_the_review_to_what_the_second_reading_found(tmp_path: Path) -> None:
+    files = two_passage_files(tmp_path)
+    dataset, reasons = Path(files[1]), Path(files[3])
+    question, reason = json.loads(dataset.read_text()), json.loads(reasons.read_text())
+    labels = {"both": "complete", "first": "complete", "second": "partial"}
+    reasons.write_text(json.dumps({**reason, "second_reading": labels, "confirmed": False}) + "\n")
+
+    without_a_note = runner.invoke(app, ["golden-check", *files])
+    dataset.write_text(json.dumps({**question, "note": "Disputed: one passage was enough."}) + "\n")
+    disputed = runner.invoke(app, ["golden-check", *files])
+    dataset.write_text(json.dumps({**question, "review": "checked"}) + "\n")
+    accepted_all_the_same = runner.invoke(app, ["golden-check", *files])
+
+    assert without_a_note.exit_code == 1
+    assert "t001: disputed, and no note says what the dispute is" in without_a_note.output
+    assert disputed.exit_code == 0, disputed.output
+    assert "reading   1 disputed" in disputed.output
+    assert accepted_all_the_same.exit_code == 1
+    assert "t001: marked checked, and the second reading did not confirm" in (
+        accepted_all_the_same.output
+    )
+
+
+@pytest.mark.usefixtures("fake_pipeline")
 def test_golden_check_explains_missing_or_broken_reasons(tmp_path: Path) -> None:
     dataset = two_passage_files(tmp_path)[:2]
     broken = tmp_path / "broken.jsonl"
@@ -476,6 +501,39 @@ def test_golden_check_explains_missing_or_broken_reasons(tmp_path: Path) -> None
     assert for_another.exit_code == 1
     assert "t001: no reason says why it needs both passages" in for_another.output
     assert "t002: a reason for a question that is not in the set" in for_another.output
+
+
+def test_eval_retrieval_leaves_out_pending_questions_when_asked_for_reviewed_only(
+    fake_pipeline: FakeEmbedder, tmp_path: Path
+) -> None:
+    runner.invoke(app, ["index"])
+    rows = [json.loads(line) for line in golden_rows("sixteen weeks of paid leave").splitlines()]
+    pending = {
+        **rows[0],
+        "id": "q003",
+        "question": "What is the laptop limit?",
+        "evidence": [{"doc_id": "finance/expenses.md", "quote": "one thousand dollars"}],
+    }
+    dataset = tmp_path / "questions.jsonl"
+    dataset.write_text(
+        "".join(json.dumps(row) + "\n" for row in [{**rows[0], "review": "checked"}, pending])
+    )
+    common = ["eval-retrieval", "--dataset", str(dataset), "--output", str(tmp_path / "runs")]
+
+    reviewed = runner.invoke(app, [*common, "--variant", "reviewed", "--reviewed-only"])
+    everything = runner.invoke(app, [*common, "--variant", "all"])
+
+    assert reviewed.exit_code == 0, reviewed.output
+    assert "1 scored, 0 failed, 0 unanswerable" in reviewed.output
+    assert "left out    1 with review pending: q003" in reviewed.output
+    summary = json.loads((tmp_path / "runs" / "reviewed" / "summary.json").read_text())
+    assert summary["questions_left_out"] == ["q003"]
+    assert (tmp_path / "runs" / "reviewed" / "results.jsonl").read_text().count("\n") == 1
+    # Without the option a pending question is scored like any other, as it always was.
+    assert everything.exit_code == 0, everything.output
+    assert "2 scored, 0 failed, 0 unanswerable" in everything.output
+    assert "left out" not in everything.output
+    assert "questions_left_out" not in (tmp_path / "runs" / "all" / "summary.json").read_text()
 
 
 def test_eval_retrieval_counts_the_questions_that_need_several_passages(

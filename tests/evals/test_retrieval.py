@@ -513,3 +513,59 @@ def test_the_lines_about_several_passages_give_the_counts_and_the_ranks() -> Non
     assert several_passages_lines(nothing)[-2] == (
         "    all found by rank  never; not all in the top 10: 1"
     )
+
+
+def test_reviewed_only_leaves_out_the_questions_whose_review_is_pending(tmp_path: Path) -> None:
+    accepted = GoldenQuestion.model_validate({**QUESTIONS[0].model_dump(), "review": "checked"})
+    by_a_person = GoldenQuestion.model_validate(
+        {**QUESTIONS[1].model_dump(), "id": "q004", "question": "verified", "review": "verified"}
+    )
+    questions = [accepted, QUESTIONS[1], QUESTIONS[2], by_a_person]
+    retriever = FixedRetriever({accepted.question: [LEAVE], "verified": [EXPENSES]})
+
+    report = evaluate_retrieval(questions, DOCUMENTS, retriever, reviewed_only=True)
+
+    # The pending question with an answer is left out. The unanswerable one is not
+    # scored in any case, and is counted as before.
+    assert [result.question.id for result in report.results] == ["q001", "q004"]
+    assert report.left_out == ("q002",)
+    assert report.not_scored == 1
+    assert report.summary["hit@1"].mean == 1.0
+    assert report.summary["hit@1"].count == 2
+    run_dir = write_run(report, tmp_path / "retrieval", "reviewed", "Reviewed questions only.")
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["questions_left_out"] == ["q002"]
+    assert (summary["questions_scored"], summary["questions_not_scored"]) == (2, 1)
+    rows = [json.loads(line) for line in (run_dir / "results.jsonl").read_text().splitlines()]
+    assert [row["prompt_id"] for row in rows] == ["q001", "q004"]
+
+
+def test_every_answerable_question_is_scored_unless_reviewed_only_is_asked_for(
+    tmp_path: Path,
+) -> None:
+    # The first two questions are pending, as a question is until someone has checked it.
+    report = evaluate_retrieval(QUESTIONS, DOCUMENTS, PERFECT)
+    nothing_pending = [
+        GoldenQuestion.model_validate({**question.model_dump(), "review": "checked"})
+        for question in QUESTIONS
+    ]
+    all_reviewed = evaluate_retrieval(nothing_pending, DOCUMENTS, PERFECT, reviewed_only=True)
+
+    assert [result.question.id for result in report.results] == ["q001", "q002"]
+    assert report.left_out is None
+    run_dir = write_run(report, tmp_path / "retrieval", "baseline", "Dense retrieval only.")
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert "questions_left_out" not in summary
+    assert list(summary) == [
+        "description",
+        "config",
+        "labels_fingerprint",
+        "questions_scored",
+        "questions_failed",
+        "questions_not_scored",
+        "metrics",
+        "by_group",
+    ]
+    # Asked for, and nothing to leave out: the run says so with an empty list.
+    assert all_reviewed.left_out == ()
+    assert [result.question.id for result in all_reviewed.results] == ["q001", "q002"]

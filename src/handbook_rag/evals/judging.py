@@ -115,6 +115,11 @@ class Criterion[C: JudgedCase]:
     state_file: str
     check_file: str
     """Beside a run's verdicts: how far the judge that made them agreed with the labels."""
+    version: int = 1
+    """Which version of this criterion's judge it is. A later version is told other words,
+    so it is another judge: it keeps its verdicts apart from those of the first, and its
+    agreement with the labels has to be measured for itself. It decides the same thing
+    and saves into the same files, so that a run holds the verdicts of one version."""
 
     def run_stage(self, run_dir: Path) -> Stage:
         """The files in which an answer run keeps this judge's verdicts on its replies."""
@@ -142,6 +147,22 @@ def judge_check_stage(run_dir: Path) -> Stage:
         advice="Give this run another name, or discard its saved verdicts with --restart.",
         outputs=("summary.json", "disagreements.jsonl"),
     )
+
+
+def judge_version(config: Mapping[str, object]) -> int:
+    """Which version of a judge made the verdicts saved with these settings.
+
+    Version 1 records no version: every run saved before there was a second version was
+    made by it, and it must go on recording exactly what those runs hold (see
+    :func:`handbook_rag.wiring.describe_judge`). So settings that name no version are
+    those of version 1.
+
+    This is for telling a person which judge it was. Whether a run may be continued is
+    decided by comparing all of its settings, never by this number alone. So a value
+    that is not a whole number, which only an edited file can hold, is read as none.
+    """
+    version = config.get("judge_version", 1)
+    return version if type(version) is int else 1
 
 
 def judgement_row(case: JudgedCase, judgement: Judgement) -> dict[str, Any]:

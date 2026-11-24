@@ -1,8 +1,8 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve mcp eval-retrieval eval-answers eval-judge eval-judge-correct eval-judge-references eval-judge-limits eval-support eval-correct eval-adversarial eval-follow-ups eval-cache eval-compare eval-table eval-gate golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve mcp eval-retrieval eval-answers eval-judge eval-judge-correct eval-judge-references eval-judge-limits eval-judge-limits-v2 eval-judge-v2 eval-support eval-correct eval-adversarial eval-follow-ups eval-cache eval-compare eval-table eval-gate golden-check golden-review
 
 help: ## List the available commands
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
+	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
 
 install: ## Install dependencies and git hooks
 	uv sync
@@ -79,6 +79,12 @@ eval-judge-references: ## Check that the correctness judge passes every referenc
 
 eval-judge-limits: ## Check the support judge on answers that keep or leave out a limit their passage states (120 real requests)
 	uv run handbook-rag eval-judge --cases evals/judge/limits/cases.jsonl --variant limits
+
+eval-judge-limits-v2: ## Check version 2 of the support judge on the answers that keep or leave out a limit (120 real requests)
+	uv run handbook-rag eval-judge --judge-version 2 --cases evals/judge/limits/cases.jsonl --variant limits-v2
+
+eval-judge-v2: ## Check version 2 of the support judge against the first labelled answers (169 real requests)
+	uv run handbook-rag eval-judge --judge-version 2 --variant v2
 
 eval-support: ## Judge the saved answers of the scratch run: is each statement backed by its passage?
 	uv run handbook-rag eval-support

@@ -53,6 +53,7 @@ from handbook_rag.evals.judging import (
     agreement_headline,
     judge_check_stage,
     judge_record,
+    judge_version,
     judgement_row,
     labelled_pairs,
     load_judgements,
@@ -70,7 +71,7 @@ from handbook_rag.evals.retrieval import (
 )
 from handbook_rag.evals.review import render_review_page
 from handbook_rag.evals.stage import SavedRunError, Stage
-from handbook_rag.evals.support import SUPPORT
+from handbook_rag.evals.support import SUPPORT, SUPPORT_V2
 from handbook_rag.evals.two_passage import (
     check_two_passage_set,
     kinds_of,
@@ -112,10 +113,22 @@ app = typer.Typer(no_args_is_help=True, add_completion=False)
 CRITERIA: tuple[Criterion[Any], ...] = (SUPPORT, CORRECT)
 DEFAULT_CRITERION = SUPPORT
 CriterionName = Literal["support", "correct"]
+# Every judge a command can build: the judge of each criterion, in each of its versions.
+# A criterion above stands for the first version of its judge, which is the one a
+# command means when it names no version, and the one every saved run was made by.
+JUDGES: tuple[Criterion[Any], ...] = (SUPPORT, SUPPORT_V2, CORRECT)
 
 
-def _criterion(name: str) -> Criterion[Any]:
-    return next(criterion for criterion in CRITERIA if criterion.name == name)
+def _criterion(name: str, version: int = 1) -> Criterion[Any]:
+    """A criterion with one version of its judge, or a usage error if it has no such one."""
+    versions = {judge.version: judge for judge in JUDGES if judge.name == name}
+    if version not in versions:
+        known = ", ".join(str(number) for number in sorted(versions))
+        raise typer.BadParameter(
+            f"The judge for '{name}' has no version {version}. Its versions: {known}.",
+            param_hint="--judge-version",
+        )
+    return versions[version]
 
 
 # How long an evaluation waits after a request fails. An overloaded model usually
@@ -1259,19 +1272,39 @@ def _echo_answer_scores(
             _echo_judge_record(criterion, judges[criterion.metric])
 
 
-def _check_command(criterion: Criterion[Any]) -> str:
-    """The command that checks the judge of a criterion, as a person types it."""
-    if criterion is DEFAULT_CRITERION:
-        return "eval-judge"
-    return f"eval-judge --criterion {criterion.name}"
+def _version_option(version: int) -> str:
+    """The option that names a version of a judge, as it is added to a command.
+
+    Version 1 needs none, and is written without one, as it was before there was a second.
+    """
+    return "" if version == 1 else f" --judge-version {version}"
+
+
+def _version_note(version: int) -> str:
+    """Which version of a judge ruled, as it is printed after the name of its model.
+
+    Nothing for version 1, so that what a command prints for it stays as it was.
+    """
+    return "" if version == 1 else f" (version {version})"
+
+
+def _check_command(name: str, version: int = 1) -> str:
+    """The command that checks one judge of a criterion, as a person types it."""
+    criterion = "" if name == DEFAULT_CRITERION.name else f" --criterion {name}"
+    return f"eval-judge{criterion}{_version_option(version)}"
 
 
 def _echo_judge_record(criterion: Criterion[Any], judge: Mapping[str, Any]) -> None:
-    """Say who judged, and how far that judge agreed with labelled answers."""
+    """Say who judged, and how far that judge agreed with labelled answers.
+
+    Which version of the judge it was is read from the settings saved with the verdicts,
+    not from ``criterion``, which stands for the criterion whatever judge ruled on it.
+    """
     counts = judge["verdicts"]
+    version = judge_version(judge["config"])
     typer.echo(
-        f"  judge        {judge['config']['judge_model']} read {judge['answers_judged']} "
-        "answers: "
+        f"  judge        {judge['config']['judge_model']}{_version_note(version)} read "
+        f"{judge['answers_judged']} answers: "
         + ", ".join(
             f"{counts[verdict]} {criterion.verdict_words[verdict]}"
             for verdict in criterion.verdicts
@@ -1281,8 +1314,8 @@ def _echo_judge_record(criterion: Criterion[Any], judge: Mapping[str, Any]) -> N
     if not check:
         typer.echo(
             "  judge check  none. This judge has not been checked against labelled answers, "
-            f"so its score cannot be trusted yet. Run {_check_command(criterion)}, then "
-            f"eval-{criterion.name} --checked."
+            f"so its score cannot be trusted yet. Run {_check_command(criterion.name, version)}, "
+            f"then eval-{criterion.name}{_version_option(version)} --checked."
         )
         return
     agreement = check["agreement"]
@@ -1375,7 +1408,7 @@ def _judge_check_to_quote(
     It may be quoted only if it was made with the same judge, and only if it is whole: a
     check that judged part of the labelled answers would be quoted as if it were all.
     """
-    command = _check_command(criterion)
+    command = _check_command(criterion.name, criterion.version)
     check_stage = judge_check_stage(checked)
     summary_file = checked / "summary.json"
     if not check_stage.state_path.is_file() or not summary_file.is_file():
@@ -1408,18 +1441,20 @@ def _judge_check_to_quote(
 def _refuse_the_check_of_another_judge(
     criterion: Criterion[Any], run_dir: Path, settings: Settings
 ) -> None:
-    """Refuse a directory that holds a check of the judge of another criterion.
+    """Refuse a directory that holds a check of another judge.
 
-    The two checks use the same file names. Without this, restarting a check with the
-    directory of the other one would discard verdicts that took a share of a day's
+    That is the judge of another criterion, or another version of this criterion's
+    judge. All checks use the same file names. Without this, restarting a check with the
+    directory of another one would discard verdicts that took a share of a day's
     requests to make.
 
     A check says in its summary which criterion it is of. It is also known by its
     settings, which hold the hash of the judge's instructions: an older version wrote
     summaries that do not say, and a check that was stopped early has no summary. Either
-    sign is enough to refuse.
+    sign is enough to refuse. Which version of a judge made a check is told by its
+    settings alone, since the hashes in them are what sets one version apart from another.
 
-    One case is not caught: a check of the other judge that says nothing in its summary
+    One case is not caught: a check of another judge that says nothing in its summary
     and was made under instructions that judge no longer has. Such a check has lapsed
     already, since its agreement can no longer be quoted for any judge the code builds.
     """
@@ -1436,14 +1471,20 @@ def _refuse_the_check_of_another_judge(
         stored = stage.config() if stage.state_path.is_file() else None
     except SavedRunError:
         stored = None
-    signs.extend(
-        other.name for other in CRITERIA if stored == wiring.describe_judge(settings, other)
-    )
+    made_by = [other for other in JUDGES if stored == wiring.describe_judge(settings, other)]
+    signs.extend(other.name for other in made_by)
     for held in signs:
         if isinstance(held, str) and held != criterion.name:
             raise SavedRunError(
                 f"{run_dir} holds a check of the judge for '{held}', not for "
                 f"'{criterion.name}'. Give this check another --output or --variant."
+            )
+    for other in made_by:
+        if other.version != criterion.version:
+            raise SavedRunError(
+                f"{run_dir} holds a check of version {other.version} of the judge for "
+                f"'{other.name}', not of version {criterion.version}. Give this check another "
+                "--output or --variant."
             )
 
 
@@ -1451,6 +1492,18 @@ def _judge_stopped_badly(run: JudgeRun, max_requests: int | None) -> bool:
     """Whether a judge run ended in a way the caller did not plan."""
     planned = max_requests is not None and run.attempts >= max_requests
     return bool(run.failures) or (run.stopped is not None and not planned)
+
+
+_JUDGE_VERSION_OPTION = typer.Option(
+    "--judge-version",
+    min=1,
+    help=(
+        "Which version of the judge to use. 1 is the judge that every saved run was made "
+        "by. 2, which only 'support' has, is told the whole rubric and how to look for a "
+        "limit that an answer leaves out. A run made by one version cannot be continued "
+        "by the other."
+    ),
+)
 
 
 @app.command(name="eval-judge")
@@ -1466,6 +1519,7 @@ def eval_judge(
             ),
         ),
     ] = "support",
+    version: Annotated[int, _JUDGE_VERSION_OPTION] = 1,
     cases: Annotated[
         Path | None,
         typer.Option(
@@ -1513,7 +1567,7 @@ def eval_judge(
     reports how many faults the judge catches and how many false alarms it raises.
     """
     settings = get_settings()
-    criterion = _criterion(criterion_name)
+    criterion = _criterion(criterion_name, version)
     config = wiring.describe_judge(settings, criterion)
     cases = cases or criterion.labelled_path
     run_dir = (output or criterion.checks_dir) / variant
@@ -1533,7 +1587,7 @@ def eval_judge(
 
     typer.echo(f"Judge check: {variant}")
     typer.echo(f"  criterion    {criterion.name}")
-    typer.echo(f"  judge        {settings.judge_model}")
+    typer.echo(f"  judge        {settings.judge_model}{_version_note(criterion.version)}")
     run = _judge_carefully(
         criterion,
         stage,
@@ -1579,7 +1633,10 @@ def eval_judge(
     )
     judged = list(run.judgements.values())
     summary = {
-        "description": f"{settings.judge_model} judging the labelled answers in {cases}.",
+        "description": (
+            f"{settings.judge_model}{_version_note(criterion.version)} judging the labelled "
+            f"answers in {cases}."
+        ),
         "criterion": criterion.name,
         "config": config,
         "answers_labelled": len(labelled),
@@ -1680,7 +1737,7 @@ def _judge_answers(
         )
 
     typer.echo(f"{criterion.title}: {variant}")
-    typer.echo(f"  judge        {settings.judge_model}")
+    typer.echo(f"  judge        {settings.judge_model}{_version_note(criterion.version)}")
     if outdated:
         typer.echo(
             f"  left out     {outdated} {'reply' if outdated == 1 else 'replies'} to a question "
@@ -1768,6 +1825,7 @@ def eval_support(
     checked: Annotated[Path | None, _CHECKED_OPTION] = None,
     max_requests: Annotated[int | None, _MAX_REQUESTS_OPTION] = None,
     restart: Annotated[bool, _RESTART_OPTION] = False,
+    version: Annotated[int, _JUDGE_VERSION_OPTION] = 1,
 ) -> None:
     """Judge a run's saved answers: is every statement backed by the passage it cites?
 
@@ -1775,7 +1833,7 @@ def eval_support(
     are not asked again.
     """
     _judge_answers(
-        SUPPORT,
+        _criterion(SUPPORT.name, version),
         dataset=dataset,
         variant=variant,
         runs=runs,

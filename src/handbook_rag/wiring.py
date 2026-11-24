@@ -610,8 +610,17 @@ def describe_judge[C: JudgedCase](settings: Settings, criterion: Criterion[C]) -
     of a request. Verdicts made under reworded instructions, or from a request laid out
     another way, come from a different judge, and its agreement with the labels has to
     be measured again.
+
+    A later version of a judge also records its number, so that a saved run says in
+    plain words which version judged. Version 1 records none. Every run saved before
+    there was a second version holds exactly the four settings below. If version 1
+    described itself in any other words, none of those runs could be continued, or
+    quoted beside a score, as a run of the judge the code builds today.
+
+    The two hashes are what tells one judge from another. The number is there for the
+    reader (see :func:`handbook_rag.evals.judging.judge_version`).
     """
-    return {
+    described: dict[str, object] = {
         "judge_model": settings.judge_model,
         "judge_max_tokens": settings.judge_max_tokens,
         "judge_instructions": hashlib.sha256(criterion.instructions.encode("utf-8")).hexdigest()[
@@ -619,6 +628,9 @@ def describe_judge[C: JudgedCase](settings: Settings, criterion: Criterion[C]) -
         ],
         "judge_request": criterion.request_fingerprint(),
     }
+    if criterion.version != 1:
+        described["judge_version"] = criterion.version
+    return described
 
 
 def _make_claude_generator(

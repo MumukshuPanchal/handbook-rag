@@ -7,6 +7,7 @@ and describes the criterion to the code that all judged criteria share
 (:mod:`handbook_rag.evals.judging`).
 """
 
+import dataclasses
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
@@ -22,6 +23,11 @@ from handbook_rag.evals.judge import (
     JudgedStatement,
     SupportCase,
     request_fingerprint,
+)
+from handbook_rag.evals.judge_v2 import (
+    SUPPORT_INSTRUCTIONS_V2,
+    GeminiSupportJudgeV2,
+    request_fingerprint_v2,
 )
 from handbook_rag.evals.judging import UNCLEAR, Criterion, LabelledCase
 from handbook_rag.ingest.models import Chunk
@@ -216,3 +222,21 @@ SUPPORT: Criterion[SupportCase] = Criterion(
     state_file="support.json",
     check_file="support_check.json",
 )
+
+SUPPORT_V2: Criterion[SupportCase] = dataclasses.replace(
+    SUPPORT,
+    version=2,
+    instructions=SUPPORT_INSTRUCTIONS_V2,
+    request_fingerprint=request_fingerprint_v2,
+    judge=GeminiSupportJudgeV2,
+)
+"""The same criterion with version 2 of its judge (:mod:`handbook_rag.evals.judge_v2`).
+
+Only the judge differs: what it is told, the shape of its reply, and so the settings that
+are recorded with its verdicts. It rules on the same answers, gives the same verdicts and
+saves into the same files. The settings keep the two apart: a run that holds the verdicts
+of one version is not continued by the other.
+
+Version 1 stays the judge a command means when it names no version. Every saved run was
+made by it.
+"""

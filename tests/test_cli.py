@@ -20,7 +20,9 @@ from handbook_rag.evals.adversarial import INSTRUCTION_CANARIES
 from handbook_rag.evals.careful import Pacer
 from handbook_rag.evals.correctness import CORRECT, CorrectnessCase
 from handbook_rag.evals.judge import JudgeError, Judgement, StatementVerdict, SupportCase
+from handbook_rag.evals.judge_v2 import SUPPORT_INSTRUCTIONS_V2
 from handbook_rag.evals.judging import Criterion
+from handbook_rag.evals.support import SUPPORT, SUPPORT_V2
 from handbook_rag.generate.base import GenerationError, Generator, is_answered
 from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
@@ -32,6 +34,7 @@ from handbook_rag.measuring import CacheNotAllowed, measuring
 from handbook_rag.pipeline import answer_question
 from handbook_rag.retrieve.dense import Retriever
 from tests.cache.support import TableVerifier
+from tests.evals.test_judge import FakeClient, response
 from tests.support import (
     FakeEmbedder,
     FakeReranker,
@@ -41,6 +44,7 @@ from tests.support import (
     count_words,
     write_snapshot,
 )
+from tests.test_cli_eval_cache import COLOUR_CODES
 
 runner = CliRunner()
 
@@ -1690,11 +1694,13 @@ class FakeJudge:
         self.asked: list[str] = []
         self.built_with: list[dict[str, Any]] = []
         self.built_for: list[str] = []
+        self.built_versions: list[int] = []
         self._lenient = lenient
         self._error = error
 
     def build(self, _settings: Settings, criterion: Criterion[Any], **options: Any) -> "FakeJudge":
         self.built_for.append(criterion.name)
+        self.built_versions.append(criterion.version)
         self.built_with.append(options)
         return self
 
@@ -2507,6 +2513,353 @@ def test_eval_correct_scores_a_wrong_answer_as_not_correct(
     assert "Gets a correct answer        0.000" in result.output
     assert "Right call                   1.000" in result.output
     assert "read 1 answers: 0 correct, 0 partial, 1 incorrect" in result.output
+
+
+# The second version of the support judge, through the same commands. The stand-in judge
+# is built for whichever version a command asks for, and records which one that was.
+
+
+def test_eval_judge_checks_version_2_of_the_judge_when_asked_and_the_check_records_it(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+
+    result = runner.invoke(app, [*judged_run["judge"], "--judge-version", "2", "--variant", "v2"])
+
+    assert result.exit_code == 0, result.output
+    assert (judge.built_for, judge.built_versions) == (["support"], [2])
+    assert sorted(judge.asked) == ["q001", "q001-v1"]
+    assert "judge        gemini-3.5-flash-lite (version 2)\n" in result.output
+    assert "Caught, number: 1 of 1" in result.output
+    run_dir = judged_run["checks"] / "v2"
+    expected = wiring.describe_judge(get_settings(), SUPPORT_V2)
+    assert expected["judge_version"] == 2
+    # Recorded before the first request is sent, and again in the summary.
+    assert json.loads((run_dir / "run.json").read_text())["config"] == expected
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["config"] == expected
+    assert summary["criterion"] == "support"
+    assert summary["description"].startswith("gemini-3.5-flash-lite (version 2) judging ")
+
+    # Without the option it is version 1, which records and prints what it always did.
+    first = runner.invoke(app, [*judged_run["judge"], "--variant", "v1"])
+
+    assert first.exit_code == 0, first.output
+    assert judge.built_versions == [2, 1]
+    assert "judge        gemini-3.5-flash-lite\n" in first.output
+    assert "(version" not in first.output
+    saved = json.loads((judged_run["checks"] / "v1" / "run.json").read_text())["config"]
+    assert saved == wiring.describe_judge(get_settings(), SUPPORT)
+    assert "judge_version" not in saved
+    summary = json.loads((judged_run["checks"] / "v1" / "summary.json").read_text())
+    assert summary["description"].startswith("gemini-3.5-flash-lite judging ")
+
+
+def test_version_2_goes_from_the_command_to_the_request_and_back_into_the_saved_reason(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    # The whole path with the judge of version 2 itself, and a stand-in for the API alone.
+    # It calls every statement supported, and names one limit as it does.
+    reply = json.dumps(
+        {
+            "statements": [
+                {
+                    "number": 1,
+                    "limits": '"paid leave"',
+                    "reason": "The passage says sixteen weeks.",
+                    "verdict": "supported",
+                }
+            ]
+        }
+    )
+    client = FakeClient(response(reply))
+    monkeypatch.setattr("handbook_rag.wiring._gemini_client", lambda *_a, **_options: client)
+
+    result = runner.invoke(app, [*judged_run["judge"], "--judge-version", "2", "--variant", "v2"])
+
+    assert result.exit_code == 0, result.output
+    # One request for each answer, each under the instructions of version 2.
+    calls = client.models.calls
+    assert len(calls) == 2
+    assert all(call["config"].system_instruction == SUPPORT_INSTRUCTIONS_V2 for call in calls)
+    assert "at most 2 now, 2 for this check in all" in result.output
+    assert "Caught, number: 0 of 1" in result.output
+    # The planted fault got through. Where the verdict is set beside its label, the reason
+    # shows what the judge had named as limits.
+    run_dir = judged_run["checks"] / "v2"
+    (missed,) = map(json.loads, (run_dir / "disagreements.jsonl").read_text().splitlines())
+    assert (missed["case"], missed["expected"], missed["judged"]) == (
+        "q001-v1",
+        "unsupported",
+        "supported",
+    )
+    assert missed["reason"] == (
+        'The passage says sixteen weeks. (Limits the judge named: "paid leave")'
+    )
+
+
+def test_a_check_by_one_version_of_the_judge_is_not_continued_or_started_over_by_the_other(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    assert runner.invoke(app, [*judged_run["judge"], "--variant", "baseline"]).exit_code == 0
+    kept = (judged_run["checks"] / "baseline" / "judgements.jsonl").read_text()
+    # Version 2 is pointed at the check of version 1, first to continue it, then to restart.
+    second = [*judged_run["judge"], "--judge-version", "2", "--variant", "baseline"]
+
+    for command in (second, [*second, "--restart"]):
+        result = runner.invoke(app, command)
+
+        assert result.exit_code == 1, command
+        assert (
+            "holds a check of version 1 of the judge for 'support', not of version 2"
+            in result.output
+        )
+        assert "Give this check another --output or --variant." in result.output
+    # Nothing of the first version's check was discarded, and nothing was asked.
+    assert (judged_run["checks"] / "baseline" / "judgements.jsonl").read_text() == kept
+    assert judge.built_versions == [1]
+    assert len(judge.asked) == 2
+
+    # The other way round: a check of version 2, and version 1 pointed at it.
+    own = [*judged_run["judge"], "--judge-version", "2", "--variant", "v2"]
+    assert runner.invoke(app, own).exit_code == 0
+    kept = (judged_run["checks"] / "v2" / "judgements.jsonl").read_text()
+    first = [*judged_run["judge"], "--variant", "v2"]
+    for command in (first, [*first, "--restart"]):
+        result = runner.invoke(app, command)
+
+        assert result.exit_code == 1, command
+        assert (
+            "holds a check of version 2 of the judge for 'support', not of version 1"
+            in result.output
+        )
+    # A check that was stopped early has no summary. Its settings still say who made it.
+    (judged_run["checks"] / "v2" / "summary.json").unlink()
+    stopped_early = runner.invoke(app, [*first, "--restart"])
+    assert stopped_early.exit_code == 1
+    assert "holds a check of version 2 of the judge" in stopped_early.output
+    assert (judged_run["checks"] / "v2" / "judgements.jsonl").read_text() == kept
+    assert len(judge.asked) == 4
+
+    # Each version continues its own check without a request, and restarts it as asked.
+    assert runner.invoke(app, own).exit_code == 0
+    assert len(judge.asked) == 4
+    assert runner.invoke(app, [*own, "--restart"]).exit_code == 0
+    assert len(judge.asked) == 6
+
+
+def test_a_check_of_another_version_that_no_judge_of_today_made_is_still_not_continued(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    assert runner.invoke(app, [*judged_run["judge"], "--variant", "baseline"]).exit_code == 0
+    # The model is changed since. The check is then of no judge the code builds today, and
+    # the rule that settings must match is what refuses it.
+    monkeypatch.setenv("HANDBOOK_RAG_JUDGE_MODEL", "gemini-9-judge")
+    get_settings.cache_clear()
+
+    refused = runner.invoke(
+        app, [*judged_run["judge"], "--judge-version", "2", "--variant", "baseline"]
+    )
+
+    assert refused.exit_code == 1
+    assert (
+        "was made with other settings (judge_instructions, judge_model, judge_request, "
+        "judge_version)" in refused.output
+    )
+    assert len(judge.asked) == 2
+
+
+def test_eval_support_judges_with_version_2_when_asked_and_the_run_records_it(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    second = [*judged_run["support"], "--judge-version", "2"]
+
+    result = runner.invoke(app, second)
+
+    assert result.exit_code == 0, result.output
+    assert (judge.built_for, judge.built_versions) == (["support"], [2])
+    assert judge.asked == ["q001"]
+    assert "Supported by its sources     1.000" in result.output
+    # The version is named where the judge is introduced and where its verdicts are counted.
+    assert "judge        gemini-3.5-flash-lite (version 2)\n" in result.output
+    assert (
+        "judge        gemini-3.5-flash-lite (version 2) read 1 answers: 1 statements supported, "
+        "0 unsupported, 0 without a claim" in result.output
+    )
+    # The advice names it too: a check of version 1 would be a check of another judge.
+    assert (
+        "Run eval-judge --judge-version 2, then eval-support --judge-version 2 --checked."
+        in result.output
+    )
+    run_dir = judged_run["run_dir"]
+    expected = wiring.describe_judge(get_settings(), SUPPORT_V2)
+    assert json.loads((run_dir / "support.json").read_text())["config"] == expected
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["judges"]["supported"]["config"] == expected
+    assert summary["judges"]["supported"]["config"]["judge_version"] == 2
+    assert summary["metrics"]["supported"]["count"] == 1
+
+    # Version 1 does not continue the run, and asks nothing.
+    first = runner.invoke(app, judged_run["support"])
+
+    assert first.exit_code == 1
+    assert (
+        "was made with other settings (judge_instructions, judge_request, judge_version)"
+        in first.output
+    )
+    assert "Discard the saved verdicts with --restart, or use the judge that made them." in (
+        first.output
+    )
+    assert judge.asked == ["q001"]
+    assert json.loads((run_dir / "support.json").read_text())["config"] == expected
+
+    # Scoring the run again says which version judged it, from what the run saved.
+    rescored = runner.invoke(app, judged_run["answers"])
+    assert rescored.exit_code == 0, rescored.output
+    assert "gemini-3.5-flash-lite (version 2) read 1 answers" in rescored.output
+    assert "then eval-support --judge-version 2 --checked." in rescored.output
+
+    # Version 2 continues its own run without a request.
+    again = runner.invoke(app, second)
+    assert again.exit_code == 0, again.output
+    assert "1 to read, 1 already judged, 0 to judge now" in again.output
+    assert judge.asked == ["q001"]
+
+    # Version 1 takes the run over only when told to discard what the other version saved.
+    restarted = runner.invoke(app, [*judged_run["support"], "--restart"])
+    assert restarted.exit_code == 0, restarted.output
+    assert judge.built_versions[-1] == 1
+    assert judge.asked == ["q001", "q001"]
+    assert "(version" not in restarted.output
+    assert "Run eval-judge, then eval-support --checked." in restarted.output
+    saved = json.loads((run_dir / "support.json").read_text())["config"]
+    assert saved == wiring.describe_judge(get_settings(), SUPPORT)
+    assert "judge_version" not in saved
+
+
+def test_eval_support_quotes_a_check_only_of_the_version_of_the_judge_that_rules(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    assert runner.invoke(app, [*judged_run["judge"], "--variant", "baseline"]).exit_code == 0
+    assert (
+        runner.invoke(
+            app, [*judged_run["judge"], "--judge-version", "2", "--variant", "v2"]
+        ).exit_code
+        == 0
+    )
+    asked_by_the_checks = len(judge.asked)
+    first_check = str(judged_run["checks"] / "baseline")
+    second_check = str(judged_run["checks"] / "v2")
+    second = [*judged_run["support"], "--judge-version", "2"]
+
+    # A check of version 1 says nothing about version 2, and the other way round.
+    other = runner.invoke(app, [*second, "--checked", first_check])
+    reverse = runner.invoke(app, [*judged_run["support"], "--checked", second_check])
+
+    assert other.exit_code == 1
+    assert "was made with another judge" in other.output
+    assert "Check this judge with eval-judge --judge-version 2, or leave --checked out." in (
+        other.output
+    )
+    assert reverse.exit_code == 1
+    assert "Check this judge with eval-judge, or leave --checked out." in reverse.output
+    assert not (judged_run["run_dir"] / "support.jsonl").exists()
+    assert len(judge.asked) == asked_by_the_checks
+
+    result = runner.invoke(app, [*second, "--checked", second_check])
+
+    assert result.exit_code == 0, result.output
+    # The check of version 2 had read exactly this answer: its verdict is used again.
+    assert len(judge.asked) == asked_by_the_checks
+    assert "judged       1 of 1 answers, 1 of them from verdicts saved earlier" in result.output
+    assert (
+        "judge check  it caught 1 of 1 statements labelled unsupported, and 0 of its 1 alarms "
+        f"were false ({second_check})" in result.output
+    )
+    summary = json.loads((judged_run["run_dir"] / "summary.json").read_text())
+    assert summary["judges"]["supported"]["check"]["run"] == second_check
+    assert summary["judges"]["supported"]["config"]["judge_version"] == 2
+
+
+def test_a_version_that_a_judge_does_not_have_is_a_usage_error(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FakeJudge()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+
+    for command in (
+        [*judged_run["judge"], "--judge-version", "3"],
+        # The correctness judge has one version, and its own command has no such option.
+        [*judged_run["judge_correct"], "--judge-version", "2"],
+        [*judged_run["correct"], "--judge-version", "2"],
+        [*judged_run["support"], "--judge-version", "3"],
+        [*judged_run["support"], "--judge-version", "0"],
+        [*judged_run["support"], "--judge-version", "two"],
+    ):
+        result = runner.invoke(app, command)
+
+        assert result.exit_code == 2, command
+        assert "--judge-version" in COLOUR_CODES.sub("", result.output), command
+    # Nothing was built, asked or written.
+    assert judge.built_for == []
+    assert not judged_run["checks"].exists()
+    assert not judged_run["correct_checks"].exists()
+    assert not (judged_run["run_dir"] / "support.jsonl").exists()
+
+
+def test_the_commands_that_take_a_version_of_the_judge_say_so() -> None:
+    for command in ("eval-judge", "eval-support"):
+        result = runner.invoke(app, [command, "--help"])
+
+        assert result.exit_code == 0, command
+        assert "--judge-version" in COLOUR_CODES.sub("", result.output), command
+    other = runner.invoke(app, ["eval-correct", "--help"])
+    assert "--judge-version" not in COLOUR_CODES.sub("", other.output)
+
+
+def test_the_make_targets_for_version_2_name_it_and_say_how_many_requests_they_send() -> None:
+    root = Path(__file__).parents[1]
+    makefile = (root / "Makefile").read_text(encoding="utf-8")
+    targets = {
+        name: (description, recipe)
+        for name, description, recipe in re.findall(
+            r"^([a-z0-9-]+):.*## (.+)\n\t(.+)$", makefile, flags=re.MULTILINE
+        )
+    }
+    on_limits, on_first_set = targets["eval-judge-limits-v2"], targets["eval-judge-v2"]
+    first_version_on_limits = targets["eval-judge-limits"]
+
+    for _description, recipe in (on_limits, on_first_set):
+        assert recipe.startswith("uv run handbook-rag eval-judge --judge-version 2 ")
+    # The limit answers: the file that version 1 was checked on, at the same cost.
+    assert "--cases evals/judge/limits/cases.jsonl " in on_limits[1]
+    assert "--cases evals/judge/limits/cases.jsonl " in first_version_on_limits[1]
+    assert "(120 real requests)" in on_limits[0]
+    assert "(120 real requests)" in first_version_on_limits[0]
+    # The first labelled answers are the ones a check reads when it names no file.
+    assert "--cases" not in on_first_set[1]
+    labelled = (root / SUPPORT.labelled_path).read_text(encoding="utf-8").splitlines()
+    assert f"({len(labelled)} real requests)" in on_first_set[0]
+    # Each check has a name of its own, so none lands in the directory of another.
+    variants = [
+        recipe.split("--variant ")[1]
+        for _description, recipe in (on_limits, on_first_set, first_version_on_limits)
+    ]
+    assert variants == ["limits-v2", "v2", "limits"]
+    # A name with a digit in it is listed by `make help` like any other.
+    (listed,) = re.findall(r"grep -E '(.+?)' \$\(MAKEFILE_LIST\)", makefile)
+    for name in ("eval-judge-limits-v2", "eval-judge-v2", "eval-judge-limits", "help"):
+        assert re.match(listed, f"{name}: ## What it does"), name
+        assert name in makefile.split("\n")[1].split(), name
 
 
 # The control for the correctness judge: the reference answers given as answers.

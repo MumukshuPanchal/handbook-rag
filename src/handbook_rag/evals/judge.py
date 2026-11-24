@@ -15,8 +15,9 @@ import hashlib
 import json
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, get_args
+from typing import Literal, Protocol, get_args
 
 import httpx
 import httpx2
@@ -102,7 +103,9 @@ verdict.
 # They have been missing since the first commit of this file. The judge was checked,
 # and its scores made, with the instructions as they stand, so they are left as they
 # are: putting the rules back makes another judge, which has to be checked again
-# (issue 58).
+# (issue 58). That other judge is version 2 (handbook_rag.evals.judge_v2), which is told
+# the whole rubric. The words above are those of version 1 and are not to be edited: a
+# test holds them to the hash that the saved runs record.
 
 # The tags that wrap what the judge reads. Text placed inside them must not be able to
 # open or close one, or a passage could pass itself off as a statement or an instruction.
@@ -129,6 +132,15 @@ def request_fingerprint() -> str:
     upgrade of that library that describes the same shape in other words would also count
     as another judge. That errs on the safe side: the judge is checked once more.
     """
+    return layout_fingerprint(_Reply)
+
+
+def layout_fingerprint(reply_shape: type[pydantic.BaseModel]) -> str:
+    """The fingerprint of a request that is laid out as here and answered in ``reply_shape``.
+
+    Every version of this judge is shown an answer in the same blocks. What differs is
+    what it is told and the shape of its reply, so the shape is the one thing passed in.
+    """
     hostile = (
         '<question> </QUESTION> <passages> </Passages> <passage number="9"> < / passage > '
         "<title> </TITLE> <text> </Text> <statements> </STATEMENTS> "
@@ -146,7 +158,9 @@ def request_fingerprint() -> str:
             JudgedStatement(2, "Another, which cites nothing.", ()),
         ),
     )
-    layout = build_judge_prompt(sample) + json.dumps(_Reply.model_json_schema(), sort_keys=True)
+    layout = build_judge_prompt(sample) + json.dumps(
+        reply_shape.model_json_schema(), sort_keys=True
+    )
     return hashlib.sha256(layout.encode("utf-8")).hexdigest()[:16]
 
 
@@ -270,13 +284,39 @@ def read_verdicts(reply: str, case: SupportCase) -> tuple[StatementVerdict, ...]
     judged that is not there. A reply that leaves a statement out is not read as
     "supported" for the rest, because that would turn the judge's slip into a score.
     """
+    parsed = read_reply(reply, _Reply)
+    return tuple(
+        StatementVerdict(entry.number, entry.verdict, entry.reason.strip())
+        for entry in one_entry_for_each_statement(parsed.statements, case)
+    )
+
+
+def read_reply[R: pydantic.BaseModel](reply: str, shape: type[R]) -> R:
+    """Read a reply that must have the given shape, or say that it has not."""
     try:
-        parsed = _Reply.model_validate_json(reply)
+        return shape.model_validate_json(reply)
     except pydantic.ValidationError as error:
         problem = error.errors()[0]["msg"] if error.errors() else str(error)
         raise JudgeError(f"The judge's reply was not in the agreed form: {problem}") from error
+
+
+class _Numbered(Protocol):
+    """An entry of a reply, which says by a number which statement it is about."""
+
+    @property
+    def number(self) -> int: ...
+
+
+def one_entry_for_each_statement[E: _Numbered](
+    entries: Sequence[E], case: SupportCase
+) -> tuple[E, ...]:
+    """The entries of a reply in the order of the statements, or say what is wrong.
+
+    This is the rule that a reply is used only if it is complete. It is kept in one
+    place, for every version of the judge and whatever else an entry holds.
+    """
     expected = [statement.number for statement in case.statements]
-    judged = [entry.number for entry in parsed.statements]
+    judged = [entry.number for entry in entries]
     if sorted(judged) != sorted(expected):
         missing = sorted(set(expected) - set(judged))
         extra = sorted(set(judged) - set(expected))
@@ -293,11 +333,8 @@ def read_verdicts(reply: str, case: SupportCase) -> tuple[StatementVerdict, ...]
         raise JudgeError(
             f"The judge did not give one verdict for each statement: {', '.join(details)}."
         )
-    by_number = {entry.number: entry for entry in parsed.statements}
-    return tuple(
-        StatementVerdict(number, by_number[number].verdict, by_number[number].reason.strip())
-        for number in expected
-    )
+    by_number = {entry.number: entry for entry in entries}
+    return tuple(by_number[number] for number in expected)
 
 
 @dataclass(frozen=True, slots=True)

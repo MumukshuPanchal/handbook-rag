@@ -2,7 +2,7 @@
 
 The default search brings both passages of a two-passage question into its first five results for 12 of the 33 confirmed questions ([the card](README.md) has that measurement). This file reports what the changes to the search that need no request to a model do with those 33 questions, and with the 132 questions of the [golden set](../golden/README.md) that the default search was chosen on. It is the third step of [issue 78](https://github.com/MumukshuPanchal/handbook-rag/issues/78).
 
-No default was changed. Every variant is an option of `eval-retrieval` that is off unless a run asks for it, and the retrieval gate has the minimums it had.
+No default was changed. Every variant is an option of `eval-retrieval` that is off unless a run asks for it, and the retrieval gate has the minimums it had. What was decided from these results is in [ADR 0021](../../docs/adr/0021-two-passage-questions-and-the-search-as-it-is.md): none of the variants is adopted.
 
 > **Status: made by one model session, and not read by a person.** The 33 questions were written by a model that had both passages in front of it, fourteen variants were tried on those same 33, and nothing here was measured on answers. Read the tables as "is this change worth another test", not as "is this search better".
 
@@ -15,7 +15,7 @@ The default search takes 30 candidates from the embedding search and 30 from the
 - **Another fusion constant**: 20, 10 and 5. With 60 and 30 candidates, a chunk that both searches return always comes before a chunk that only one of them returns, even one it ranks first: 2/90 is more than 1/61. A lower constant lets the first results of one search through, which could matter when each search finds a different one of the two passages.
 - **The reranker**, an option the project has and had measured only on questions with one passage: a cross-encoder reads the question with each of the 30 merged results and orders them again. It is a local model and needs no request. It takes time: 216 ms for the question in the middle of the golden set's run, against 30 ms.
 
-These twelve were written down before the first run. Two were added after the first results had been seen, and are marked "added later": m = 3 and m = 4 for k = 5. With m = 1 and m = 2 the rule had pushed the passage itself out of the first five, and the idea only needs one place kept free for a second page. No two changes were combined. No rule that reads the wording of a question to split it was tried: many of these questions were written in two parts on purpose, and such a rule would be fitted to how they were written. Splitting a question is the next step of the issue, and needs a model.
+These twelve were written down before the first run. Two were added after the first results had been seen, and are marked "added later": m = 3 and m = 4 for k = 5. With m = 1 and m = 2 the rule had pushed the passage itself out of the first five, and the idea only needs one place kept free for a second page. No two changes were combined. No rule that reads the wording of a question to split it was tried: many of these questions were written in two parts on purpose, and such a rule would be fitted to how they were written. Splitting a question needs a model, and belongs to the step that asks a model before the search ([issue 79](https://github.com/MumukshuPanchal/handbook-rag/issues/79)).
 
 ## The 33 two-passage questions
 
@@ -102,7 +102,7 @@ The clear readings are in the table of the golden set, which holds 28 comparison
 
 - **One chunk of a page**: 22 questions worse and 1 better. An exact sign test gives p = 0.000006. No allowance for fourteen variants changes that.
 - **Two chunks**: 9 worse and none better, p = 0.004. A correction for the fourteen comparisons of Hit@5 asks for less than 0.0036, so this one stands at its edge.
-- **Three chunks**: 4 worse and none better. The interval excludes zero, and the sign test gives p = 0.125: the rule that `eval-compare` applies is generous when few questions change. By itself this reading would show nothing.
+- **Three chunks**: 4 worse and none better. The interval excludes zero, and the sign test gives p = 0.125: the rule that `eval-compare` applies is generous when few questions change ([issue 80](https://github.com/MumukshuPanchal/handbook-rag/issues/80)). By itself this reading would show nothing.
 - **Fusion constant 10, on MRR@10**: +0.003, with 5 questions better and 1 worse, p = 0.219. Among 28 comparisons a reading like this is what chance produces. The committed run [`v9`](../runs/retrieval/v9) had the same figures.
 
 What makes the loss from the page limit believable is not one of these tests. It is that the loss grows as the limit tightens (2, 4, 9 and 22 questions), that the same questions are lost each time, and that the section above says why.

@@ -20,6 +20,8 @@ from typing import Any
 
 from handbook_rag.config import Settings
 from handbook_rag.evals.compare import compare_runs
+from handbook_rag.evals.dataset import load_golden_set
+from handbook_rag.evals.two_passage import load_reasons
 
 ROOT = Path(__file__).parents[1]
 RUNS = ROOT / "evals" / "runs"
@@ -33,6 +35,8 @@ REPOSITORY = "https://github.com/MumukshuPanchal/handbook-rag"
 ISSUES = {*range(1, 23), 24, 34, 37, 42, 43, 47, 51, 52, 53, 58, 59, 60, 61, 66}
 PULLS = {23, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 38, 39, 40, 41, 44, 45, 46, 48}
 PULLS |= {49, 50, 54, 55, 56, 57, 62, 63, 64, 65, 67, 68}
+# Opened since: the two-passage questions, follow-up questions, and the rule for "clear".
+ISSUES |= {78, 79, 80}
 
 # A number as the README prints it: 132, 1,654, 0.962. A digit that is part of a name is
 # not one (Recall@5, v2, a commit hash), and neither is a percentage, which here only
@@ -87,6 +91,30 @@ def line_starting(text: str, prefix: str) -> str:
 def numbers(text: str) -> list[str]:
     """The numbers in a piece of the README, in order, as printed, outside link targets."""
     return NUMBER.findall(re.sub(r"\]\([^)]*\)", "]", text))
+
+
+def prose_with_numbers(markdown: str) -> list[str]:
+    """Every line of prose in a piece of Markdown that holds a number.
+
+    Table rows, headings and fenced code are left out: a table is compared cell by cell.
+    """
+    prose = re.sub(r"^ *```.*?^ *```", "", markdown, flags=re.DOTALL | re.MULTILINE)
+    return [
+        line for line in prose.splitlines() if not line.startswith(("|", "#")) and numbers(line)
+    ]
+
+
+def assert_numbers(markdown: str, expected: dict[str, list[str]]) -> None:
+    """Each line that starts with a key holds exactly those numbers, in that order.
+
+    And no other line of prose holds a number: a number that no key accounts for is one
+    that nothing checks. A line is a paragraph or a point, since these documents do not
+    wrap their lines.
+    """
+    for start, held in expected.items():
+        assert numbers(line_starting(markdown, start)) == held, start
+    unheld = [line for line in prose_with_numbers(markdown) if not line.startswith(tuple(expected))]
+    assert unheld == [], f"lines with numbers that no test works out: {unheld}"
 
 
 def link_target(cell: str) -> str:
@@ -651,6 +679,140 @@ def test_the_answer_cache_section_is_the_third_committed_cache_run() -> None:
         "it was made again, cold and with the defaults of today, by the session that "
         "coordinated this change: 4 questions, of which 2 cost a request"
     ) in section
+
+
+# Each search in the table of the two-passage questions, and its run.
+TWO_PASSAGE = {
+    "Hybrid, the default": "hybrid",
+    "Embedding model": "dense",
+    "Keyword (BM25)": "sparse",
+}
+# The runs of the search variants: on the 33 questions beside the three searches, and on
+# the golden set in a directory of their own, with the default search as `hybrid`.
+VARIANTS_ON_THE_33 = RUNS / "two-passage"
+VARIANTS_ON_THE_GOLDEN_SET = RUNS / "search-variants-golden"
+TWO_PASSAGE_QUESTIONS = ROOT / "evals" / "two-passage" / "questions.jsonl"
+TWO_PASSAGE_REASONS = ROOT / "evals" / "two-passage" / "why-two.jsonl"
+
+
+def test_the_two_passage_section_is_the_committed_runs() -> None:
+    """The section on questions that need two passages, and its line under Limitations.
+
+    Every number in them is worked out here, and a line with a number that nothing works
+    out fails. ``tests/evals/test_two_passage_documents.py`` holds the other documents
+    that give these figures in the same way.
+    """
+    rows = table(readme(), "| Search | Both passages in the top 5 (95% interval) |")
+    section = readme().split("### Questions that need two passages\n")[1].split("\n### ")[0]
+    written = len(load_golden_set(TWO_PASSAGE_QUESTIONS))
+    confirmed = sum(bool(reason.confirmed) for reason in load_reasons(TWO_PASSAGE_REASONS).values())
+
+    assert [row[0] for row in rows] == [
+        f"[{search}](evals/runs/two-passage/{run})" for search, run in TWO_PASSAGE.items()
+    ]
+    for row, run in zip(rows, TWO_PASSAGE.values(), strict=True):
+        about = summary(f"two-passage/{run}")
+        metrics, in_top = about["metrics"], about["needs_several_passages"]["found_in_top"]
+        both, one = in_top["5"]["all"], in_top["5"]["some"]
+        assert (about["questions_scored"], about["questions_left_out"]) == (confirmed, ["t025"])
+        assert row[1:] == [
+            f"{with_interval(metrics['all@5'])}, {both} of {confirmed}",
+            f"{three(metrics['hit@5']['mean'])}, {both + one} of {confirmed}",
+            f"{three(metrics['all@10']['mean'])}, {in_top['10']['all']} of {confirmed}",
+        ], run
+
+    # The default search: both passages, at least one, and the questions between the two.
+    several = summary("two-passage/hybrid")["needs_several_passages"]
+    both, one = several["found_in_top"]["5"]["all"], several["found_in_top"]["5"]["some"]
+    # The fourteen variants: every run of the 33 questions but the three searches.
+    variants = sorted(
+        path.parent.name
+        for path in VARIANTS_ON_THE_33.glob("*/summary.json")
+        if path.parent.name not in TWO_PASSAGE.values()
+    )
+    assert {path.parent.name for path in VARIANTS_ON_THE_GOLDEN_SET.glob("*/summary.json")} == {
+        *variants,
+        "hybrid",
+    }
+    found = [hits(summary(f"two-passage/{run}")["metrics"]["all@5"]) for run in variants]
+    assert not [
+        run
+        for run in variants
+        if compare_runs(VARIANTS_ON_THE_33 / "hybrid", VARIANTS_ON_THE_33 / run)
+        .metrics["all@5"]
+        .change.is_clear
+    ]
+    assert "and none is clearly different from the default" in section
+    assert len(variants) == 14
+    assert "**Fourteen changes to the search were tried, and none is adopted**" in section
+    assert "Fourteen variants were compared on the same 33 questions" in section
+    # The limit for each page, on the golden set, whose runs repeat the committed `v2`.
+    default = summary("search-variants-golden/hybrid")["metrics"]["hit@5"]
+    one_chunk, two_chunks = (
+        compare_runs(
+            VARIANTS_ON_THE_GOLDEN_SET / "hybrid", VARIANTS_ON_THE_GOLDEN_SET / run
+        ).metrics["hit@5"]
+        for run in ("spread-1-in-5", "spread-2-in-5")
+    )
+    assert default == summary("retrieval/v2")["metrics"]["hit@5"]
+    assert one_chunk.change.is_clear
+    assert two_chunks.change.is_clear
+    assert two_chunks.change.better == 0
+    # Further down in the default's results, from the rank of each passage.
+    ranks = [row["evidence_ranks"] for row in results("two-passage/hybrid")]
+
+    def both_within(k: int) -> int:
+        return sum(all(rank is not None and rank <= k for rank in of_one) for of_one in ranks)
+
+    assert (both_within(5), both_within(10)) == (both, several["found_in_top"]["10"]["all"])
+
+    assert_numbers(
+        section,
+        {
+            "Almost every test question rests on one passage": [
+                str(confirmed),
+                str(written),
+                str(confirmed),
+                "0021",
+                "78",
+            ],
+            "- **The default search gives the model both passages": [
+                str(both),
+                str(confirmed),
+                str(both + one),
+                str(one),
+            ],
+            "- **Fourteen changes to the search were tried": [
+                str(min(found)),
+                str(max(found)),
+                str(confirmed),
+            ],
+            "- **A limit on the chunks of one page": [
+                str(default["count"]),
+                three(default["mean"]),
+                three(one_chunk.candidate.mean),
+                three(two_chunks.candidate.mean),
+                str(one_chunk.change.worse),
+                str(one_chunk.change.better),
+                str(two_chunks.change.worse),
+            ],
+            "- **The second passage is often further down, or not found.**": [
+                str(both_within(8)),
+                str(both_within(10)),
+                str(several["not_all_retrieved"]),
+                str(confirmed),
+                "79",
+            ],
+            '- **Read "clear" with care here.**': [str(confirmed), "80"],
+        },
+    )
+    # And once more under Limitations, with what was not done.
+    limitation = line_starting(readme(), "- **A question that needs two passages often gets one")
+    assert numbers(limitation) == [str(both), str(confirmed), "0021", "78"]
+    assert "no answer was written for these questions" in limitation
+    assert "so the share is more likely too high than too low" in limitation
+    assert "no person has read them" in limitation
+    assert "No person has read them, and no answer was written for them." in section
 
 
 def test_every_link_to_a_file_or_a_heading_leads_to_one() -> None:

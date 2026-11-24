@@ -177,6 +177,24 @@ Retrieval on the 132 answerable test questions, over the full index of 38,881 ch
 - **Two experiments did not help**, and are written up anyway: half-size chunks, and other settings of the rank fusion ([experiment log](docs/experiments/2026-11-22-chunk-size-and-fusion.md)).
 - **CI catches broken retrieval.** Every pull request is scored with the real models on a slice of the handbook, and fails if a score falls below a recorded minimum. That detects breakage, such as losing either half of hybrid search. It does not detect a change that costs one or two questions ([ADR 0012](docs/adr/0012-retrieval-gate-on-a-slice.md)).
 
+### Questions that need two passages
+
+Almost every test question rests on one passage, so a search that found one of two needed passages counted as a hit. [33 questions](evals/two-passage/README.md) whose answer needs two passages on two different pages measure that. A model wrote 34 with both passages in front of it, and three sessions of the same model read them again and confirmed 33. No person has read them, and no answer was written for them. Each row is a run in [`evals/runs/two-passage`](evals/runs/two-passage), and no language model is involved ([ADR 0021](docs/adr/0021-two-passage-questions-and-the-search-as-it-is.md), [issue 78](https://github.com/MumukshuPanchal/handbook-rag/issues/78)).
+
+| Search | Both passages in the top 5 (95% interval) | At least one in the top 5 | Both in the top 10 |
+|---|---|---|---|
+| [Hybrid, the default](evals/runs/two-passage/hybrid) | 0.364 (0.212 to 0.515), 12 of 33 | 0.788, 26 of 33 | 0.515, 17 of 33 |
+| [Embedding model](evals/runs/two-passage/dense) | 0.182 (0.061 to 0.333), 6 of 33 | 0.788, 26 of 33 | 0.485, 16 of 33 |
+| [Keyword (BM25)](evals/runs/two-passage/sparse) | 0.242 (0.091 to 0.394), 8 of 33 | 0.697, 23 of 33 | 0.303, 10 of 33 |
+
+The same test as for the tables above holds this table and the figures in the points below to the runs.
+
+- **The default search gives the model both passages for 12 of the 33 questions, and at least one for 26.** So 14 questions count as a hit while the model would be given half of what the answer needs. The score for "both" is All@5, which a run now records beside Hit@5 ([the guide](docs/evaluation.md#questions-that-need-two-passages)).
+- **Fourteen changes to the search were tried, and none is adopted** ([the results](evals/two-passage/search-variants.md)). They need no request to a model: a limit on the chunks of one page among the first results, other numbers of candidates, other fusion constants, and the reranker. They find both passages for 8 to 13 of the 33 questions, and none is clearly different from the default.
+- **A limit on the chunks of one page costs the questions that rest on one passage.** On the 132 test questions Hit@5 falls from 0.962 to 0.803 with one chunk of a page allowed and to 0.894 with two. With one chunk 22 questions lose their passage and 1 gains it, and with two 9 lose it. The rule cannot tell which chunk of a page holds the passage.
+- **The second passage is often further down, or not found.** Both passages are among the first eight results for 16 questions and among the first ten for 17. Whether the model answers better from more passages takes real requests to measure, and was not measured. For 16 of the 33 questions a passage is not among the first ten results at all, so the next step asks a model before the search, to split a question that asks for two things ([issue 79](https://github.com/MumukshuPanchal/handbook-rag/issues/79)).
+- **Read "clear" with care here.** Fourteen variants were compared on the same 33 questions, and the rule behind "clear" is generous when few questions change ([the guide](docs/evaluation.md#how-to-read-clear-there), [issue 80](https://github.com/MumukshuPanchal/handbook-rag/issues/80)).
+
 ### Answers
 
 All 165 test questions, answered by `gemini-3.5-flash-lite` from the five passages hybrid search found, on 22 November 2026. The run is [`evals/runs/answers/baseline`](evals/runs/answers/baseline). "Supported" and "correct" come from the two judges described next; the other scores are computed by code from the saved replies. [The evaluation guide](docs/evaluation.md#answer-metrics) says what each score means.
@@ -279,6 +297,7 @@ What this version does not do, or does not show. Each point is already stated in
 
 - **No person has verified the test questions, the labels or the readings.** The 165 test questions, the labelled answers both judges were checked against, and the readings of the five adversarial replies that code set aside were all made and checked by model sessions ([golden set](evals/golden/README.md), [labelled answers](evals/judge/README.md), [adversarial cases](evals/adversarial/README.md)). A person's check of a sample is what remains of [issue 8](https://github.com/MumukshuPanchal/handbook-rag/issues/8).
 - **Most test questions were written from their passage.** 122 of the 132 answerable questions were written by a model that could see the passage, and 10 without it, too few to compare searches on ([golden set](evals/golden/README.md), [issue 43](https://github.com/MumukshuPanchal/handbook-rag/issues/43)).
+- **A question that needs two passages often gets one of them.** The search gives the model both passages for 12 of 33 such questions, and none of the changes to the search that were tried finds them clearly more often. What the assistant then answers is not measured: no answer was written for these questions. A model wrote them with both passages in front of it, so the share is more likely too high than too low, and no person has read them ([two-passage questions](evals/two-passage/README.md), [ADR 0021](docs/adr/0021-two-passage-questions-and-the-search-as-it-is.md), [issue 78](https://github.com/MumukshuPanchal/handbook-rag/issues/78)).
 - **The judge is the answer model itself.** Both judges are `gemini-3.5-flash-lite`, and a model judging its own answers may be lenient. Labels from another model family are some protection ([ADR 0014](docs/adr/0014-answer-evaluation-in-stages.md)).
 - **The judges were checked on one model's answers, and not against planted instructions.** No figure says how either judge does on another model's answers ([labelled answers](evals/judge/README.md#known-limits)), and whether an instruction planted in a passage moves a judge is not tested ([adversarial cases](evals/adversarial/README.md#known-limits)).
 - **The first judge was told two rules fewer than its readers.** Its instructions lack two rules of its rubric, and in one long answer its numbering slipped. Putting the rules back makes another judge, which has to be checked again ([the guide](docs/evaluation.md#what-the-judge-decides), [issue 58](https://github.com/MumukshuPanchal/handbook-rag/issues/58)).
@@ -443,6 +462,9 @@ uv run handbook-rag cache-clear    # empty it; --all also removes the caches lef
 make test-live       # send three real requests to the answer model, one of them through the API
 make golden-check    # verify every test question against the handbook
 make eval-retrieval  # score the default search, as a scratch run named "current"
+uv run handbook-rag golden-check --dataset evals/two-passage/questions.jsonl --reasons evals/two-passage/why-two.jsonl   # verify the two-passage questions: two pages each, and a reason for each passage
+uv run handbook-rag eval-retrieval --dataset evals/two-passage/questions.jsonl --reviewed-only --output evals/runs/two-passage   # does the search find both passages? also a scratch run
+uv run handbook-rag eval-retrieval --spread-per-page 2 --spread-within 5   # a variant of hybrid search for one scratch run; also --fusion-candidates and --rrf-k
 make eval-answers    # answer every test question and score what code can check: 165 real requests
 make eval-judge      # check the judge against labelled answers: 169 real requests
 make eval-support    # judge the saved answers: is each statement backed by the passage it cites?
@@ -504,5 +526,7 @@ The assistant is built on the [GitLab Handbook](https://handbook.gitlab.com/), w
 The test questions in [`evals/golden/`](evals/golden/README.md) quote short passages from the handbook. That folder is therefore licensed CC BY-SA 4.0 and credits GitLab, separately from the code, which is under the [MIT licence](LICENSE). The same holds for the labelled answers in [`evals/judge/`](evals/judge/README.md), the adversarial cases in [`evals/adversarial/`](evals/adversarial/README.md) and the saved runs under `evals/runs/`, whose replies repeat handbook text: mostly a sentence or two, and in one adversarial case five whole passages, which the model copied out when it was asked to.
 
 The cache question pairs in [`evals/cache/`](evals/cache/README.md) are under CC BY-SA 4.0 too: the test questions in them are those of the golden set.
+
+So are the two-passage questions in [`evals/two-passage/`](evals/two-passage/README.md): they quote the handbook, and the readers' answers there restate it.
 
 This project is not affiliated with or endorsed by GitLab.

@@ -71,6 +71,7 @@ Each row records the latency of its retrieval, so a variant's gain in quality ca
 | Metric | Question it answers |
 |---|---|
 | Hit@k | Did a relevant chunk appear in the top k? The model can only answer from what it is given, so Hit@5 is the ceiling on answer quality when five chunks are passed. |
+| All@k | Did the top k hold every passage the answer needs? For a question with one passage it is Hit@k. It is there for [questions that need two passages](#questions-that-need-two-passages), where a hit means that one of the two was found. |
 | Recall@5 | What share of the evidence was covered by the top 5? It differs from Hit@5 only when a question needs more than one passage. |
 | MRR@10 | How high was the first relevant chunk? 1 at rank 1, one half at rank 2, and so on. |
 | nDCG@10 | How good is the ordering overall, compared with the best possible one? |
@@ -109,6 +110,8 @@ How to read a row:
 - **unclear** means the two variants cannot be told apart with this many questions. That is a finding too: it says not to pay extra latency or complexity for the candidate on this evidence.
 - **better** and **worse** count the questions where the candidate scored higher or lower. A gain of 15 against a loss of 0 is more convincing than 40 against 25, even when the means match. The questions that got worse are the ones to read.
 
+The rule for "clear" is generous when few questions change. Four questions better and none worse reads as clear, and an exact sign test on those four gives p = 0.125 ([issue 80](https://github.com/MumukshuPanchal/handbook-rag/issues/80)). And when many variants are compared on the same questions, some come out clear by chance. [The two-passage questions](#how-to-read-clear-there) have a case of each.
+
 The comparison refuses to run if the two variants did not score exactly the same questions with the same labels. Every row in `results.jsonl` carries a fingerprint of its question, reference answer and evidence (and of the evidence mode, when that is not the default), so a run made before the golden set changed cannot be compared by accident with one made after.
 
 To report results, `make eval-table` prints one row for every run it finds on disk as a Markdown table, read from the files each run wrote. Numbers in a write-up are generated, never copied by hand.
@@ -130,6 +133,119 @@ It keeps the 134 pages that hold evidence for a golden set question, indexes the
 Its scores are not quality numbers. A slice of 8% of the handbook is easier to search than the whole, so hybrid search scores 0.992 on Hit@5 there and 0.962 on the full index. The gate's scores are only compared with themselves. What it shows is that a change broke retrieval: on the same slice, dense search alone scores 0.939 and keyword search alone 0.962, and both fail. The dense-only failure was also produced in CI, in a pull request made for that purpose; the keyword-only number was measured on a laptop. A change that costs one or two questions still passes.
 
 When a pull request changes retrieval on purpose, it changes the minimums in the same pull request, with the full evaluation as its evidence. The minimums are a floor to be raised, not a target. The reasoning, and the designs that were measured and rejected, are in [ADR 0012](adr/0012-retrieval-gate-on-a-slice.md).
+
+## Questions that need two passages
+
+Almost every golden question rests on one passage. Of the 132 that the handbook answers, 129 have one piece of evidence. Two others list passages on more than one page, any one of which answers the question, and one needs two passages of one page. None needs passages on two pages. Yet it is easy to ask for two things at once: how a benefit differs between two countries, or a rule and its exception. For such a question a search that brings one of the two passages counts as a hit, and nothing says that half of the evidence is missing. A second set of questions measures that ([the card](../evals/two-passage/README.md), [ADR 0021](adr/0021-two-passage-questions-and-the-search-as-it-is.md), [issue 78](https://github.com/MumukshuPanchal/handbook-rag/issues/78)).
+
+```bash
+# Check the set: every quote in its page, two pages for each question, a reason for each passage
+uv run handbook-rag golden-check --dataset evals/two-passage/questions.jsonl --reasons evals/two-passage/why-two.jsonl
+
+# Score the default search on the confirmed questions, as a scratch run named "current"
+uv run handbook-rag eval-retrieval --dataset evals/two-passage/questions.jsonl --reviewed-only --output evals/runs/two-passage
+```
+
+Neither command sends a request to a model.
+
+### What the set is, and how it was read a second time
+
+- **34 questions in the golden set's format, in a file of their own**, so that the saved runs of the golden set stay comparable. Each has two pieces of evidence on two different pages. There are four kinds: 12 comparisons, 8 questions where one page gives a term or a class and a rule on another page is written for it, 7 with a rule and its exception, and 7 with two steps of one process.
+- **One model session wrote them, with both passages in front of it.** For each question it also wrote down what a reader with only the first passage gets wrong or leaves out, and the same for the second. Those reasons are in `why-two.jsonl`. `golden-check --reasons` refuses a question that lacks one, that does not have two passages on two pages, or whose `review` does not fit what the second reading found.
+- **Three sessions of the same model read them again**, without the reasons. Each question was shown three ways: with both passages, with the first alone and with the second alone. The showings were dealt over three forms, so that no reader met a question twice. Twelve questions of the golden set were mixed in as controls.
+- **The readers confirm 33 of the 34**: complete with both passages, and not complete with either alone. The one they dispute, `t025`, keeps `"review": "pending"`, and `eval-retrieval --reviewed-only` leaves it out of every run. Without that option a pending question is scored like any other, as before.
+- **A model's check is not a person's review.** No person has read the questions. They are also likely easier for a search than real ones: a comparison names both of its subjects, and the questions share words with their evidence.
+
+### Every passage found: All@k beside Hit@k
+
+For these questions Hit@k says that at least one of the two passages is among the first k results. All@k says that both are. For a question with one passage the two are the same score. No score the golden set had changed. In its runs made with this code All@k equals Hit@k for every question: its one question that needs two passages, `b15`, has both in one chunk.
+
+On the default search, Hit@5 is 0.788 and All@5 is 0.364: the first five results hold both passages for 12 of the 33 questions and at least one for 26. So 14 questions count as a hit while the model would be given half of what the answer needs.
+
+A passage is credited by its quote, as in the golden set. A page sometimes says the same thing in a second place, and a search that returns that place is counted as not finding it. A run therefore also counts any chunk of the right page as finding the passage, which is too generous the other way. For the first five results the truth lies between 12 and 15 of 33.
+
+### What the searches find
+
+Measured on the full index, on the 33 confirmed questions. The runs are in [`evals/runs/two-passage`](../evals/runs/two-passage).
+
+| Search | Run | Both in the top 5 (95% interval) | At least one in the top 5 | Both in the top 10 | At least one in the top 10 |
+|---|---|---|---|---|---|
+| Hybrid, the default | [`hybrid`](../evals/runs/two-passage/hybrid) | 0.364 (0.212 to 0.515) | 0.788 | 0.515 | 0.909 |
+| Embedding model | [`dense`](../evals/runs/two-passage/dense) | 0.182 (0.061 to 0.333) | 0.788 | 0.485 | 0.848 |
+| Keyword (BM25) | [`sparse`](../evals/runs/two-passage/sparse) | 0.242 (0.091 to 0.394) | 0.697 | 0.303 | 0.818 |
+
+The kinds differ. The default search finds both passages for 8 of the 12 comparisons, and for none of the 8 questions that describe a case without the term its rule is written for. With 6 to 12 questions of a kind that is a pattern to look into, and no more. [The card](../evals/two-passage/README.md#what-the-search-does-with-them) has the counts.
+
+Looking further down finds more. This table is read from the two saved runs of the default search, on the 33 questions and on the golden set:
+
+| In the first | Both passages, of the 33 | At least one, of the 33 | The passage, of the 132 golden questions |
+|---|---|---|---|
+| 5 | 12 of 33 (0.364) | 26 of 33 (0.788) | 127 of 132 (0.962) |
+| 8 | 16 of 33 (0.485) | 29 of 33 (0.879) | 129 of 132 (0.977) |
+| 10 | 17 of 33 (0.515) | 30 of 33 (0.909) | 130 of 132 (0.985) |
+
+The first eight results hold both passages for 16 questions and the first ten for 17, which is 5 more than the first five: +0.152 (+0.030 to +0.303). That difference can only go one way, because more results never lose a passage. What giving the model eight or ten passages would do to its answers is not known. It takes real requests to measure, and it was not measured.
+
+For 16 of the 33 questions a passage is not among the first ten results at all, and for 3 of them neither is. A run asks the search for ten results, so where it would have come is not recorded. No reordering of the first ten can bring it in, and none of the variants below brings both passages into the first ten for more than 2 of those 16.
+
+### Fourteen variants of the search, and none adopted
+
+Fourteen changes to the search that need no request to a model were each run on the 33 questions and on the golden set ([the results](../evals/two-passage/search-variants.md)). Each changes one thing about the default:
+
+- **A limit for each page**: at most so many chunks of one page among the first results of the merged list. A chunk over the limit moves down, and none is dropped.
+- **Another number of candidates** from each of the two searches, where the default takes 30.
+- **Another fusion constant**, where the default is 60.
+- **The reranker**, which the project already had.
+
+Twelve were written down before the first run. Two were added after the first results had been seen, and are marked. That order is the account of the session that made the runs, and the repository cannot show it. A change is compared with the default question by question, as [above](#comparing-two-variants).
+
+| Variant | Both in the top 5, of the 33 | Change (95% interval) | Better / worse | Reading | Hit@5 on the golden set, of 132 | Its change (95% interval) | Its better / worse | Its reading |
+|---|---|---|---|---|---|---|---|---|
+| The default: 30 candidates from each search, constant 60 | 12 of 33 (0.364) |  |  |  | 127 of 132 (0.962) |  |  |  |
+| At most 1 chunk of a page among the first 5 | 8 of 33 (0.242) | -0.121 (-0.273 to +0.030) | 1 / 5 | unclear | 106 of 132 (0.803) | -0.159 (-0.227 to -0.098) | 1 / 22 | clear |
+| At most 2 chunks of a page among the first 5 | 13 of 33 (0.394) | +0.030 (+0.000 to +0.091) | 1 / 0 | unclear | 118 of 132 (0.894) | -0.068 (-0.114 to -0.030) | 0 / 9 | clear |
+| At most 3 chunks of a page among the first 5 (added later) | 12 of 33 (0.364) | +0.000 (+0.000 to +0.000) | 0 / 0 | unclear | 123 of 132 (0.932) | -0.030 (-0.061 to -0.008) | 0 / 4 | clear |
+| At most 4 chunks of a page among the first 5 (added later) | 12 of 33 (0.364) | +0.000 (+0.000 to +0.000) | 0 / 0 | unclear | 125 of 132 (0.947) | -0.015 (-0.038 to +0.000) | 0 / 2 | unclear |
+| At most 1 chunk of a page among the first 10 | 8 of 33 (0.242) | -0.121 (-0.273 to +0.030) | 1 / 5 | unclear | 106 of 132 (0.803) | -0.159 (-0.227 to -0.098) | 1 / 22 | clear |
+| At most 2 chunks of a page among the first 10 | 13 of 33 (0.394) | +0.030 (+0.000 to +0.091) | 1 / 0 | unclear | 118 of 132 (0.894) | -0.068 (-0.114 to -0.030) | 0 / 9 | clear |
+| 10 candidates from each search | 10 of 33 (0.303) | -0.061 (-0.152 to +0.000) | 0 / 2 | unclear | 125 of 132 (0.947) | -0.015 (-0.045 to +0.015) | 1 / 3 | unclear |
+| 20 candidates from each search | 13 of 33 (0.394) | +0.030 (+0.000 to +0.091) | 1 / 0 | unclear | 126 of 132 (0.955) | -0.008 (-0.023 to +0.000) | 0 / 1 | unclear |
+| 50 candidates from each search | 12 of 33 (0.364) | +0.000 (+0.000 to +0.000) | 0 / 0 | unclear | 127 of 132 (0.962) | +0.000 (+0.000 to +0.000) | 0 / 0 | unclear |
+| 100 candidates from each search | 12 of 33 (0.364) | +0.000 (+0.000 to +0.000) | 0 / 0 | unclear | 125 of 132 (0.947) | -0.015 (-0.038 to +0.000) | 0 / 2 | unclear |
+| Fusion constant 20 | 12 of 33 (0.364) | +0.000 (+0.000 to +0.000) | 0 / 0 | unclear | 126 of 132 (0.955) | -0.008 (-0.023 to +0.000) | 0 / 1 | unclear |
+| Fusion constant 10 | 12 of 33 (0.364) | +0.000 (-0.091 to +0.091) | 1 / 1 | unclear | 127 of 132 (0.962) | +0.000 (+0.000 to +0.000) | 0 / 0 | unclear |
+| Fusion constant 5 | 10 of 33 (0.303) | -0.061 (-0.182 to +0.061) | 1 / 3 | unclear | 126 of 132 (0.955) | -0.008 (-0.023 to +0.000) | 0 / 1 | unclear |
+| The 30 merged results reranked by the cross-encoder | 12 of 33 (0.364) | +0.000 (-0.182 to +0.152) | 4 / 4 | unclear | 124 of 132 (0.939) | -0.023 (-0.061 to +0.015) | 2 / 5 | unclear |
+
+- **No variant finds both passages clearly more often.** The counts run from 8 to 13 of 33, and no difference from the default's 12 is clear.
+- **A limit for each page costs the golden set its passages.** Hit@5 on the golden set is 0.803, 0.894, 0.932 and 0.947 with 1, 2, 3 and 4 chunks allowed, against 0.962. The rule cannot tell which chunk of a page holds the passage. In the default run of the golden set the passage is among the first five results for 127 questions, and for 23 of those another chunk of the same page stands above it. With one chunk of a page allowed, 22 questions lose their passage, all 22 among those 23, and 1 other question gains it.
+- **So none is adopted, and the default search is as it was** ([ADR 0021](adr/0021-two-passage-questions-and-the-search-as-it-is.md)). The next step asks a model before the search, to split a question that asks for two things ([issue 79](https://github.com/MumukshuPanchal/handbook-rag/issues/79)).
+
+A variant is an option of `eval-retrieval` for one run, and off unless it is given. The limit for each page has no setting, and no other command has it. The number of candidates and the fusion constant are also the settings `HANDBOOK_RAG_FUSION_CANDIDATES` and `HANDBOOK_RAG_RRF_K`, which hold for every command; the options change them for one run. Reranking was already the option `--rerank` and the setting `HANDBOOK_RAG_RERANK`. Each of these writes the scratch run `current`, and [the results](../evals/two-passage/search-variants.md#how-the-runs-were-made) have the commands that made the saved runs:
+
+```bash
+uv run handbook-rag eval-retrieval --spread-per-page 2 --spread-within 5   # a limit for each page
+uv run handbook-rag eval-retrieval --fusion-candidates 50                  # candidates from each search
+uv run handbook-rag eval-retrieval --rrf-k 10                              # the fusion constant
+```
+
+The command refuses a variant that it could not measure: one of `--spread-per-page` and `--spread-within` without the other, any of the three in a mode that merges nothing, a limit for each page with reranking, and fewer candidates than the results the search is asked for.
+
+### How to read "clear" there
+
+"Clear" means that the 95% interval of one comparison excludes zero. Two things weaken it here.
+
+- **Many comparisons on the same questions.** Twelve different comparisons were made on "both in the top 5": fourteen variants, of which two repeat two others on the first five results. If none of the twelve changed anything, the chance that at least one came out clear would be up to 1 - 0.95^12 = 46%, and not 5%. None did. Had one looked good, what it could claim is "worth testing on new questions".
+- **The rule is generous when few questions change** ([issue 80](https://github.com/MumukshuPanchal/handbook-rag/issues/80)). The limit of three chunks reads as clear on the golden set, on 4 questions worse and none better. An exact sign test on those four gives p = 0.125. The fusion constant 10 reads as clear on MRR@10, on 5 questions better and 1 worse: p = 0.219. The card's comparison of hybrid search with keyword search on the 33 questions, 4 better and none worse, is of the same kind.
+
+The loss from a limit of one or two chunks does not rest on that rule alone: the same test gives p = 0.000006 and p = 0.004. And it has a reason, grows as the limit tightens, and loses the same questions each time.
+
+### What is not measured
+
+- **No answer was written for these questions.** Whether the model uses both passages when it has both, and says so when it has one, is not known.
+- **No person has read the questions.** One model session wrote them, with both passages in front of it, and three sessions of the same model read them again. Questions written that way are likely easier for a search than real ones, so the shares here are more likely too high than too low.
+- **Nothing was tested on new questions**: fourteen variants were tried on the same 33 questions.
+- **What more passages would do to the answers.** For 5 of the 33 questions the later of the two passages came at ranks 6 to 10, which the model is not given.
 
 ## Answer metrics
 
@@ -760,6 +876,16 @@ Each kept run is a variant: `baseline` first, then `v1`, `v2` and so on. (`curre
 
 A harness failure, such as the vector store being unreachable, is recorded in `errors.jsonl` and never counted as a miss. A score has to describe the retriever, not the plumbing around it.
 
+Since the [two-passage questions](#questions-that-need-two-passages), a retrieval run writes more:
+
+- **Three more scores** in every row and in the summary: All@3, All@5 and All@10.
+- **Where each passage came.** A row of `results.jsonl` has `evidence_ranks`, the rank of the first chunk that covers each piece of evidence, and `page_ranks`, the rank of the first chunk of that piece's page. `null` means not among the ten results.
+- **Counts for the questions that need two or more passages**, in `summary.json` under `needs_several_passages`. `found_in_top` has, for the first 3, 5 and 10 results, the questions with all, some and none of their passages there. `all_found_by_rank` has the rank at which every passage was there, and `not_all_retrieved` the questions with a passage that is not among the results. `pages_in_top` has the first counts again with any chunk of the right page counted, and `retrieved` the number of results the run asked for. A run in which no question needs more than one passage has no such block. The golden set has one such question, so its runs have the block, for that question.
+- **The questions left out.** A run made with `--reviewed-only` names them under `questions_left_out`.
+- **The variant.** A run made with `--fusion-candidates` or `--rrf-k` records that number in its configuration, where the default's run has 30 and 60. A run with a limit for each page records `spread_per_page` and `spread_within`, which no other run has.
+
+The committed runs under `evals/runs/retrieval/` were made before any of this and are as they were. The golden set's runs of the search variants are in a directory of their own, `evals/runs/search-variants-golden/`.
+
 An answer run under `evals/runs/answers/` has the same files, with two differences:
 
 | File | Content |
@@ -783,5 +909,7 @@ A cache measurement under `evals/runs/cache/` holds `pairs.jsonl` (one line for 
 The test suite runs two sanity checks through the whole evaluation: a retriever that always returns the right passage first must score 1.0 on every metric, and one that never returns it must score 0. An evaluation that fails either check is measuring its own bugs.
 
 The answer evaluation has the same two checks: an assistant that cites the right passage and declines what it should must score 1.0 on every score, and one that declines every answerable question and answers the others without a citation must score 0 on every score that is about the assistant.
+
+The two-passage questions are held to their files by tests: the card to the questions, to the readers' lines and to the three saved runs, and the results of the search variants to their runs, each difference worked out again as `eval-compare` does. Six of the golden set's runs of the variants measure a search that a committed run had measured, and a test holds each to that run score for score. The default search has a test of its own: its rankings on a small stand-in index were written down from the code before the variants existed, and must not move. Every number in this guide's section, in the README's section, in ADR 0021 and in the lines of the roadmap and the changelog is worked out from the runs, and a test fails on a number there that it does not work out.
 
 The cache measurement has checks of its own. The rule for a threshold is worked out by a shortcut, and a test compares it with trying every threshold on random questions. The figures of the committed run are worked out again from its rows, and the report the command prints is read back from that run figure by figure. The tables in this guide, in the README and in the card are held to it by tests, and so are the sentences that carry a finding, with the pairs they name. The second run is held the same way: its figures are worked out again from its rows, none of its candidates is a stored decline, and the cache's default threshold, its candidates and its floor are held to it.

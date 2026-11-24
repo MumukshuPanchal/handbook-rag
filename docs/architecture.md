@@ -127,7 +127,8 @@ flowchart LR
 ```
 
 - **Golden set.** Questions with a reference answer and the handbook passage that supports it. It includes questions the handbook cannot answer, to test that the assistant abstains.
-- **Retrieval metrics.** Hit@k (was a right passage among the top k?), Recall@k (what share of the evidence was among them, which differs from Hit@k only when a question needs more than one passage), MRR (how high was the first right passage ranked?) and nDCG@k (ranking quality over the top k).
+- **Two-passage questions.** A second set, of questions whose answer needs two passages on two different pages. For them Hit@k says that one passage was found, and All@k that both were ([ADR 0021](adr/0021-two-passage-questions-and-the-search-as-it-is.md)).
+- **Retrieval metrics.** Hit@k (was a right passage among the top k?), All@k (was every passage the answer needs among them?), Recall@k (what share of the evidence was among them, which differs from Hit@k only when a question needs more than one passage), MRR (how high was the first right passage ranked?) and nDCG@k (ranking quality over the top k).
 - **Answer metrics.** Code decides what it can from each saved reply: whether the assistant was right to answer or to decline, whether the evidence was among its passages, and whether every statement cites one. Two judges decide what code cannot: whether each statement is supported by the passage it cites, and whether the answer agrees with the reference answer. Both are the answer model under other instructions. Each was checked against labelled answers before its score was used, and those labels were made by model sessions of another model family, not by a person ([ADR 0014](adr/0014-answer-evaluation-in-stages.md)).
 - **System metrics.** Latency per stage and the tokens of each answer, taken from API responses and traces. Cost in money is worked out only for Claude models, from a price table; the Gemini free tier charges nothing, so the runs so far record tokens and no cost.
 - **Bookkeeping.** Every run stores per-question results and traces. Harness failures such as timeouts are recorded separately from wrong answers.
@@ -159,7 +160,8 @@ src/handbook_rag/
     config.py           settings from the environment
     ingest/             loading, cleaning, chunking
     index/              embedding, vector store, reuse of an older commit's vectors, comparing two indexes
-    retrieve/           dense, sparse, fusion, rerank
+    retrieve/           dense, sparse, fusion, rerank, and a rule that spreads results over pages,
+                        which only an evaluation run can turn on
     generate/           prompt assembly, one generator per provider, citation mapping,
                         and the wrapper that asks again and falls back
     cache/              the answer cache: its two tiers, where it keeps answers,
@@ -173,10 +175,10 @@ src/handbook_rag/
     tracing.py          tracing setup, and what each span records
     wiring.py           builds the parts from the settings
     cli.py              the handbook-rag command
-    evals/              metrics, runs, the two judges, adversarial tests
-                        and the cache measurement
-evals/                  golden set, labelled answers, adversarial cases, saved runs
-                        and the question pairs of the cache measurement
+    evals/              metrics, runs, the two judges, adversarial tests,
+                        the cache measurement and the checks of the two-passage questions
+evals/                  golden set, the two-passage questions, labelled answers, adversarial cases,
+                        saved runs and the question pairs of the cache measurement
 tests/                  unit and integration tests
 docs/                   charter, architecture, roadmap, decision records, guides
 compose.yaml            API, Qdrant and trace backend
@@ -220,6 +222,7 @@ compose.yaml            API, Qdrant and trace backend
 | Natural language inference | Deciding whether one sentence follows from another. The answer cache's second model is trained for it, and is asked in both directions |
 | Golden set | A fixed set of test questions with known good answers, each checked before use. Here the checks were made by model sessions, and not yet by a person |
 | Hit@k | Share of questions for which a relevant passage appears in the top k results |
+| All@k | Share of questions for which every passage the answer needs appears in the top k results. Equal to Hit@k when every question has one passage |
 | Recall@k | Share of a question's evidence that appears in the top k results. Equal to Hit@k when every question has one piece of evidence |
 | MRR | Mean reciprocal rank: average of 1 / rank of the first relevant result |
 | nDCG@k | A ranking score that rewards relevant results more the higher they appear |

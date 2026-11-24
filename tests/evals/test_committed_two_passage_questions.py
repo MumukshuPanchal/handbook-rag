@@ -46,6 +46,7 @@ from handbook_rag.evals.two_passage import (
     second_reading_of,
 )
 from handbook_rag.ingest.build import build_corpus
+from tests.evals.test_committed_search_variants import sign_test
 from tests.test_readme_results import table
 
 ROOT = Path(__file__).parents[2]
@@ -647,16 +648,31 @@ def test_the_comparison_of_the_searches_is_the_paired_comparison_of_their_runs()
     text = card()
     assert "hybrid against keyword search " + against("sparse").format("95% interval ") in text
     assert "Hybrid against the embedding model " + against("dense").format("") in text
-    # Clear against keyword search. Against the embedding model the interval reaches zero.
-    assert compare_runs(RUNS / "sparse", RUNS / "hybrid").metrics["all@5"].change.is_clear
+    # Clear against keyword search, by the interval. The card says what that count can
+    # carry: all four questions fell one way, which a fair coin does one time in eight.
+    to_keyword = compare_runs(RUNS / "sparse", RUNS / "hybrid").metrics["all@5"].change
+    assert to_keyword.is_clear
+    assert (
+        f"A count of {to_keyword.better} against {to_keyword.worse} cannot carry the word: an "
+        f"exact sign test on it gives p = {sign_test(to_keyword.better, to_keyword.worse):.3f}"
+        in text
+    )
+    assert (to_keyword.better, to_keyword.worse) == (4, 0)
+    assert "By the rule `eval-compare` applies, that difference reads as clear." in text
+    assert "([issue 80](https://github.com/MumukshuPanchal/handbook-rag/issues/80))" in text
+    # Against the embedding model the interval reaches zero.
     to_dense = compare_runs(RUNS / "dense", RUNS / "hybrid").metrics["all@5"].change
     assert not to_dense.is_clear
     assert to_dense.difference.low == 0.0
     assert "That interval reaches zero" in text
     assert (
-        "**Hybrid is ahead of keyword search, and not clearly ahead of the embedding model.**"
-        in text
+        "**Hybrid finds both passages for more questions than either other search, and "
+        "neither lead is firm.**" in text
     )
+    hybrid, *others = (
+        summary(mode)["needs_several_passages"]["found_in_top"]["5"]["all"] for mode in MODES
+    )
+    assert hybrid > max(others)
 
 
 def test_the_ranks_at_which_both_passages_were_found_are_those_of_the_run() -> None:
@@ -730,7 +746,12 @@ def test_the_figures_with_the_disputed_question_counted_fit_the_runs_without_it(
         assert with_it - counts["all"] in (0, 1)
     for with_it, counts in zip((27, 27, 24), in_five, strict=True):
         assert with_it - counts["all"] - counts["some"] in (0, 1)
-    assert "at commit `5276a32`" in card()
+    # The first commit of issue 78, which measured all 34. A test cannot read the history,
+    # which a shallow clone does not have, so it holds the name that goes with the hash.
+    assert (
+        'at commit `f880d4b` ("feat: questions that need two passages, and whether the '
+        'search finds both")' in card()
+    )
 
 
 def test_the_scores_of_the_golden_set_are_counted_as_the_card_says() -> None:

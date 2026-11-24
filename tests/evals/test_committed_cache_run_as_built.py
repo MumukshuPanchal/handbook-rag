@@ -1252,12 +1252,15 @@ def test_the_roadmap_and_the_changelog_quote_the_third_run() -> None:
     assert "(the saved run `evals/runs/cache/as-built`)" in changelog
     assert "chosen with every pair in view" in changelog
     assert "does nothing for correctness" in changelog
-    # Issue 24 is done: it is no longer in the list of what is open.
+    # Issue 24 is done: it is in the list of what is done, and neither in the list of what
+    # is open nor among what was started and is not finished.
     whole = (ROOT / "docs" / "roadmap.md").read_text(encoding="utf-8")
-    assert "Started since 1.0, and not finished" not in whole
     done = whole.index("Done since 1.0:")
-    assert whole.index("- **The answer cache**") > done
+    started = whole.find("Started since 1.0, and not finished:")
+    finished = whole[done:] if started == -1 else whole[done:started]
+    assert "- **The answer cache**" in finished
     assert "issues/24" not in whole[:done]
+    assert started == -1 or "issues/24" not in whole[started:]
     # What an exact guard waits for is in the list of what comes next.
     assert 'a fixed form for "this part is not in the handbook"' in whole[:done]
 

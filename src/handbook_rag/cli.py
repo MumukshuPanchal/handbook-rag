@@ -64,11 +64,13 @@ from handbook_rag.evals.retrieval import (
     METRICS,
     FailedQuestion,
     evaluate_retrieval,
+    several_passages_lines,
     write_run,
 )
 from handbook_rag.evals.review import render_review_page
 from handbook_rag.evals.stage import SavedRunError, Stage
 from handbook_rag.evals.support import SUPPORT
+from handbook_rag.evals.two_passage import check_two_passage_set, kinds_of, load_reasons
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.models import Answer, CacheHit
 from handbook_rag.generate.pricing import cost_usd
@@ -757,6 +759,9 @@ def eval_retrieval(
             f"  {metric['label']!s:<10}  {estimate.mean:.3f}  "
             f"(95% interval {estimate.low:.3f} to {estimate.high:.3f})"
         )
+    if report.several is not None:
+        for line in several_passages_lines(report.several):
+            typer.echo(line)
     for origin, estimates in report.by_group["origin"].items():
         hit = estimates["hit@5"]
         typer.echo(f"  Hit@5 on {origin} questions: {hit.mean:.3f} (n={hit.count})")
@@ -2163,8 +2168,29 @@ def golden_check(
     dataset: Annotated[
         Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
     ] = Path("evals/golden/questions.jsonl"),
+    reasons: Annotated[
+        Path | None,
+        typer.Option(
+            help=(
+                "For a set of two-passage questions: the file that says, for each question, "
+                "why it needs both passages. The set is then also held to two passages on "
+                "two pages for every question."
+            )
+        ),
+    ] = None,
 ) -> None:
     """Check every golden set label against the corpus, and summarise the set."""
+    why = None
+    if reasons is not None:
+        # Read first, and guarded by itself: a missing file here is not a missing golden set.
+        try:
+            why = load_reasons(reasons)
+        except FileNotFoundError as error:
+            typer.echo(f"error: reasons not found: {reasons}", err=True)
+            raise typer.Exit(code=1) from error
+        except DatasetError as error:
+            typer.echo(f"error: {error}", err=True)
+            raise typer.Exit(code=1) from error
     try:
         questions = load_golden_set(dataset)
         corpus = build_corpus(get_settings())
@@ -2176,12 +2202,17 @@ def golden_check(
         raise typer.Exit(code=1) from error
 
     report = check_against_corpus(questions, corpus.documents)
+    problems = [*report.problems]
+    if why is not None:
+        problems += check_two_passage_set(questions, why)
 
     def counts(counter: dict[str, int]) -> str:
         return ", ".join(f"{count} {name}" for name, count in sorted(counter.items()))
 
     typer.echo(f"Golden set: {report.total} questions")
     typer.echo(f"  type      {counts(report.by_type)}")
+    if why is not None:
+        typer.echo(f"  kinds     {counts(kinds_of(questions, why))}")
     if report.by_unanswerable_kind:
         typer.echo(f"  declining {counts(report.by_unanswerable_kind)}")
     typer.echo(f"  origin    {counts(report.by_origin)}")
@@ -2194,12 +2225,14 @@ def golden_check(
     if report.overlap_by_origin:
         shares = ", ".join(f"{o} {share:.0%}" for o, share in report.overlap_by_origin.items())
         typer.echo(f"            by origin: {shares}")
-    if report.problems:
-        typer.echo(f"  labels    {len(report.problems)} broken:")
-        for problem in report.problems[:20]:
+    if problems:
+        typer.echo(f"  labels    {len(problems)} broken:")
+        for problem in problems[:20]:
             typer.echo(f"    - {problem}")
         raise typer.Exit(code=1)
     typer.echo("  labels    every quote was found in its page, and on no other page")
+    if why is not None:
+        typer.echo("  passages  every question has two, on two pages, and a reason for each")
 
 
 @app.command(name="golden-review")

@@ -395,6 +395,121 @@ def test_golden_check_fails_when_a_quote_is_not_in_its_page(tmp_path: Path) -> N
     assert "q001: quote not found in people/leave.md" in result.output
 
 
+def two_passage_files(
+    tmp_path: Path, second: tuple[str, str] = ("finance/expenses.md", "one thousand dollars")
+) -> list[str]:
+    """A two-passage question and its reasons on disk, as the options that name them."""
+    question = {
+        "id": "t001",
+        "question": "how many weeks of paid leave do new parents get and what is the laptop limit",
+        "reference_answer": "Sixteen weeks, and one thousand dollars.",
+        "evidence": [
+            {"doc_id": "people/leave.md", "quote": "sixteen weeks"},
+            {"doc_id": second[0], "quote": second[1]},
+        ],
+        "type": "answerable",
+        "origin": "model-drafted",
+    }
+    reason = {
+        "id": "t001",
+        "kind": "comparison",
+        "only_first": "Only the leave is known.",
+        "only_second": "Only the laptop limit is known.",
+    }
+    dataset, reasons = tmp_path / "two.jsonl", tmp_path / "why-two.jsonl"
+    dataset.write_text(json.dumps(question) + "\n")
+    reasons.write_text(json.dumps(reason) + "\n")
+    return ["--dataset", str(dataset), "--reasons", str(reasons)]
+
+
+@pytest.mark.usefixtures("fake_pipeline")
+def test_golden_check_holds_a_two_passage_set_to_two_pages_and_a_reason_for_each(
+    tmp_path: Path,
+) -> None:
+    files = two_passage_files(tmp_path)
+
+    result = runner.invoke(app, ["golden-check", *files])
+    without_reasons = runner.invoke(app, ["golden-check", *files[:2]])
+
+    assert result.exit_code == 0, result.output
+    assert "Golden set: 1 questions" in result.output
+    assert "kinds     1 comparison" in result.output
+    assert "every quote was found in its page, and on no other page" in result.output
+    assert "every question has two, on two pages, and a reason for each" in result.output
+    # The same file is an ordinary golden set to a check that is given no reasons.
+    assert without_reasons.exit_code == 0, without_reasons.output
+    assert "kinds" not in without_reasons.output
+    assert "passages" not in without_reasons.output
+
+
+@pytest.mark.usefixtures("fake_pipeline")
+def test_golden_check_fails_a_two_passage_question_whose_passages_share_a_page(
+    tmp_path: Path,
+) -> None:
+    files = two_passage_files(tmp_path, second=("people/leave.md", "paid leave"))
+
+    result = runner.invoke(app, ["golden-check", *files])
+
+    assert result.exit_code == 1
+    assert "1 broken" in result.output
+    assert "t001: both passages are on people/leave.md" in result.output
+    assert "every question has two" not in result.output
+
+
+@pytest.mark.usefixtures("fake_pipeline")
+def test_golden_check_explains_missing_or_broken_reasons(tmp_path: Path) -> None:
+    dataset = two_passage_files(tmp_path)[:2]
+    broken = tmp_path / "broken.jsonl"
+    broken.write_text('{"id": "t001", "kind": "trivia"}\n')
+    other = tmp_path / "other.jsonl"
+    other.write_text((tmp_path / "why-two.jsonl").read_text().replace("t001", "t002"))
+
+    missing = runner.invoke(app, ["golden-check", *dataset, "--reasons", str(tmp_path / "none")])
+    malformed = runner.invoke(app, ["golden-check", *dataset, "--reasons", str(broken)])
+    for_another = runner.invoke(app, ["golden-check", *dataset, "--reasons", str(other)])
+
+    assert missing.exit_code == 1
+    assert "error: reasons not found" in missing.output
+    assert "golden set not found" not in missing.output
+    assert malformed.exit_code == 1
+    assert "broken.jsonl:1" in malformed.output
+    assert for_another.exit_code == 1
+    assert "t001: no reason says why it needs both passages" in for_another.output
+    assert "t002: a reason for a question that is not in the set" in for_another.output
+
+
+def test_eval_retrieval_counts_the_questions_that_need_several_passages(
+    fake_pipeline: FakeEmbedder, tmp_path: Path
+) -> None:
+    runner.invoke(app, ["index"])
+    dataset = two_passage_files(tmp_path)[:2]
+    single = tmp_path / "single.jsonl"
+    single.write_text(golden_rows("sixteen weeks of paid leave"))
+    output = tmp_path / "runs"
+
+    result = runner.invoke(app, ["eval-retrieval", *dataset, "--output", str(output)])
+    one_passage = runner.invoke(
+        app, ["eval-retrieval", "--dataset", str(single), "--output", str(tmp_path / "other")]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "All@5       1.000" in result.output
+    assert "questions that need several passages: 1" in result.output
+    assert "in the top 3   all found 1, some 0, none 0" in result.output
+    assert "all found by rank  2: 1; not all in the top 10: 0" in result.output
+    assert "a chunk of every passage's page, whatever it says, in the top 3: 1" in result.output
+    (row,) = (output / "current" / "results.jsonl").read_text().splitlines()
+    assert sorted(json.loads(row)["evidence_ranks"]) == [1, 2]
+    assert json.loads(row)["page_ranks"] == json.loads(row)["evidence_ranks"]
+    summary = json.loads((output / "current" / "summary.json").read_text())
+    assert summary["needs_several_passages"]["questions"] == 1
+    assert summary["needs_several_passages"]["all_found_by_rank"] == {"2": 1}
+    # A set whose questions rest on one passage each is reported as before.
+    assert one_passage.exit_code == 0, one_passage.output
+    assert "several passages" not in one_passage.output
+    assert "All@5       1.000" in one_passage.output
+
+
 @pytest.mark.usefixtures("fake_pipeline")
 def test_golden_review_writes_a_page_with_the_evidence_marked(tmp_path: Path) -> None:
     dataset = tmp_path / "questions.jsonl"

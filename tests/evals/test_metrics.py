@@ -6,7 +6,9 @@ import pytest
 
 from handbook_rag.evals.dataset import EvidenceSpan
 from handbook_rag.evals.metrics import (
+    all_at_k,
     covered_evidence,
+    first_ranks,
     hit_at_k,
     mean_with_interval,
     ndcg_at_k,
@@ -88,6 +90,45 @@ def test_recall_is_the_share_of_evidence_found() -> None:
     assert recall_at_k([FIRST, FIRST], evidence_count=2, k=2) == 0.5
 
 
+def test_all_is_one_only_when_the_top_k_hold_every_piece_of_evidence() -> None:
+    ranking = [FIRST, MISS, MISS, SECOND]
+
+    # One of two is a hit, and it is not all.
+    assert hit_at_k(ranking, 3) == 1.0
+    assert all_at_k(ranking, evidence_count=2, k=3) == 0.0
+    assert all_at_k(ranking, evidence_count=2, k=4) == 1.0
+    # The same piece found twice is still one piece.
+    assert all_at_k([FIRST, FIRST], evidence_count=2, k=2) == 0.0
+    assert all_at_k([frozenset({0, 1})], evidence_count=2, k=1) == 1.0
+    assert all_at_k([], evidence_count=2, k=5) == 0.0
+
+
+@pytest.mark.parametrize("k", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("ranking", [[FIRST], [MISS, FIRST], [MISS, MISS, MISS, FIRST], [MISS]])
+def test_all_is_hit_for_a_question_with_one_piece_of_evidence(
+    ranking: list[frozenset[int]], k: int
+) -> None:
+    assert all_at_k(ranking, evidence_count=1, k=k) == hit_at_k(ranking, k)
+
+
+def test_first_ranks_say_where_each_piece_of_evidence_first_came() -> None:
+    assert first_ranks([FIRST, MISS, SECOND, FIRST], evidence_count=2) == (1, 3)
+    assert first_ranks([MISS, SECOND], evidence_count=2) == (None, 2)
+    assert first_ranks([frozenset({0, 1})], evidence_count=2) == (1, 1)
+    assert first_ranks([], evidence_count=2) == (None, None)
+    assert first_ranks([MISS], evidence_count=0) == ()
+
+
+def test_all_and_first_ranks_agree_at_every_cutoff() -> None:
+    rankings = [[FIRST, SECOND], [SECOND, MISS, MISS, MISS, MISS, FIRST], [FIRST, FIRST], []]
+
+    for ranking in rankings:
+        ranks = first_ranks(ranking, evidence_count=2)
+        for k in range(1, 8):
+            by_ranks = all(rank is not None and rank <= k for rank in ranks)
+            assert all_at_k(ranking, evidence_count=2, k=k) == float(by_ranks)
+
+
 def test_reciprocal_rank_is_one_over_the_first_relevant_position() -> None:
     assert reciprocal_rank_at_k([FIRST], 10) == 1.0
     assert reciprocal_rank_at_k([MISS, MISS, FIRST], 10) == pytest.approx(1 / 3)
@@ -129,6 +170,8 @@ def test_metrics_that_need_evidence_reject_questions_without_any() -> None:
         recall_at_k([MISS], evidence_count=0, k=5)
     with pytest.raises(ValueError, match="no evidence"):
         ndcg_at_k([MISS], evidence_count=0, k=5)
+    with pytest.raises(ValueError, match="no evidence"):
+        all_at_k([MISS], evidence_count=0, k=5)
 
 
 def test_mean_with_interval_brackets_the_mean() -> None:

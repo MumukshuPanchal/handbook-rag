@@ -6,6 +6,10 @@ different:
 
 - **Hit@k**: did at least one relevant chunk appear in the top k? The model can only
   answer from what it is given, so this is the ceiling on answer quality.
+- **All@k**: did the top k cover every piece of the evidence? For a question that needs
+  two passages, Hit@k is already 1 when one of them is found, and the model then answers
+  from half of what it needs. All@k is 1 only when both are there. For a question with
+  one passage it is the same as Hit@k.
 - **Recall@k**: what share of the evidence was covered by the top k? It differs from
   Hit@k only for questions that need more than one passage.
 - **MRR@k**: how high was the first relevant chunk? 1 for rank 1, 1/2 for rank 2, and so
@@ -42,6 +46,29 @@ def covered_evidence(chunk: Chunk, spans: Sequence[EvidenceSpan]) -> frozenset[i
 
 def hit_at_k(coverage: Sequence[frozenset[int]], k: int) -> float:
     return 1.0 if any(coverage[:k]) else 0.0
+
+
+def all_at_k(coverage: Sequence[frozenset[int]], evidence_count: int, k: int) -> float:
+    """Whether the top k cover every piece of evidence, and not just one of them."""
+    if evidence_count == 0:
+        raise ValueError("All@k is undefined for a question with no evidence.")
+    found: set[int] = set().union(*coverage[:k])
+    return 1.0 if len(found) == evidence_count else 0.0
+
+
+def first_ranks(coverage: Sequence[frozenset[int]], evidence_count: int) -> tuple[int | None, ...]:
+    """For each piece of evidence, the rank of the first chunk that covers it.
+
+    ``None`` for a piece that no chunk in the ranking covers. The ranking is as long as
+    the search was asked for, so ``None`` means "not among those results", and says
+    nothing about where the piece would have come further down.
+    """
+    ranks: list[int | None] = [None] * evidence_count
+    for rank, covered in enumerate(coverage, start=1):
+        for index in covered:
+            if ranks[index] is None:
+                ranks[index] = rank
+    return tuple(ranks)
 
 
 def recall_at_k(coverage: Sequence[frozenset[int]], evidence_count: int, k: int) -> float:

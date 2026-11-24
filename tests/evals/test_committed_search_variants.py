@@ -26,11 +26,17 @@ from math import comb
 from pathlib import Path
 from typing import Any
 
+from typer.testing import CliRunner
+
+from handbook_rag.cli import app
 from handbook_rag.evals.compare import compare_runs
 from handbook_rag.evals.gate import load_gate_config
 from handbook_rag.evals.metrics import Comparison, paired_difference
+from handbook_rag.evals.retrieval import RetrievalReport, write_run
 from handbook_rag.evals.two_passage import load_reasons
 from tests.test_readme_results import table
+
+runner = CliRunner()
 
 ROOT = Path(__file__).parents[2]
 RESULTS = ROOT / "evals" / "two-passage" / "search-variants.md"
@@ -192,6 +198,22 @@ def against_default(flow: Path, run: str, metric: str) -> Comparison:
     )
 
 
+@functools.cache
+def clear_readings() -> dict[tuple[str, str, str], Comparison]:
+    """Every difference from the default that ``eval-compare`` calls clear, on both sets.
+
+    Over all the scores the command compares, not only those of the tables: by the name
+    of the set's directory, the variant and the score.
+    """
+    found: dict[tuple[str, str, str], Comparison] = {}
+    for flow in (TWO, GOLDEN):
+        for run in VARIANTS:
+            for metric, compared in compare_runs(flow / DEFAULT, flow / run).metrics.items():
+                if compared.change.is_clear:
+                    found[(flow.name, run, metric)] = compared.change
+    return found
+
+
 def sign_test(better: int, worse: int) -> float:
     """The exact two-sided sign test: how likely a split this uneven is from a fair coin."""
     changed = better + worse
@@ -330,6 +352,25 @@ def test_the_runs_are_the_default_and_the_fourteen_variants_on_both_sets() -> No
     assert 'and are marked "added later": m = 3 and m = 4 for k = 5.' in text
     for run in VARIANTS:
         assert ("(added later)" in LABELS[run]) == (run in ADDED_LATER), run
+
+
+def test_each_flow_of_retrieval_runs_declares_the_scores_a_run_writes_today(
+    tmp_path: Path,
+) -> None:
+    # A run rewrites its flow's _state.json, so a committed one that differs from what a
+    # run writes makes a tracked file change at the next scratch run. The committed runs
+    # of the golden set were made before All@k existed, and `eval-table` and
+    # `eval-compare` read them beside a flow that declares it.
+    write_run(RetrievalReport(results=[], failures=[], not_scored=0), tmp_path, "empty", "Empty.")
+    written = (tmp_path / "_state.json").read_text(encoding="utf-8")
+
+    for flow in (COMMITTED, TWO, GOLDEN):
+        assert (flow / "_state.json").read_text(encoding="utf-8") == written, flow.name
+    table = runner.invoke(app, ["eval-table", "--runs", str(COMMITTED)])
+    compared = runner.invoke(app, ["eval-compare", "v2", "v3", "--runs", str(COMMITTED)])
+    assert (table.exit_code, compared.exit_code) == (0, 0), table.output + compared.output
+    assert "All@5" not in table.output
+    assert "v3 against v2, on the same 132 questions" in compared.output
 
 
 def test_each_variant_differs_from_the_default_in_the_setting_its_name_says() -> None:
@@ -654,19 +695,24 @@ def test_what_is_said_about_fourteen_variants_and_chance_is_counted_from_the_run
     assert on_the_headline == 12
     assert f"{1 - 0.95**on_the_headline:.0%}" == "46%"
     assert "Twelve different comparisons were made here" in text
-    assert "would be up to 1 - 0.95^12 = 46%, not 5%" in text
+    assert "at least one would come out clear 1 - 0.95^12 = 46% of the time, not 5%." in text
+    assert "That is no upper bound: the rule that `eval-compare` applies reads clear more" in text
     assert not [run for run in VARIANTS if against_default(TWO, run, "all@5").is_clear]
     assert "On that score no comparison is clear, so there is no winner to discount." in text
     # The table of the golden set compares two scores of each variant with the default's.
+    # On Hit@5 the two limits that hold for the first ten repeat those for the first five.
     clear = {
         (run, metric)
         for run in VARIANTS
         for metric in ("hit@5", "mrr@10")
         if against_default(GOLDEN, run, metric).is_clear
     }
-    assert "which holds 28 comparisons" in text
-    assert 2 * len(VARIANTS) == 28
-    # Every clear reading is of a limit for each page, but one.
+    for wider, narrower in SAME_FIRST_FIVE.items():
+        assert against_default(GOLDEN, wider, "hit@5") == against_default(GOLDEN, narrower, "hit@5")
+    in_the_table, different = 2 * len(VARIANTS), 2 * len(VARIANTS) - len(SAME_FIRST_FIVE)
+    assert f"It holds {in_the_table} comparisons, of which {different} are different" in text
+    assert (in_the_table, different) == (28, 26)
+    # Every clear reading of the table is of a limit for each page, but one.
     assert clear == {
         *((run, "hit@5") for run in ("spread-1-in-5", "spread-2-in-5", "spread-3-in-5")),
         *((run, "hit@5") for run in ("spread-1-in-10", "spread-2-in-10")),
@@ -678,11 +724,13 @@ def test_what_is_said_about_fourteen_variants_and_chance_is_counted_from_the_run
     assert (one.better, one.worse, f"{sign_test(one.better, one.worse):.6f}") == (1, 22, "0.000006")
     assert "22 questions worse and 1 better. An exact sign test gives p = 0.000006." in text
     assert (two.better, two.worse, f"{sign_test(two.better, two.worse):.3f}") == (0, 9, "0.004")
-    assert f"{0.05 / len(VARIANTS):.4f}" == "0.0036"
-    assert sign_test(two.better, two.worse) > 0.05 / len(VARIANTS)
+    # A correction for the different comparisons of Hit@5, which the limit of two passes.
+    on_hit = len(VARIANTS) - len(SAME_FIRST_FIVE)
+    assert sign_test(two.better, two.worse) < 0.05 / on_hit
     assert (
-        "9 worse and none better, p = 0.004. A correction for the fourteen comparisons of "
-        "Hit@5 asks for less than 0.0036, so this one stands at its edge." in text
+        f"9 worse and none better, p = 0.004. A correction for the {on_hit} different "
+        f"comparisons of Hit@5 asks for less than {0.05 / on_hit:.4f}, and this one passes it, "
+        "narrowly." in text
     )
     assert (three.better, three.worse, sign_test(three.better, three.worse)) == (0, 4, 0.125)
     assert "4 worse and none better. The interval excludes zero, and the sign test gives" in text
@@ -692,6 +740,50 @@ def test_what_is_said_about_fourteen_variants_and_chance_is_counted_from_the_run
     assert f"{constant.difference.mean:+.3f}" == "+0.003"
     assert f"{sign_test(constant.better, constant.worse):.3f}" == "0.219"
     assert "+0.003, with 5 questions better and 1 worse, p = 0.219." in text
+    assert f"Among {different} different comparisons a reading like this" in text
+
+
+def test_what_is_said_of_the_scores_outside_the_tables_is_what_eval_compare_reads() -> None:
+    text = results()
+    readings = clear_readings()
+    losses = {key for key, change in readings.items() if change.difference.mean < 0}
+    gains = {key for key, change in readings.items() if change.difference.mean > 0}
+
+    # Every clear loss is of a limit for each page, and on the 33 of the limit of one.
+    assert {run for _, run, _ in losses} <= set(PAGE_LIMITS.values()) | set(SAME_FIRST_FIVE)
+    first_five = ("hit@5", "recall@5", "mrr@10", "ndcg@10")
+    assert {(run, metric) for flow, run, metric in losses if flow == TWO.name} == {
+        *(("spread-1-in-5", metric) for metric in first_five),
+        *(("spread-1-in-10", metric) for metric in (*first_five, "hit@10", "all@10")),
+    }
+    at_five = readings[(TWO.name, "spread-1-in-5", "hit@5")]
+    at_ten = readings[(TWO.name, "spread-1-in-10", "all@10")]
+    on_hit = readings[(TWO.name, "spread-1-in-10", "hit@10")]
+    assert (on_hit.better, on_hit.worse) == (at_ten.better, at_ten.worse)
+    assert (
+        f"the limit of one chunk loses on Hit@5, with {at_five.better} questions better and "
+        f"{at_five.worse} worse, and on Recall@5, MRR@10 and nDCG@10, and with k = 10 it also "
+        f"loses on Hit@10 and All@10, {at_ten.better} better and {at_ten.worse} worse" in text
+    )
+    # In a variant's favour: the fusion constant 10 twice, and 100 candidates once.
+    assert gains == {
+        (GOLDEN.name, "rrf-k-10", "mrr@10"),
+        (GOLDEN.name, "rrf-k-10", "ndcg@10"),
+        (TWO.name, "candidates-100", "ndcg@10"),
+    }
+    on_mrr = readings[(GOLDEN.name, "rrf-k-10", "mrr@10")]
+    on_ndcg = readings[(GOLDEN.name, "rrf-k-10", "ndcg@10")]
+    assert (on_ndcg.better, on_ndcg.worse) == (on_mrr.better, on_mrr.worse)
+    assert (
+        f"the fusion constant 10 on nDCG@10 on the golden set, {on_ndcg.difference.mean:+.3f} "
+        f"with {on_ndcg.better} better and {on_ndcg.worse} worse as on MRR@10" in text
+    )
+    more = readings[(TWO.name, "candidates-100", "ndcg@10")]
+    assert (
+        f"100 candidates on nDCG@10 on the 33, {change(more)} with {more.better} better and "
+        f"{more.worse} worse, p = {sign_test(more.better, more.worse):.3f}." in text
+    )
+    assert "In a variant's favour it reads two more, both of the generous kind" in text
 
 
 def test_the_five_sentences_give_the_figures_of_the_runs() -> None:

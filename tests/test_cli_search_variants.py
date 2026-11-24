@@ -24,6 +24,7 @@ from typer.testing import CliRunner
 from handbook_rag import wiring
 from handbook_rag.cli import app
 from handbook_rag.config import get_settings
+from handbook_rag.evals.retrieval import RETRIEVAL_DEPTH
 from handbook_rag.index.store import QdrantVectorStore
 from handbook_rag.retrieve.dense import Retriever
 from handbook_rag.retrieve.hybrid import HybridRetriever
@@ -279,6 +280,10 @@ def test_eval_retrieval_hands_the_candidates_and_the_constant_of_a_variant_to_th
         (["--rrf-k", "0"], "--rrf-k"),
         (["--spread-per-page", "0", "--spread-within", "5"], "--spread-per-page"),
         (["--spread-per-page", "1", "--spread-within", "0"], "--spread-within"),
+        # A run scores ten results, and the rule fills them one by one from the top, so a
+        # limit that holds for the first twenty would be measured as the one for ten.
+        (["--spread-per-page", "1", "--spread-within", "11"], "--spread-within"),
+        (["--spread-per-page", "1", "--spread-within", "20"], "--spread-within"),
     ],
 )
 def test_eval_retrieval_refuses_a_variant_it_could_not_measure_before_any_work(
@@ -291,6 +296,19 @@ def test_eval_retrieval_refuses_a_variant_it_could_not_measure_before_any_work(
     assert not stand.runs.exists()
     assert stand.built == []
     assert stand.embedder.queries == []
+
+
+def test_a_limit_for_each_page_may_hold_for_as_many_results_as_a_run_scores(stand: Stand) -> None:
+    within_ten = stand.run("ten", "--spread-per-page", "1", "--spread-within", str(RETRIEVAL_DEPTH))
+    beyond = stand.run("eleven", "--spread-per-page", "1", "--spread-within", "11")
+
+    assert within_ten.exit_code == 0, within_ten.output
+    assert stand.summary("ten")["config"]["spread_within"] == RETRIEVAL_DEPTH
+    assert beyond.exit_code == 2, beyond.output
+    # The message stands in a box, wrapped: read it as one line.
+    said = " ".join(COLOUR_CODES.sub("", beyond.output).replace("│", " ").split())
+    assert f"'--spread-within': Input should be less than or equal to {RETRIEVAL_DEPTH}" in said
+    assert not (stand.runs / "eleven").exists()
 
 
 def test_a_variant_is_refused_when_the_settings_choose_a_search_it_does_not_fit(

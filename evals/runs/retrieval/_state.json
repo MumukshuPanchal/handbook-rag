@@ -21,6 +21,21 @@
       "kind": "binary"
     },
     {
+      "id": "all@5",
+      "label": "All@5",
+      "kind": "binary"
+    },
+    {
+      "id": "all@3",
+      "label": "All@3",
+      "kind": "binary"
+    },
+    {
+      "id": "all@10",
+      "label": "All@10",
+      "kind": "binary"
+    },
+    {
       "id": "recall@5",
       "label": "Recall@5",
       "kind": "float",

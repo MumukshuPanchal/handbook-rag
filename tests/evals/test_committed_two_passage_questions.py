@@ -47,7 +47,7 @@ from handbook_rag.evals.two_passage import (
 )
 from handbook_rag.ingest.build import build_corpus
 from tests.evals.test_committed_search_variants import sign_test
-from tests.test_readme_results import table
+from tests.test_readme_results import in_words, table
 
 ROOT = Path(__file__).parents[2]
 QUESTIONS = ROOT / "evals" / "two-passage" / "questions.jsonl"
@@ -60,6 +60,13 @@ GOLDEN_HYBRID = ROOT / "evals" / "runs" / "retrieval" / "v2"
 SNAPSHOT = ROOT / "data" / "handbook"
 MODES = ("hybrid", "dense", "sparse")
 DISPUTED = "t025"
+# Read by hand: the one question whose two asks are joined by an "and" without a comma, and
+# the questions with an "and" inside one ask: two words of it, or two facts of its case.
+JOINED_BY_A_BARE_AND = "t024"
+AND_INSIDE_ONE_ASK = {"t019", "t023"}
+# The one `term-and-rule` question that names its term, and the term, which the passage
+# that defines it holds too.
+NAMES_ITS_TERM = {"t018": "job abandonment"}
 # Wording that would point at the handbook as a source, which no asker would use.
 BANNED = ("handbook", "according to", "as per", "the passage", "this section", "the page")
 # The showings in which the passage that was held back stood on the same form, under
@@ -186,7 +193,14 @@ def test_the_review_of_each_question_is_what_the_second_reading_found() -> None:
     assert 'Those 33 are marked `"review": "checked"`.' in text
     assert 'The one they do not confirm, `t025`, stays `"review": "pending"`' in text
     assert "a model's check is not a person's review" in text
-    assert "The readers confirm 33 of the 34, and every figure in this card is of those 33." in text
+    # Which figures are of the 33, and which of all 34: the second reading counts every
+    # question and every line the readers wrote.
+    assert (len(confirmed()), len(found), len(reading())) == (33, 34, 114)
+    assert (
+        "The readers confirm 33 of the 34. Every figure about the search is of those 33, and "
+        "so are the counts of pages, sections and wording below the first table. How the set "
+        "was made and the second reading are told for all 34." in text
+    )
 
 
 def test_the_kinds_are_in_the_numbers_the_card_gives() -> None:
@@ -221,9 +235,13 @@ def test_the_pages_and_sections_are_the_ones_the_card_counts() -> None:
     assert (
         "16 of the 66 pieces of evidence are on security pages and 15 on pages of total" in card()
     )
-    used_three_times = sorted(doc_id.split("/")[-1] for doc_id, n in pages.items() if n == 3)
-    assert used_three_times == ["bv-benefits-netherlands.md", "critical-systems.md"]
-    assert max(pages.values()) == 3
+    most = max(pages.values())
+    used_most = sorted(doc_id.split("/")[-1] for doc_id, n in pages.items() if n == most)
+    assert used_most == ["bv-benefits-netherlands.md", "critical-systems.md"]
+    assert (
+        f"The page of critical system tiers is used by {most} questions, and so is the page of "
+        "Dutch benefits." in card()
+    )
     # The issue asks for at least eight sections.
     assert len({question.section for question in found}) == 15
 
@@ -244,17 +262,37 @@ def test_every_question_and_quote_follows_the_drafting_guidelines() -> None:
     assert "**The questions are 14 to 38 words long**, 22 in the middle." in card()
     assert (min(quotes), max(quotes)) == (48, 286)
     assert "an exact quote of 48 to 286 characters" in card()
-    joined_by_and = [question.id for question in found if ", and " in question.question]
+    # Two asks joined by "and": after a comma, or, in `t024`, bare ("Do both my start date
+    # and being on a performance improvement plan affect ..."). The other questions with a
+    # bare "and" use it inside one ask, as in "retention and disposal requirements".
+    with_and = {question.id for question in found if " and " in question.question}
+    joined_by_and = {question.id for question in found if ", and " in question.question}
+    joined_by_and |= {JOINED_BY_A_BARE_AND}
+    assert with_and - joined_by_and == AND_INSIDE_ONE_ASK
     compared = [question.id for question in found if "compared with" in question.question]
-    assert (len(joined_by_and), len(compared)) == (11, 6)
+    assert (len(joined_by_and), len(compared)) == (12, 6)
     assert {reasons()[question_id].kind for question_id in compared} == {"comparison"}
     assert (
-        '11 of them ask for two things in one sentence, joined by "and", and 6 comparisons '
-        'join their two sides by "compared with".' in card()
+        f'{len(joined_by_and)} of them ask for two things in one sentence, joined by "and", and '
+        f'{len(compared)} comparisons join their two sides by "compared with".' in card()
     )
     assert (
-        '11 of the 33 questions join two parts by "and", and 6 comparisons join two sides by '
-        '"compared with".' in card()
+        f'{len(joined_by_and)} of the 33 questions join two parts by "and", and {len(compared)} '
+        'comparisons join two sides by "compared with".' in card()
+    )
+
+
+def test_the_words_a_question_shares_with_its_evidence_are_counted_as_golden_check_does() -> None:
+    # golden-check counts them from each question and its quotes, and needs no page for it:
+    # without the pages each question is reported for a missing page, and the count is the
+    # same.
+    report = check_against_corpus(confirmed(), [])
+
+    assert len(report.problems) == len(confirmed())
+    assert all("is not in the corpus" in problem for problem in report.problems)
+    assert (
+        f"{report.mean_overlap:.0%} of a question's meaningful words on average are also in the "
+        "quote it shares most words with, as `golden-check` counts it." in card()
     )
 
 
@@ -626,7 +664,13 @@ def test_the_counts_of_the_default_search_are_the_counts_of_its_run() -> None:
     text = card()
     assert "The default search, as counts of the 33 questions:" in text
     assert "for 12 of the 33 questions.** It brings at least one for 26. So 14 questions" in text
-    assert "For the first five results the truth lies between 12 and 15 of 33." in text
+    by_quote, by_page = several["found_in_top"]["5"]["all"], several["pages_in_top"]["5"]["all"]
+    assert (
+        f"For the first five results it gives {by_page} of the 33 in this run, against "
+        f"{by_quote} by quote. Neither is a bound on what the model could use" in text
+    )
+    assert "upper bound" not in text
+    assert "truth lies between" not in text
     in_five = {mode: summary(mode)["needs_several_passages"]["found_in_top"]["5"] for mode in MODES}
     assert [in_five[mode]["all"] for mode in MODES] == [12, 6, 8]
     assert (
@@ -719,9 +763,31 @@ def test_the_table_by_kind_is_counted_from_the_rows_of_the_default_search() -> N
         "process": [7, 3, 1, 3],
     }
     # In a term-and-rule question the first passage is the one that defines the term.
-    undefined = sum(ranks[0] is None for ranks in counted["term-and-rule"])
-    assert undefined == 7
-    assert "in 7 of them the passage that defines the term or gives the class is not" in card()
+    undefined = [
+        question_id
+        for question_id, row in rows("hybrid").items()
+        if why[question_id].kind == "term-and-rule" and row["evidence_ranks"][0] is None
+    ]
+    assert len(undefined) == 7
+    assert set(NAMES_ITS_TERM) < set(undefined)
+    assert (
+        f"In {len(undefined)} of them, `t018` among them, the passage that defines the term or "
+        "gives the class is not in the first ten results." in card()
+    )
+    # One of the eight names its term: the question and the passage that defines it say it.
+    by_id = {question.id: question for question in questions()}
+    for question_id, term in NAMES_ITS_TERM.items():
+        assert why[question_id].kind == "term-and-rule"
+        assert term in by_id[question_id].question.lower()
+        assert term in by_id[question_id].evidence[0].quote.lower()
+        # Neither of its passages is among the first ten results.
+        assert rows("hybrid")[question_id]["evidence_ranks"] == [None, None]
+    of_the_kind = len(counted["term-and-rule"])
+    without_the_term = in_words(of_the_kind - len(NAMES_ITS_TERM)).capitalize()
+    assert (
+        f"{without_the_term} of the {of_the_kind} `term-and-rule` questions describe a case and "
+        "do not use the term that the rule is written for (`t018` names its term)" in card()
+    )
     for mode in ("dense", "sparse"):
         assert split(by_kind(mode)["term-and-rule"], 5)["all"] == 0, mode
     assert (
@@ -749,7 +815,7 @@ def test_the_figures_with_the_disputed_question_counted_fit_the_runs_without_it(
     # The first commit of issue 78, which measured all 34. A test cannot read the history,
     # which a shallow clone does not have, so it holds the name that goes with the hash.
     assert (
-        'at commit `f880d4b` ("feat: questions that need two passages, and whether the '
+        'at commit `df05bfe` ("feat: questions that need two passages, and whether the '
         'search finds both")' in card()
     )
 

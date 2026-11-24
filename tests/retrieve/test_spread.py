@@ -259,6 +259,21 @@ def test_fewer_results_than_the_window_are_the_first_of_the_spread_list() -> Non
     ]
 
 
+def test_hybrid_with_the_rule_reads_every_chunk_of_both_searches() -> None:
+    # Page b is in one search only, third, and sixth of the six chunks the two return.
+    # A merged list as long as one search's list would end before it.
+    retriever = HybridRetriever(
+        FixedRetriever(ranked("a1", "a2", "b1")),
+        FixedRetriever(ranked("a3", "a4", "a5")),
+        spread=PageSpread(per_page=1, within=2),
+    )
+
+    results = retriever.retrieve("q", limit=2)
+
+    assert [result.chunk.doc_id for result in results] == ["a.md", "b.md"]
+    assert names(results)[1] == "b1"
+
+
 def test_hybrid_with_the_rule_returns_nothing_when_neither_search_finds_anything() -> None:
     nothing = HybridRetriever(
         FixedRetriever([]), FixedRetriever([]), spread=PageSpread(per_page=1, within=5)

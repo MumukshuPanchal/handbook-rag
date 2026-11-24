@@ -56,12 +56,13 @@ PINNED = {
     "retrieve/hybrid.py": "01adfb6f4a8cdfeb",
     "retrieve/rerank.py": "82d23821dd25f851",
     "retrieve/sparse.py": "8da43720d6b1ac7d",
-    # The search variants of issue 78 (a limit on chunks of one page, the number of
-    # candidates, the fusion's constant) changed hybrid.py and make_retriever and added
-    # this module. They are options of `eval-retrieval` only and off by default, and
-    # tests/retrieve/test_default_search.py pins the default search's rankings. So no
-    # stored answer was found by another search than today's default, and the version
-    # stays as it is.
+    # Of the search variants of issue 78, the limit on chunks of one page changed
+    # hybrid.py and make_retriever and added this module. The number of candidates and the
+    # fusion's constant change no code here: `eval-retrieval` sets the settings that
+    # already held them, for one run. The limit is an option of `eval-retrieval` only and
+    # off by default, and tests/retrieve/test_default_search.py pins the default search's
+    # rankings. So no stored answer was found by another search than today's default, and
+    # the version stays as it is.
     "retrieve/spread.py": "b5ebb11203841b0a",
 }
 # How the settings become what finds passages and what writes an answer. Of wiring.py

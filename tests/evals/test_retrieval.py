@@ -329,6 +329,27 @@ def test_a_passage_that_comes_late_counts_from_its_rank_on() -> None:
     assert report.several.not_all_retrieved == 0
 
 
+def test_a_passage_at_the_cutoff_counts_as_among_the_first_results() -> None:
+    # The leave page third, the expenses page fifth: exactly at two of the cutoffs.
+    at_the_cutoffs = FixedRetriever(
+        {TWO_PAGES.question: [FILLERS[0], FILLERS[1], LEAVE, FILLERS[2], EXPENSES]}
+    )
+
+    report = evaluate_retrieval([TWO_PAGES], WITH_FILLERS, at_the_cutoffs)
+
+    (result,) = report.results
+    assert result.evidence_ranks == result.page_ranks == (3, 5)
+    assert [result.scores[f"all@{k}"] for k in ALL_CUTOFFS] == [0.0, 1.0, 1.0]
+    assert report.several is not None
+    for counts in (report.several.found_in_top, report.several.pages_in_top):
+        assert counts == {
+            3: {"all": 0, "some": 1, "none": 0},
+            5: {"all": 1, "some": 0, "none": 0},
+            10: {"all": 1, "some": 0, "none": 0},
+        }
+    assert report.several.all_found_by_rank == {5: 1}
+
+
 def test_a_retriever_that_brings_both_passages_first_scores_one_on_every_metric() -> None:
     both_first = FixedRetriever({TWO_PAGES.question: [LEAVE, EXPENSES, *FILLERS]})
 
@@ -569,3 +590,40 @@ def test_every_answerable_question_is_scored_unless_reviewed_only_is_asked_for(
     # Asked for, and nothing to leave out: the run says so with an empty list.
     assert all_reviewed.left_out == ()
     assert [result.question.id for result in all_reviewed.results] == ["q001", "q002"]
+    run_dir = write_run(all_reviewed, tmp_path / "retrieval", "reviewed", "Reviewed only.")
+    assert json.loads((run_dir / "summary.json").read_text())["questions_left_out"] == []
+
+
+def test_a_run_writes_where_the_passage_came_apart_from_where_its_page_came(
+    tmp_path: Path,
+) -> None:
+    class AnotherChunkOfThePageFirst:
+        """Returns a chunk of the leave page that ends before the quote, then the whole page."""
+
+        def retrieve(
+            self, query: str, *, limit: int, section: str | None = None
+        ) -> list[ScoredChunk]:
+            whole = whole_page_chunk(LEAVE)
+            heading = Chunk(
+                chunk_id="chunk-heading",
+                doc_id=whole.doc_id,
+                title=whole.title,
+                url=whole.url,
+                section=whole.section,
+                source_commit=whole.source_commit,
+                heading_path=(),
+                start_char=0,
+                end_char=LEAVE_TEXT.index("New parents"),
+                text=LEAVE_TEXT[: LEAVE_TEXT.index("New parents")],
+                token_count=3,
+            )
+            return [ScoredChunk(heading, 1.0), ScoredChunk(whole, 0.9)]
+
+    report = evaluate_retrieval(QUESTIONS[:1], DOCUMENTS, AnotherChunkOfThePageFirst())
+
+    run_dir = write_run(report, tmp_path / "retrieval", "baseline", "Dense retrieval only.")
+
+    (row,) = [json.loads(line) for line in (run_dir / "results.jsonl").read_text().splitlines()]
+    assert (row["evidence_ranks"], row["page_ranks"]) == ([2], [1])
+    assert row["grade"]["hit@1"] == 0.0
+    assert row["grade"]["hit@3"] == 1.0

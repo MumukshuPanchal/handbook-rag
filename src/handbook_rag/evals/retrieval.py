@@ -110,8 +110,9 @@ class SeveralPassages:
     """The counts of ``found_in_top`` again, with any chunk of a passage's page counted
     as finding it. A passage is credited by its quote, and a page sometimes says the same
     thing in a second place, so ``found_in_top`` can count too few. This counts too many:
-    another chunk of the right page usually does not hold the fact. What the model could
-    have used lies between the two."""
+    another chunk of the right page usually does not hold the fact. Neither bounds what
+    the model could have used: half of a quote need not carry the fact, and a fact that
+    another page states too is counted by neither."""
 
 
 @dataclass(frozen=True, slots=True)

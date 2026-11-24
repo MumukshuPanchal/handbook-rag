@@ -837,7 +837,13 @@ def eval_retrieval(
         int | None,
         typer.Option(
             min=1,
-            help="How many of the first results the limit of --spread-per-page holds for.",
+            # A run scores the first results only, and the rule fills those places one by
+            # one from the top: a limit that holds further down would be measured as this.
+            max=RETRIEVAL_DEPTH,
+            help=(
+                "How many of the first results the limit of --spread-per-page holds for: "
+                f"at most {RETRIEVAL_DEPTH}, the results a run scores."
+            ),
         ),
     ] = None,
 ) -> None:

@@ -93,6 +93,31 @@ def numbers(text: str) -> list[str]:
     return NUMBER.findall(re.sub(r"\]\([^)]*\)", "]", text))
 
 
+# The small counts that the documents write as words, from nothing up.
+NUMBER_WORDS = (
+    "no",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+)
+
+
+def in_words(count: int) -> str:
+    """A small count as the documents write it: "no", "one", "two" and so on."""
+    return NUMBER_WORDS[count]
+
+
 def prose_with_numbers(markdown: str) -> list[str]:
     """Every line of prose in a piece of Markdown that holds a number.
 
@@ -742,10 +767,15 @@ def test_the_two_passage_section_is_the_committed_runs() -> None:
         .metrics["all@5"]
         .change.is_clear
     ]
-    assert "and none is clearly different from the default" in section
-    assert len(variants) == 14
-    assert "**Fourteen changes to the search were tried, and none is adopted**" in section
-    assert "Fourteen variants were compared on the same 33 questions" in section
+    assert "and on that score none is clearly different from the default" in section
+    # Every "fourteen" of the section is the number of variants, and each is one of these.
+    tried = in_words(len(variants)).capitalize()
+    for phrase in (
+        f"**{tried} changes to the search were tried, and none is adopted**",
+        f"{tried} variants were compared on the same {confirmed} questions",
+    ):
+        assert phrase in section, phrase
+    assert section.lower().count("fourteen") == 2
     # The limit for each page, on the golden set, whose runs repeat the committed `v2`.
     default = summary("search-variants-golden/hybrid")["metrics"]["hit@5"]
     one_chunk, two_chunks = (
@@ -802,6 +832,7 @@ def test_the_two_passage_section_is_the_committed_runs() -> None:
                 str(several["not_all_retrieved"]),
                 str(confirmed),
                 "79",
+                str(several["retrieved"]),
             ],
             '- **Read "clear" with care here.**': [str(confirmed), "80"],
         },

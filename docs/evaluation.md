@@ -158,11 +158,11 @@ Neither command sends a request to a model.
 
 ### Every passage found: All@k beside Hit@k
 
-For these questions Hit@k says that at least one of the two passages is among the first k results. All@k says that both are. For a question with one passage the two are the same score. No score the golden set had changed. In its runs made with this code All@k equals Hit@k for every question: its one question that needs two passages, `b15`, has both in one chunk.
+For these questions Hit@k says that at least one of the two passages is among the first k results. All@k says that both are. For a question with one passage the two are the same score. So they are by construction for a question that any one of several passages answers, because its evidence is counted as one piece before scoring. No score the golden set had changed. In its runs made with this code All@k equals Hit@k for every question: its one question that needs two passages, `b15`, has both in one chunk.
 
 On the default search, Hit@5 is 0.788 and All@5 is 0.364: the first five results hold both passages for 12 of the 33 questions and at least one for 26. So 14 questions count as a hit while the model would be given half of what the answer needs.
 
-A passage is credited by its quote, as in the golden set. A page sometimes says the same thing in a second place, and a search that returns that place is counted as not finding it. A run therefore also counts any chunk of the right page as finding the passage, which is too generous the other way. For the first five results the truth lies between 12 and 15 of 33.
+A passage is credited by its quote, as in the golden set: a chunk finds it when the chunk holds at least half of the quote. A page sometimes says the same thing in a second place, and a search that returns that place is counted as not finding it. A run therefore also counts any chunk of the right page as finding the passage, which is too generous the other way. For the first five results that gives 15 of the 33 in this run, against 12 by quote. Neither is a bound on what the model could use: half of a quote need not carry the fact, and a fact that another page states too is counted by neither.
 
 ### What the searches find
 
@@ -174,7 +174,7 @@ Measured on the full index, on the 33 confirmed questions. The runs are in [`eva
 | Embedding model | [`dense`](../evals/runs/two-passage/dense) | 0.182 (0.061 to 0.333) | 0.788 | 0.485 | 0.848 |
 | Keyword (BM25) | [`sparse`](../evals/runs/two-passage/sparse) | 0.242 (0.091 to 0.394) | 0.697 | 0.303 | 0.818 |
 
-The kinds differ. The default search finds both passages for 8 of the 12 comparisons, and for none of the 8 questions that describe a case without the term its rule is written for. With 6 to 12 questions of a kind that is a pattern to look into, and no more. [The card](../evals/two-passage/README.md#what-the-search-does-with-them) has the counts.
+The kinds differ. The default search finds both passages for 8 of the 12 comparisons, and for none of the 8 `term-and-rule` questions, 7 of which describe a case without the term the rule is written for (`t018` names its term). With 6 to 12 questions of a kind that is a pattern to look into, and no more. [The card](../evals/two-passage/README.md#what-the-search-does-with-them) has the counts.
 
 Looking further down finds more. This table is read from the two saved runs of the default search, on the 33 questions and on the golden set:
 
@@ -219,7 +219,7 @@ Twelve were written down before the first run. Two were added after the first re
 
 - **No variant finds both passages clearly more often.** The counts run from 8 to 13 of 33, and no difference from the default's 12 is clear.
 - **A limit for each page costs the golden set its passages.** Hit@5 on the golden set is 0.803, 0.894, 0.932 and 0.947 with 1, 2, 3 and 4 chunks allowed, against 0.962. The rule cannot tell which chunk of a page holds the passage. In the default run of the golden set the passage is among the first five results for 127 questions, and for 23 of those another chunk of the same page stands above it. With one chunk of a page allowed, 22 questions lose their passage, all 22 among those 23, and 1 other question gains it.
-- **So none is adopted, and the default search is as it was** ([ADR 0021](adr/0021-two-passage-questions-and-the-search-as-it-is.md)). The next step asks a model before the search, to split a question that asks for two things ([issue 79](https://github.com/MumukshuPanchal/handbook-rag/issues/79)).
+- **So none is adopted, and the default search is as it was** ([ADR 0021](adr/0021-two-passage-questions-and-the-search-as-it-is.md)). The next step to try asks a model before the search, to split a question that asks for two things ([issue 79](https://github.com/MumukshuPanchal/handbook-rag/issues/79)). That is a judgement: nothing below rank 10 is recorded, so whether it would find the missing passages is not known.
 
 A variant is an option of `eval-retrieval` for one run, and off unless it is given. The limit for each page has no setting, and no other command has it. The number of candidates and the fusion constant are also the settings `HANDBOOK_RAG_FUSION_CANDIDATES` and `HANDBOOK_RAG_RRF_K`, which hold for every command; the options change them for one run. Reranking was already the option `--rerank` and the setting `HANDBOOK_RAG_RERANK`. Each of these writes the scratch run `current`, and [the results](../evals/two-passage/search-variants.md#how-the-runs-were-made) have the commands that made the saved runs:
 
@@ -229,14 +229,14 @@ uv run handbook-rag eval-retrieval --fusion-candidates 50                  # can
 uv run handbook-rag eval-retrieval --rrf-k 10                              # the fusion constant
 ```
 
-The command refuses a variant that it could not measure: one of `--spread-per-page` and `--spread-within` without the other, any of the three in a mode that merges nothing, a limit for each page with reranking, and fewer candidates than the results the search is asked for.
+The command refuses a variant that it could not measure: one of `--spread-per-page` and `--spread-within` without the other, a `--spread-within` above the 10 results a run scores, any of the three in a mode that merges nothing, a limit for each page with reranking, and fewer candidates than the results the search is asked for.
 
 ### How to read "clear" there
 
 "Clear" means that the 95% interval of one comparison excludes zero. Two things weaken it here.
 
-- **Many comparisons on the same questions.** Twelve different comparisons were made on "both in the top 5": fourteen variants, of which two repeat two others on the first five results. If none of the twelve changed anything, the chance that at least one came out clear would be up to 1 - 0.95^12 = 46%, and not 5%. None did. Had one looked good, what it could claim is "worth testing on new questions".
-- **The rule is generous when few questions change** ([issue 80](https://github.com/MumukshuPanchal/handbook-rag/issues/80)). The limit of three chunks reads as clear on the golden set, on 4 questions worse and none better. An exact sign test on those four gives p = 0.125. The fusion constant 10 reads as clear on MRR@10, on 5 questions better and 1 worse: p = 0.219. The card's comparison of hybrid search with keyword search on the 33 questions, 4 better and none worse, is of the same kind.
+- **Many comparisons on the same questions.** Twelve different comparisons were made on "both in the top 5": fourteen variants, of which two repeat two others on the first five results. If each read clear by chance one time in twenty, at least one of the twelve would do so 1 - 0.95^12 = 46% of the time, and not 5%. That is no upper bound, because the rule reads clear more easily than one time in twenty when few questions change, as the next point says. None did. Had one looked good, what it could claim is "worth testing on new questions".
+- **The rule is generous when few questions change** ([issue 80](https://github.com/MumukshuPanchal/handbook-rag/issues/80)). The limit of three chunks reads as clear on the golden set, on 4 questions worse and none better. An exact sign test on those four gives p = 0.125. The three readings in a variant's favour, over all the scores `eval-compare` prints, are of this kind: the fusion constant 10 on MRR@10 and on nDCG@10 on the golden set, each on 5 questions better and 1 worse, p = 0.219, and 100 candidates on nDCG@10 on the 33, on 4 better and 1 worse, p = 0.375. The card's comparison of hybrid search with keyword search on the 33 questions, 4 better and none worse, is of the same kind.
 
 The loss from a limit of one or two chunks does not rest on that rule alone: the same test gives p = 0.000006 and p = 0.004. And it has a reason, grows as the limit tightens, and loses the same questions each time.
 

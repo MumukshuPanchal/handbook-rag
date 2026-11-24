@@ -6,7 +6,7 @@ fusion constant. They are options, and each is off unless a run asks for it. The
 hold the default to that.
 
 The rankings below were written down from the code as it was before the options existed
-(commit 20d237f, "feat: the two-passage questions read a second time, and measured on the
+(commit c52fd36, "feat: the two-passage questions read a second time, and measured on the
 33 confirmed"), on a small stand-in index. This file uses nothing the options added, so
 it runs against that commit as it is, and gives the same result there.
 
@@ -59,7 +59,7 @@ PAGES = {
     ],
 }
 # For each question, the first eight results of the default search: the chunk's page, its
-# text and its merged score. Copied from the output of commit 20d237f.
+# text and its merged score. Copied from the output of commit c52fd36.
 BEFORE = {
     "paid parental leave weeks for new parents in germany": [
         ("people/leave.md", "New parents get sixteen weeks of paid parental leave.", 0.032522),

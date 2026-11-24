@@ -94,16 +94,18 @@ The first ten results hold both passages for 5 questions more than the first fiv
 
 ## Fourteen variants on the same questions
 
-"Clear" means that the 95% interval of one comparison excludes zero. When many comparisons are made, some come out clear by chance. Twelve different comparisons were made here on "both in the top 5": fourteen variants, of which the two with k = 10 repeat two others on the first five results. If none of twelve variants changed anything, the chance that at least one comparison came out clear would be up to 1 - 0.95^12 = 46%, not 5%.
+"Clear" means that the 95% interval of one comparison excludes zero. When many comparisons are made, some come out clear by chance. Twelve different comparisons were made here on "both in the top 5": fourteen variants, of which the two with k = 10 repeat two others on the first five results. If none of twelve variants changed anything, and each comparison read clear by chance one time in twenty, at least one would come out clear 1 - 0.95^12 = 46% of the time, not 5%. That is no upper bound: the rule that `eval-compare` applies reads clear more easily than one time in twenty when few questions change ([issue 80](https://github.com/MumukshuPanchal/handbook-rag/issues/80)).
 
 On that score no comparison is clear, so there is no winner to discount. If one variant had looked good, the claim it could carry would have been "worth testing on new questions", and not "better".
 
-The clear readings are in the table of the golden set, which holds 28 comparisons, and they are not all worth the same:
+On the scores of the two tables, the clear readings are all in the table of the golden set. It holds 28 comparisons, of which 26 are different: on Hit@5 the two limits with k = 10 repeat the two with k = 5. The clear readings are not all worth the same:
 
 - **One chunk of a page**: 22 questions worse and 1 better. An exact sign test gives p = 0.000006. No allowance for fourteen variants changes that.
-- **Two chunks**: 9 worse and none better, p = 0.004. A correction for the fourteen comparisons of Hit@5 asks for less than 0.0036, so this one stands at its edge.
+- **Two chunks**: 9 worse and none better, p = 0.004. A correction for the 12 different comparisons of Hit@5 asks for less than 0.0042, and this one passes it, narrowly.
 - **Three chunks**: 4 worse and none better. The interval excludes zero, and the sign test gives p = 0.125: the rule that `eval-compare` applies is generous when few questions change ([issue 80](https://github.com/MumukshuPanchal/handbook-rag/issues/80)). By itself this reading would show nothing.
-- **Fusion constant 10, on MRR@10**: +0.003, with 5 questions better and 1 worse, p = 0.219. Among 28 comparisons a reading like this is what chance produces. The committed run [`v9`](../runs/retrieval/v9) had the same figures.
+- **Fusion constant 10, on MRR@10**: +0.003, with 5 questions better and 1 worse, p = 0.219. Among 26 different comparisons a reading like this is what chance produces. The committed run [`v9`](../runs/retrieval/v9) had the same figures.
+
+The tables compare All@5 on the 33 questions, and Hit@5 and MRR@10 on the golden set. `eval-compare` compares ten scores on each set, and on the others it reads more as clear. Every other clear loss is of a limit for each page: on the 33 questions the limit of one chunk loses on Hit@5, with 0 questions better and 6 worse, and on Recall@5, MRR@10 and nDCG@10, and with k = 10 it also loses on Hit@10 and All@10, 0 better and 8 worse. In a variant's favour it reads two more, both of the generous kind: the fusion constant 10 on nDCG@10 on the golden set, +0.003 with 5 better and 1 worse as on MRR@10, and 100 candidates on nDCG@10 on the 33, +0.035 (+0.004 to +0.076) with 4 better and 1 worse, p = 0.375.
 
 What makes the loss from the page limit believable is not one of these tests. It is that the loss grows as the limit tightens (2, 4, 9 and 22 questions), that the same questions are lost each time, and that the section above says why.
 

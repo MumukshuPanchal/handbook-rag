@@ -142,14 +142,61 @@ class Settings(BaseSettings):
             "Reciprocal rank fusion constant. Larger values flatten the advantage of top ranks."
         ),
     )
+    cache_mode: Literal["off", "exact", "semantic"] = Field(
+        default="semantic",
+        description=(
+            "Whether an answer stored earlier is served again without a request to the "
+            "answer model. off: never. exact: to the same question, where case, spacing "
+            "and the question marks, exclamation marks and full stops at its end do not "
+            "count. semantic: also to a question that a second model, the verifier, "
+            "judges to mean the same. That serves more and is the risky tier: a question "
+            "that only looks the same will sometimes get another question's answer. It "
+            "also loads a third model. The default is the project owner's decision, and "
+            "ADR 0020 records it with the measured risk beside it."
+        ),
+    )
+    cache_threshold: float = Field(
+        default=0.8669,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "How sure the verifier must be, in its weaker direction, before a stored "
+            "answer is served to a question worded differently. The default is fitted "
+            "on labelled pairs of questions: the threshold the saved run "
+            "evals/runs/cache/no-decline-candidates chose on one half of them, rounded "
+            "up. That run's other half and its other splits are the only evidence of how "
+            "it behaves, and there is none about real questions. Higher is stricter."
+        ),
+    )
+    cache_candidates: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description=(
+            "How many of the nearest stored questions the verifier is asked about. Each "
+            "one is read twice. The default is the number the measurement used; it is a "
+            "setting, and nothing chose it from the pairs."
+        ),
+    )
+    cache_floor: float = Field(
+        default=0.5,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "The cosine below which a stored question is no candidate at all, so that "
+            "questions that have nothing to do with each other are never verified. The "
+            "default is the measurement's; nothing chose it from the pairs."
+        ),
+    )
     cache_verifier_model: str = Field(
         default="cross-encoder/nli-deberta-v3-small",
         description=(
             "Cross-encoder that checks whether a stored question and a new one imply each "
-            "other, the second check a semantic cache would make before serving a stored "
-            "answer. It must be a model trained for natural language inference whose "
-            "configuration names one output 'entailment'. No cache is built yet: only "
-            "`handbook-rag eval-cache`, which measures the check, loads it."
+            "other, the second check the answer cache makes before it serves a stored "
+            "answer to a question worded differently. It must be a model trained for "
+            "natural language inference whose configuration names one output "
+            "'entailment'. Loaded when the cache's mode is semantic, and by "
+            "`handbook-rag eval-cache`, which measures the check."
         ),
     )
 

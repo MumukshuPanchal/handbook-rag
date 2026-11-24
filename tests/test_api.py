@@ -669,6 +669,8 @@ def test_ask_numbers_the_sources_in_the_order_the_answer_first_cites_them() -> N
         "took_ms": 2000.0,
         "first_text_ms": 1000.0,
         "trace_id": None,
+        # Written for this request: nothing came from the answer cache.
+        "cached": None,
     }
     ((asked, chunks),) = model.asked
     assert asked == QUESTION
@@ -776,7 +778,7 @@ def test_a_stream_sends_each_piece_as_it_is_written_then_the_answer_byte_for_byt
             '"text":"New parents get sixteen weeks of paid leave."}],'
             '"model":"stand-in-model-002","stop_reason":"end_turn",'
             '"usage":{"input_tokens":1200,"output_tokens":40},"requests":1,"fallback":false,'
-            '"took_ms":2000.0,"first_text_ms":1000.0,"trace_id":null}\n\n'
+            '"took_ms":2000.0,"first_text_ms":1000.0,"trace_id":null,"cached":null}\n\n'
         ).encode()
     )
 
@@ -1314,7 +1316,9 @@ def test_the_api_documents_both_forms_of_an_answer_and_why_it_may_be_refused(
     }
     assert set(refused["headers"]) == {"Retry-After", TRACE_HEADER}
     request = schemas["AskRequest"]
-    assert set(request["properties"]) == {"query", "section", "stream"}
+    assert set(request["properties"]) == {"query", "section", "stream", "cache"}
+    assert request["properties"]["cache"]["type"] == "boolean"
+    assert request["properties"]["cache"]["default"] is True
     assert request["required"] == ["query"]
     assert request["additionalProperties"] is False
     assert request["properties"]["query"]["maxLength"] == MAX_QUERY_CHARS
@@ -1333,6 +1337,14 @@ def test_the_api_documents_both_forms_of_an_answer_and_why_it_may_be_refused(
         "took_ms",
         "first_text_ms",
         "trace_id",
+        "cached",
+    }
+    assert set(schemas["CachedAnswer"]["properties"]) == {
+        "tier",
+        "question",
+        "similarity",
+        "score",
+        "stored_at",
     }
     assert schemas["Health"]["properties"]["answering"]["type"] == "boolean"
 

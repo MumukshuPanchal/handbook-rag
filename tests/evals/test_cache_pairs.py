@@ -799,6 +799,77 @@ def test_the_stored_questions_the_handbook_does_not_answer_are_kept_with_the_sco
     assert cache_pairs.unanswered_questions([answered]) == frozenset()
 
 
+ANSWERED = GoldenQuestion(
+    id="q5",
+    question="How many days of leave do I get?",
+    type="answerable",
+    origin="hand-written",
+    reference_answer="25 days.",
+    evidence=(Evidence(doc_id="people/leave.md", quote="25 days"),),
+)
+
+
+def test_a_stored_decline_is_no_candidate_when_the_cache_is_measured_as_it_is_built() -> None:
+    # q1 to q4 are questions the handbook does not answer, and q5 is one it answers.
+    row = different_row(other="new question")
+    embedder = TableEmbedder(
+        {
+            "new question": [1.0, 0.0, 0.0],
+            TEXT["q1"]: towards(0.95),
+            TEXT["q2"]: towards(0.9),
+            TEXT["q3"]: towards(0.8),
+            TEXT["q4"]: towards(0.7),
+            ANSWERED.question: towards(0.6),
+        }
+    )
+    golden = [*GOLDEN, ANSWERED]
+    verifier = FakeVerifier()
+
+    kept = measure([as_pair(row)], golden, embedder=embedder, verifier=FakeVerifier(), candidates=2)
+    left_out = measure(
+        [as_pair(row)],
+        golden,
+        embedder=embedder,
+        verifier=verifier,
+        candidates=2,
+        decline_candidates=False,
+    )
+
+    # As the first run had it: the two nearest, both of them stored declines.
+    assert [c.question_id for c in kept.asked[0].candidates] == ["q1", "q2"]
+    assert kept.decline_candidates is True
+    # Left out, they give their places to the next nearest, which here is the only one.
+    (question,) = left_out.asked
+    assert [c.question_id for c in question.candidates] == ["q5"]
+    assert question.above_floor == 1
+    assert left_out.decline_candidates is False
+    # They are still stored, and the pair's own golden question is still scored.
+    assert left_out.stored == 5
+    assert left_out.unanswered == {"q1", "q2", "q3", "q4"}
+    assert question.own.cosine == pytest.approx(0.95)
+    assert verifier.calls == [[(TEXT["q1"], "new question"), (ANSWERED.question, "new question")]]
+
+
+def test_a_stored_decline_below_the_floor_or_asked_itself_changes_nothing_when_left_out() -> None:
+    # The question asked is the stored decline q2 itself: left out as an exact match
+    # already, and named as such whether or not declines are candidates.
+    row = golden_row("d001", "q1", "q2")
+    golden = [*GOLDEN, ANSWERED]
+
+    (question,) = measure(
+        [as_pair(row)],
+        golden,
+        embedder=FakeEmbedder(),
+        verifier=FakeVerifier(),
+        candidates=4,
+        floor=-1.0,
+        decline_candidates=False,
+    ).asked
+
+    assert question.excluded == "q2"
+    assert [c.question_id for c in question.candidates] == ["q5"]
+
+
 def test_a_pair_whose_golden_question_is_not_stored_cannot_be_asked() -> None:
     row = same_row() | {"question_id": "q9", "question": "A question nobody stored?"}
 
@@ -855,6 +926,107 @@ def figures_of_the_small_world() -> tuple[cache_pairs.Measured, dict[str, Any]]:
         other_splits=5,
     )
     return measured, figures
+
+
+def test_the_figures_say_when_stored_declines_were_left_out_and_are_the_same_otherwise() -> None:
+    measured, figures = figures_of_the_small_world()
+
+    again = summarise(
+        measured.asked,
+        stored=measured.stored,
+        candidates=measured.candidates,
+        floor=measured.floor,
+        unanswered=measured.unanswered,
+        other_splits=5,
+        decline_candidates=False,
+    )
+
+    # As the first saved run has them: nothing about declines, so its figures can still
+    # be worked out again from its rows.
+    assert "stored_declines" not in figures["cache_view"]
+    declines = again["cache_view"].pop("stored_declines")
+    assert again == figures, "the counting is the same: the rows already hold the candidates"
+    # Every golden question of the small world is one the handbook does not answer.
+    assert (declines["left_out"], declines["candidates_from"]) == (12, 0)
+    assert declines["pairs_whose_golden_question_is_one"] == {SAME: 12, DIFFERENT: 12}
+    assert "golden set's label, not a model's reply" in declines["what"]
+
+
+def half_answered() -> tuple[list[GoldenQuestion], list[CachePair]]:
+    """The small world, with the handbook answering the six questions about the office."""
+    golden, pairs = a_small_world()
+    answered = [
+        question.model_copy(update={"type": "answerable"})
+        if "office" in question.question
+        else question
+        for question in golden
+    ]
+    return answered, pairs
+
+
+def test_a_run_made_with_declines_left_out_records_it_and_its_report_says_so(
+    tmp_path: Path,
+) -> None:
+    golden, pairs = half_answered()
+    measured = measure(
+        pairs,
+        golden,
+        embedder=FakeEmbedder(),
+        verifier=FakeVerifier(),
+        decline_candidates=False,
+    )
+
+    summary = write_cache_run(
+        measured,
+        tmp_path / "run",
+        description="A run for a test.",
+        config={"embedding_model": "fake-embedder"},
+        measured_on=DAY,
+        other_splits=5,
+    )
+
+    assert summary["config"]["decline_candidates"] is False
+    declines = summary["cache_view"]["stored_declines"]
+    assert (declines["left_out"], declines["candidates_from"]) == (6, 6)
+    assert declines["pairs_whose_golden_question_is_one"] == {SAME: 6, DIFFERENT: 6}
+    # No row holds a stored decline as a candidate, and what it holds gives the figures again.
+    unanswered = cache_pairs.unanswered_questions(golden)
+    again = load_cache_run(tmp_path / "run", pairs)
+    assert again == measured.asked
+    assert all(c.question_id not in unanswered for q in again for c in q.candidates)
+    assert any(q.candidates for q in again)
+    figures = summarise(
+        again,
+        stored=12,
+        candidates=3,
+        floor=0.5,
+        unanswered=unanswered,
+        other_splits=5,
+        decline_candidates=False,
+    )
+    assert {name: summary[name] for name in figures} == json.loads(json.dumps(figures))
+    report = report_lines({**as_a_summary(figures), "config": {**as_a_summary(figures)["config"]}})
+    assert (
+        "  a stored decline is no candidate: the 6 are left out, and each question meets the "
+        "nearest of the other 6"
+    ) in report
+
+
+def test_a_run_made_as_the_first_one_was_says_nothing_of_declines(tmp_path: Path) -> None:
+    measured, figures = figures_of_the_small_world()
+
+    summary = write_cache_run(
+        measured,
+        tmp_path / "run",
+        description="A run for a test.",
+        config={"embedding_model": "fake-embedder"},
+        measured_on=DAY,
+        other_splits=5,
+    )
+
+    assert "decline_candidates" not in summary["config"]
+    assert "stored_declines" not in summary["cache_view"]
+    assert not [line for line in report_lines(as_a_summary(figures)) if "stored decline is" in line]
 
 
 def test_disputed_pairs_are_in_no_figure_and_are_listed_with_their_scores() -> None:

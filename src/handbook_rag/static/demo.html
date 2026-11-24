@@ -59,7 +59,7 @@
     <aside id="search-area" class="search-area" aria-label="What the search found" hidden>
       <details>
         <summary>What the search found <span id="search-count"></span></summary>
-        <p class="hint">The passages <code>POST /search</code> returns for the same question, best first. The answer runs this search before the model writes, and with the default settings it takes as many passages, so these are the passages the model was given. Compare them with the sources the answer cites. This search costs no request to the model.</p>
+        <p class="hint">The passages <code>POST /search</code> returns for the same question, best first. The answer runs this search before the model writes, and with the default settings it takes as many passages, so these are the passages the model was given. An answer that came from the cache ran no search: it was written earlier, from the passages found then for the question it names. Compare them with the sources the answer cites. This search costs no request to the model.</p>
         <p id="search-state"></p>
         <ol id="passages" class="sources"></ol>
       </details>
@@ -68,7 +68,7 @@
 </main>
 
 <footer>
-  <p>For this machine only. The service has no login, and every question asked here uses the answer model's allowance. The API's own documentation is at <a href="/docs">/docs</a>.</p>
+  <p>For this machine only. The service has no login, and every question asked here uses the answer model's allowance, unless the service holds a stored answer for it. The API's own documentation is at <a href="/docs">/docs</a>.</p>
 </footer>
 </body>
 </html>

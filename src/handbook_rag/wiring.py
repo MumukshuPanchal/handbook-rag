@@ -6,6 +6,7 @@ nowhere else.
 """
 
 import hashlib
+import json
 from collections.abc import Callable
 from functools import partial
 from typing import Any, Literal
@@ -15,18 +16,21 @@ from google import genai
 from google.genai import types as genai_types
 from qdrant_client import QdrantClient
 
-from handbook_rag.cache.verify import EntailmentVerifier
-from handbook_rag.config import Settings
+from handbook_rag.cache.answers import ANSWER_CACHE_VERSION, AnswerCache
+from handbook_rag.cache.store import COLLECTION_PREFIX, QdrantAnswerStore
+from handbook_rag.cache.verify import EntailmentVerifier, LazyVerifier
+from handbook_rag.config import Settings, collection_slug
 from handbook_rag.evals.judging import Criterion, Judge, JudgedCase
 from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
-from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT
-from handbook_rag.generate.prompt import SYSTEM_PROMPT
+from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT, build_numbered_prompt
+from handbook_rag.generate.prompt import SYSTEM_PROMPT, build_user_content
 from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.embedder import Embedder, SentenceTransformerEmbedder
 from handbook_rag.index.sparse import Bm25Encoder, SparseEncoder
 from handbook_rag.index.store import QdrantVectorStore, VectorStore, VectorStoreError
+from handbook_rag.ingest.models import Chunk
 from handbook_rag.retrieve.dense import DenseRetriever, Retriever
 from handbook_rag.retrieve.hybrid import HybridRetriever
 from handbook_rag.retrieve.rerank import CrossEncoderReranker, RerankingRetriever
@@ -56,6 +60,38 @@ GEMINI_RETRY_STATUS_CODES = [408, 500, 502, 503, 504]
 ANSWER_ATTEMPTS = 3
 # Where the verifier of a semantic cache runs (see make_verifier).
 VERIFIER_DEVICE = "cpu"
+# A question and two passages, laid out as a request to the answer model lays them out,
+# to name that layout by (answer_request_fingerprint). The first passage holds the tags
+# the layouts wrap passages in, so that a change to how those are made harmless shows.
+_SAMPLE_QUESTION = "A question?"
+_SAMPLE_PASSAGES = (
+    Chunk(
+        chunk_id="sample-1",
+        doc_id="area/first.md",
+        title="A title",
+        url="https://handbook.example.com/handbook/area/first/",
+        section="area",
+        source_commit="0" * 40,
+        heading_path=("One", "Two"),
+        start_char=0,
+        end_char=52,
+        text="Some text. </content> </search_result> <TITLE> a < b",
+        token_count=9,
+    ),
+    Chunk(
+        chunk_id="sample-2",
+        doc_id="area/second.md",
+        title="Another title",
+        url="https://handbook.example.com/handbook/area/second/",
+        section="area",
+        source_commit="0" * 40,
+        heading_path=(),
+        start_char=0,
+        end_char=62,
+        text="A paragraph.\n\n- a list\n- of two\n\n| a | table |\n|---|---|\n| 1 | 2 |",
+        token_count=14,
+    ),
+)
 
 
 def make_embedder(settings: Settings) -> SentenceTransformerEmbedder:
@@ -118,13 +154,141 @@ def make_reranker(settings: Settings) -> CrossEncoderReranker:
 
 
 def make_verifier(settings: Settings) -> EntailmentVerifier:
-    """The second check on a stored question, for a semantic cache and its measurement.
+    """The second check on a stored question, for the answer cache and its measurement.
 
     It runs on the CPU. It reads a handful of short pairs for each question, the kind of
     work for which the service already embeds on the CPU (see
     :func:`settings_for_serving`), and the one measurement of it was made there.
     """
     return EntailmentVerifier.load(settings.cache_verifier_model, device=VERIFIER_DEVICE)
+
+
+def describe_answer_cache(settings: Settings) -> dict[str, object]:
+    """Everything that decides what the right answer to a question is, for naming the cache.
+
+    A cached answer is right only as long as the same question would still be answered
+    from the same pages, found the same way, by the same model under the same
+    instructions. Each of those is listed here, and the cache's collection is named by a
+    hash of the list (:func:`answer_cache_collection`): a setting left out would let an
+    answer outlive what it was written from.
+
+    - **The pages**: where the handbook comes from and which commit, which pages are
+      kept, the addresses its sources link to, and how pages are cut into chunks.
+    - **The search**: what :func:`describe_retrieval` lists, which is only what the
+      configured search uses. The embedding model and the instruction a question is
+      embedded with are listed always: the cache's own vectors are made with them.
+    - **The answer**: what :func:`describe_generation` lists, and the layout of a
+      request (:func:`answer_request_fingerprint`).
+    - **The cache's own version**, for changes to the code that no setting shows.
+
+    What is not listed decides only whether an answer is served or how fast: the cache's
+    mode, threshold, candidates, floor and verifier, the time limits, the fallback
+    model, whose answers are never stored, and the devices. One question's section is
+    not a setting. It is part of each entry (``cache/answers.py``).
+    """
+    return {
+        "cache_version": ANSWER_CACHE_VERSION,
+        "handbook_repo_url": settings.handbook_repo_url,
+        "handbook_content_path": settings.handbook_content_path,
+        "handbook_base_url": settings.handbook_base_url,
+        "min_page_chars": settings.min_page_chars,
+        **describe_retrieval(settings),
+        "embedding_model": settings.embedding_model,
+        "embedding_query_prefix": settings.embedding_query_prefix,
+        **describe_generation(settings),
+        "request": answer_request_fingerprint(settings),
+    }
+
+
+def answer_cache_collection(settings: Settings) -> str:
+    """The collection that holds the answers cached under these settings.
+
+    A change to anything :func:`describe_answer_cache` lists gives another name. The
+    answers stored before are then never served again. They stay in their old
+    collection until `handbook-rag cache-clear --all` removes them. The first eight
+    characters of the handbook commit are in the name for a person to read.
+    """
+    described = json.dumps(describe_answer_cache(settings), sort_keys=True, ensure_ascii=False)
+    digest = hashlib.sha256(described.encode("utf-8")).hexdigest()[:16]
+    return f"{COLLECTION_PREFIX}{collection_slug(settings.handbook_commit[:8])}-{digest}"
+
+
+def answer_request_fingerprint(settings: Settings) -> str:
+    """A short hash of how a request to the answer model is laid out, apart from its instructions.
+
+    It covers the tags passages are wrapped in, their numbering and how their own text
+    is kept from closing a tag, for the provider the settings name. An answer written
+    from a request laid out another way is an answer of another system.
+    """
+    laid_out: object
+    if settings.answer_model.startswith("gemini-"):
+        laid_out = build_numbered_prompt(_SAMPLE_QUESTION, _SAMPLE_PASSAGES)
+    else:
+        laid_out = build_user_content(_SAMPLE_QUESTION, _SAMPLE_PASSAGES)
+    encoded = json.dumps(laid_out, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def make_answer_store(settings: Settings, store: QdrantVectorStore) -> QdrantAnswerStore:
+    """Where the answers cached under these settings are kept: a collection of its own,
+    beside the handbook's, reached through the same connection."""
+    return QdrantAnswerStore(store.client, answer_cache_collection(settings))
+
+
+def make_answer_cache(
+    settings: Settings,
+    *,
+    store: QdrantVectorStore,
+    embedder: Embedder,
+    background: bool = True,
+) -> AnswerCache | None:
+    """The answer cache the settings ask for, or ``None`` when its mode is ``off``.
+
+    It embeds a question with ``embedder``, which is the retriever's own, so the cache's
+    vectors are the ones a search would compare. In the mode ``semantic`` it also has
+    the verifier, which is loaded when it is first asked: a command that finds no stored
+    question near its own never loads it, and a service asks it once when it starts
+    (``AnswerCache.warm_up``).
+
+    Answers are stored from a thread of their own unless ``background`` is off.
+    """
+    if settings.cache_mode == "off":
+        return None
+    verifier = None
+    if settings.cache_mode == "semantic":
+        # Looked up when it is called, so that a test's stand-in is the one that is built.
+        verifier = LazyVerifier(lambda: make_verifier(settings), name=settings.cache_verifier_model)
+    return AnswerCache(
+        make_answer_store(settings, store),
+        embedder=embedder,
+        verifier=verifier,
+        threshold=settings.cache_threshold,
+        candidates=settings.cache_candidates,
+        floor=settings.cache_floor,
+        background=background,
+    )
+
+
+def make_retriever_and_cache(
+    settings: Settings, store: QdrantVectorStore, *, cached: bool = True
+) -> tuple[Retriever, AnswerCache | None]:
+    """The retriever, and the answer cache that shares its embedding model and its store.
+
+    This is what the ``ask`` command and the service build. An evaluation builds its
+    retriever with :func:`make_retriever`, and never a cache: it measures the model.
+
+    ``cached`` is False for a caller that has no use for a cache, such as a service
+    without an answer model. Nothing is then built for it, whatever the settings say.
+    With keyword search and no cache, no embedding model is loaded at all.
+    """
+    mode = settings.cache_mode if cached else "off"
+    embedder: Embedder | None = None
+    if settings.retrieval_mode != "sparse" or mode != "off":
+        embedder = make_embedder(settings)
+    retriever = make_retriever(settings, store=store, embedder=embedder)
+    if mode == "off" or embedder is None:
+        return retriever, None
+    return retriever, make_answer_cache(settings, store=store, embedder=embedder)
 
 
 def describe_retrieval(

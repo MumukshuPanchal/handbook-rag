@@ -15,6 +15,8 @@ from typing import Annotated, Any, Literal, TextIO
 import typer
 
 from handbook_rag import __version__, wiring
+from handbook_rag.cache.answers import AnswerCache
+from handbook_rag.cache.store import QdrantAnswerStore, answer_collections
 from handbook_rag.cache.verify import VerifierError
 from handbook_rag.config import Settings, get_settings
 from handbook_rag.evals import adversarial, cache_pairs
@@ -67,7 +69,7 @@ from handbook_rag.evals.review import render_review_page
 from handbook_rag.evals.stage import SavedRunError, Stage
 from handbook_rag.evals.support import SUPPORT
 from handbook_rag.generate.base import GenerationError
-from handbook_rag.generate.models import Answer
+from handbook_rag.generate.models import Answer, CacheHit
 from handbook_rag.generate.pricing import cost_usd
 from handbook_rag.index.compare import (
     DEFAULT_VECTOR_TOLERANCE,
@@ -82,7 +84,7 @@ from handbook_rag.index.reuse import (
     find_reuse_source,
     read_previous_index,
 )
-from handbook_rag.index.store import CollectionMissingError, VectorStoreError
+from handbook_rag.index.store import CollectionMissingError, QdrantVectorStore, VectorStoreError
 from handbook_rag.ingest.build import CorpusError, build_corpus, chunk_documents, load_snapshot
 from handbook_rag.ingest.models import Chunk
 from handbook_rag.ingest.snapshot import SnapshotError, download_snapshot, snapshot_commit
@@ -325,12 +327,39 @@ def index(
     typer.echo(f"  removed     {report.removed:,} no longer produced")
     if report.replaced:
         typer.echo(f"  replaced    {report.replaced:,} stored under the same id with other details")
+    if report.embedded or report.reused or report.removed or report.replaced:
+        _empty_the_answer_cache(settings, store)
     typer.echo(f"  time        {report.seconds:.1f} seconds")
     if previous is not None:
         typer.echo(
             f"              chunking {chunked:.1f}, reading the older collection "
             f"{previous.seconds:.1f}, reusing {report.reuse_seconds:.1f}, embedding "
             f"{report.embed_seconds:.1f}"
+        )
+
+
+def _empty_the_answer_cache(settings: Settings, store: QdrantVectorStore) -> None:
+    """Remove the answers cached under these settings, after the index they came from changed.
+
+    The cache's collection is named by the settings, and an index can change under the
+    same settings: while it is first built, when a run that stopped is finished, or when
+    pages are read another way. An answer written from the index as it was, a decline
+    from a half-built one above all, must not be served from the index as it is.
+    Failing to empty the cache does not undo the indexing, so it is reported and no more.
+    """
+    try:
+        removed = wiring.make_answer_store(settings, store).clear()
+    except Exception as error:
+        typer.echo(
+            f"note: the answers cached from the index as it was could not be removed "
+            f"({type(error).__name__}). Run `handbook-rag cache-clear`.",
+            err=True,
+        )
+        return
+    if removed:
+        typer.echo(
+            f"  cache       {removed:,} cached answers removed: the index they were written "
+            "from has changed"
         )
 
 
@@ -1954,13 +1983,24 @@ def eval_cache(
             min=-1.0, max=1.0, help="The cosine below which a stored question is no candidate."
         ),
     ] = cache_pairs.FLOOR,
+    decline_candidates: Annotated[
+        bool,
+        typer.Option(
+            "--declines/--no-declines",
+            help=(
+                "Whether a stored question the handbook does not answer can be a candidate. "
+                "The answer cache never serves a stored decline by meaning, and --no-declines "
+                "measures it as it is built."
+            ),
+        ),
+    ] = True,
 ) -> None:
     """Measure what a semantic cache would serve, on labelled pairs of questions.
 
     No cache is built, and no request goes to any model API: the embedding model and the
     verifier run on this machine. A cache holding the golden questions is simulated, a
     threshold is chosen for each score on one half of the pairs, and the result is
-    reported on the other half.
+    reported on the other half. The answer cache itself is not read or written.
     """
     settings = get_settings()
     try:
@@ -1976,6 +2016,7 @@ def eval_cache(
             verifier=verifier,
             candidates=candidates,
             floor=floor,
+            decline_candidates=decline_candidates,
         )
         summary = cache_pairs.write_cache_run(
             measured,
@@ -1983,6 +2024,11 @@ def eval_cache(
             description=(
                 "The cosine of two question embeddings, and an entailment check in both "
                 "directions, as the test of a semantic cache."
+                + (
+                    ""
+                    if decline_candidates
+                    else " A stored decline is no candidate, as in the answer cache."
+                )
             ),
             config={
                 "embedding_model": settings.embedding_model,
@@ -2119,11 +2165,27 @@ def ask(
         str | None,
         typer.Option(help="Use only one handbook section, such as 'engineering'."),
     ] = None,
+    cache: Annotated[
+        bool,
+        typer.Option(
+            "--cache/--no-cache",
+            help=(
+                "With --no-cache the answer model is asked, also when a stored answer would "
+                "do, and the new answer is stored in its place."
+            ),
+        ),
+    ] = True,
 ) -> None:
-    """Answer a question from the handbook, with the passages that support the answer."""
+    """Answer a question from the handbook, with the passages that support the answer.
+
+    An answer stored earlier for the same question, or for one that means the same, is
+    printed without a request to the model, and the command says so
+    (HANDBOOK_RAG_CACHE_MODE).
+    """
     settings = get_settings()
     traced: str | None = None
     wrote = False
+    answers: AnswerCache | None = None
 
     def note_trace(found: str) -> None:
         nonlocal traced
@@ -2138,8 +2200,11 @@ def ask(
     with tracing_session(settings):
         try:
             # Built outside the trace: loading models is a cost of starting the
-            # process, not of answering this question.
-            retriever = wiring.make_retriever(settings)
+            # process, not of answering this question. The cache's second model is not
+            # loaded here: only a question that has a stored one near it needs it.
+            retriever, answers = wiring.make_retriever_and_cache(
+                settings, wiring.make_store(settings)
+            )
             generator = wiring.make_generator(settings)
             answer = answer_question(
                 question,
@@ -2149,6 +2214,8 @@ def ask(
                 section=section,
                 on_text=write,
                 on_trace=note_trace,
+                cache=answers,
+                fresh=not cache,
             )
         except (VectorStoreError, GenerationError) as error:
             if wrote:
@@ -2171,15 +2238,20 @@ def ask(
     elif answer.answered:
         typer.echo("\nNo passages were cited for this answer. Treat it with caution.")
 
-    cost = cost_usd(answer.model, answer.usage)
-    details = [
-        answer.model,
-        f"{answer.usage.input_tokens:,} tokens in",
-        f"{answer.usage.output_tokens:,} out",
-        f"{answer.seconds:.1f} s",
-    ]
-    if cost is not None:
-        details.insert(3, f"${cost:.5f}")
+    if answer.cached is not None:
+        _show_cache_hit(answer.cached)
+        # No model was asked, so there are no tokens, no price and no time to print.
+        details = [answer.model, "no request to the model"]
+    else:
+        cost = cost_usd(answer.model, answer.usage)
+        details = [
+            answer.model,
+            f"{answer.usage.input_tokens:,} tokens in",
+            f"{answer.usage.output_tokens:,} out",
+            f"{answer.seconds:.1f} s",
+        ]
+        if cost is not None:
+            details.insert(3, f"${cost:.5f}")
     if answer.requests > 1:
         # Failed requests were sent first. Each one counts against the key's allowance.
         # The tokens and the time above are those of the request that wrote the reply.
@@ -2196,6 +2268,96 @@ def ask(
     if traced is not None:
         # The id to look this answer up by in the trace backend.
         typer.echo(f"trace {traced}")
+    # Last, after everything is printed: the answer is stored by a thread of its own,
+    # and the command ends only when that is done, or has taken too long.
+    if answers is not None and not answers.close():
+        typer.echo(
+            "note: the answer was not stored in the cache, because the vector store did "
+            "not answer in time.",
+            err=True,
+        )
+
+
+def _show_cache_hit(hit: CacheHit) -> None:
+    """Say that an answer came from the cache, and which question it was written for.
+
+    An answer matched by meaning was written for another wording. Printing that wording
+    is what lets the person asking see a wrong match, and the last line says what to do
+    about one.
+    """
+    how = "an exact match" if hit.tier == "exact" else "matched by meaning"
+    typer.echo(f"\nFrom the cache: {how}, stored {hit.stored_at}. No request to the model.")
+    typer.echo(f"  written for the question: {hit.question}")
+    if hit.similarity is not None and hit.score is not None:
+        typer.echo(f"  similarity {hit.similarity:.3f}, second check {hit.score:.3f}")
+    if hit.tier != "exact":
+        typer.echo("  If that is another question than yours, ask again with --no-cache.")
+
+
+@app.command(name="cache-status")
+def cache_status() -> None:
+    """Say how many answers the answer cache holds for the current settings."""
+    settings = get_settings()
+    try:
+        store = wiring.make_store(settings)
+        answers = wiring.make_answer_store(settings, store)
+        held = answers.held()
+        others = {
+            name: QdrantAnswerStore(store.client, name).held()
+            for name in answer_collections(store.client)
+            if name != answers.collection
+        }
+    except VectorStoreError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    exact_only = held.answers - held.by_meaning - held.declines
+    typer.echo("Answer cache")
+    typer.echo(f"  mode         {settings.cache_mode} (HANDBOOK_RAG_CACHE_MODE)")
+    typer.echo(f"  collection   {answers.collection}")
+    typer.echo(f"  answers      {held.answers:,} stored")
+    typer.echo(
+        f"               {held.by_meaning:,} may be served to a question that means the same"
+    )
+    typer.echo(
+        f"               {held.declines:,} declines and {exact_only:,} answers that decline in "
+        "part or cite nothing: served to the same question only"
+    )
+    if others:
+        stored = sum(other.answers for other in others.values())
+        typer.echo(
+            f"  left behind  {stored:,} answers in {len(others):,} collections stored under "
+            "other settings. They are never served now."
+        )
+        typer.echo("               `handbook-rag cache-clear --all` removes them.")
+
+
+@app.command(name="cache-clear")
+def cache_clear(
+    everything: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help=(
+                "Also remove the answers stored under other settings. They are never "
+                "served under the current ones."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Empty the answer cache of the current settings. The handbook's index is not touched."""
+    settings = get_settings()
+    try:
+        store = wiring.make_store(settings)
+        answers = wiring.make_answer_store(settings, store)
+        names = [answers.collection]
+        if everything:
+            names += [n for n in answer_collections(store.client) if n != answers.collection]
+        removed = {name: QdrantAnswerStore(store.client, name).clear() for name in names}
+    except VectorStoreError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    for name, count in removed.items():
+        typer.echo(f"Removed {count:,} cached answers from {name}")
 
 
 def _show_what_was_found(error: GenerationError, *, broke_off: bool) -> None:

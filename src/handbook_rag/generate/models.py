@@ -1,6 +1,7 @@
 """What the generator returns: an answer, the passages it cites, and what it cost."""
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from handbook_rag.index.store import ScoredChunk
 from handbook_rag.ingest.models import Chunk
@@ -38,6 +39,30 @@ class TokenUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class CacheHit:
+    """Where an answer came from that was not written for this question now.
+
+    The answer cache (``cache/answers.py``) served it. Whoever shows the answer shows
+    this too: an answer matched by meaning was written for another wording, and a reader
+    who sees that wording can tell when the match was wrong.
+    """
+
+    tier: Literal["exact", "semantic"]
+    """``exact``: stored for this very question. ``semantic``: stored for a question
+    that a second model judged to mean the same."""
+    question: str
+    """The stored question the answer was written for, as it was asked then."""
+    stored_at: str
+    """When the answer was stored: a time in UTC, in ISO 8601."""
+    similarity: float | None = None
+    """The cosine of the two questions' embeddings. ``None`` for an exact match, which is
+    found by a key and compares no embeddings."""
+    score: float | None = None
+    """The verifier's weaker direction, which reached the threshold. ``None`` for an
+    exact match, which is not verified."""
+
+
+@dataclass(frozen=True, slots=True)
 class Answer:
     """The assistant's reply to one question."""
 
@@ -57,9 +82,14 @@ class Answer:
     """The chunks the model was given, in ranked order."""
     requests: int = 1
     """How many requests to a model the answer took, failed ones included. 0 when the
-    assistant declined without asking a model, because nothing was found."""
+    assistant declined without asking a model, because nothing was found, and 0 when the
+    answer came from the cache."""
     fallback: bool = False
     """Whether the fallback model wrote the reply, because the answer model had given up."""
+    cached: CacheHit | None = None
+    """Set when the answer cache served the answer. The model, the stop reason and the
+    text are then those of the stored answer; the tokens and the time are zero, because
+    no model was asked; and no passages were retrieved."""
 
     @property
     def text(self) -> str:

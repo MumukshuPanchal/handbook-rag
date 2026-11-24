@@ -158,6 +158,36 @@ def test_eval_cache_takes_a_name_a_directory_and_the_two_numbers_of_the_cache(
     assert "meets its 1 nearest above a cosine of 0.25" in result.output
 
 
+def test_eval_cache_can_leave_stored_declines_out_as_the_answer_cache_does(
+    models: dict[str, Any], files: list[str], tmp_path: Path
+) -> None:
+    command = ["eval-cache", *files, "--output", str(tmp_path / "runs")]
+
+    as_before = runner.invoke(app, [*command, "--variant", "kept"])
+    left_out = runner.invoke(app, [*command, "--variant", "left-out", "--no-declines"])
+
+    assert as_before.exit_code == left_out.exit_code == 0, left_out.output
+    kept, without = (
+        json.loads((tmp_path / "runs" / name / "summary.json").read_text(encoding="utf-8"))
+        for name in ("kept", "left-out")
+    )
+    # A run made without the option is recorded as it always was.
+    assert "decline_candidates" not in kept["config"]
+    assert "stored_declines" not in kept["cache_view"]
+    assert "a stored decline is no candidate" not in as_before.output
+    assert kept["description"].endswith("as the test of a semantic cache.")
+    # With it, the run says so in its settings, its figures, its description and its report.
+    assert without["config"] == {**kept["config"], "decline_candidates": False}
+    # Every golden question of the small world is one the handbook does not answer.
+    assert without["cache_view"]["stored_declines"]["left_out"] == 12
+    assert without["description"].endswith(
+        "A stored decline is no candidate, as in the answer cache."
+    )
+    assert "a stored decline is no candidate: the 12 are left out" in left_out.output
+    lines = (tmp_path / "runs" / "left-out" / "questions.jsonl").read_text(encoding="utf-8")
+    assert all(json.loads(line)["candidates"] == [] for line in lines.splitlines())
+
+
 def test_eval_cache_gives_the_same_figures_each_time(
     models: dict[str, Any], files: list[str], tmp_path: Path
 ) -> None:
@@ -228,3 +258,4 @@ def test_eval_cache_has_no_option_for_the_split() -> None:
     assert "--seed" not in result.output
     assert "--split" not in result.output
     assert "No cache is built" in result.output
+    assert "--no-declines" in COLOUR_CODES.sub("", result.output)

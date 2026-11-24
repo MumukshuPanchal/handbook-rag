@@ -6,6 +6,9 @@ most relevant to a question; and ``GET /health`` says whether the service can do
 Why ``/ask`` works the way it does is in ADR 0015. Unless it is switched off, the service
 also serves a demo page at ``/`` that asks ``/ask`` (see ``demo.py`` and ADR 0016).
 
+``/ask`` serves an answer stored earlier when the answer cache holds one for the
+question, and says so in the answer (``cache/answers.py`` and ADR 0020).
+
 The application is built by :func:`create_app`, a factory. Tests build one with stand-in
 parts; ``handbook-rag serve`` builds the real one.
 """
@@ -25,11 +28,13 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from starlette.types import Receive, Scope, Send
 
 from handbook_rag import __version__, demo, wiring
+from handbook_rag.cache.answers import AnswerCache
 from handbook_rag.config import Settings, get_settings
 from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.models import Answer
 from handbook_rag.index.store import (
     CollectionMissingError,
+    QdrantVectorStore,
     ScoredChunk,
     VectorStore,
     VectorStoreError,
@@ -59,6 +64,8 @@ MAX_BODY_BYTES = 8_192
 STORE_TIMEOUT_SECONDS = 10.0
 # Searched once when the application starts, so that the models are loaded and have run.
 WARM_UP_QUERY = "warm up"
+# How long a service that shuts down waits for answers that are still being stored.
+CACHE_CLOSE_SECONDS = 5.0
 # Where a caller finds the id of the request's trace, on success and on failure.
 TRACE_HEADER = "X-Trace-Id"
 
@@ -180,6 +187,16 @@ class AskRequest(BaseModel):
             "one JSON response at the end."
         ),
     )
+    cache: bool = Field(
+        default=True,
+        # Strict: "false" and 0 are mistakes by the caller, not no.
+        strict=True,
+        description=(
+            "False asks the answer model, also when the service holds a stored answer "
+            "for the question. The new answer is stored in its place. It has no effect "
+            "on a service whose cache is switched off."
+        ),
+    )
 
 
 class Source(BaseModel):
@@ -224,6 +241,34 @@ class Usage(BaseModel):
     output_tokens: int = Field(description="Tokens the model wrote, its reasoning included.")
 
 
+class CachedAnswer(BaseModel):
+    """Where an answer came from that was not written for this request."""
+
+    tier: Literal["exact", "semantic"] = Field(
+        description=(
+            "exact: the answer was stored for this very question, where case, spacing and "
+            "the punctuation at its end do not count. semantic: it was stored for a "
+            "question that a second model judged to mean the same. That judgement can be "
+            "wrong, so compare `question` with what you asked."
+        )
+    )
+    question: str = Field(description="The stored question the answer was written for.")
+    similarity: float | None = Field(
+        description=(
+            "The cosine of the two questions' embeddings, for a semantic match. Null for "
+            "an exact one."
+        )
+    )
+    score: float | None = Field(
+        description=(
+            "How far each question implies the other by the second model, in its weaker "
+            "direction, from 0 to 1. It reached the service's threshold. Null for an "
+            "exact match."
+        )
+    )
+    stored_at: str = Field(description="When the answer was stored, in UTC (ISO 8601).")
+
+
 class AskResponse(BaseModel):
     """An answer, with the passages it cites."""
 
@@ -251,7 +296,8 @@ class AskResponse(BaseModel):
     requests: int = Field(
         description=(
             "How many requests to a model the answer took, failed ones included. 0 when "
-            "nothing was found to answer from, so that no model was asked."
+            "nothing was found to answer from, so that no model was asked, and 0 when "
+            "the answer came from the cache."
         )
     )
     fallback: bool = Field(
@@ -268,6 +314,13 @@ class AskResponse(BaseModel):
         description=(
             "The id of this request's trace, when tracing is on. Quote it in a bug report. "
             f"It is also sent in the {TRACE_HEADER} header, on failures too."
+        )
+    )
+    cached: CachedAnswer | None = Field(
+        description=(
+            "Null when the model wrote the answer for this request. Otherwise the answer "
+            "is one stored earlier: `model` and `stop_reason` are those of the stored "
+            "answer, `usage` is zero and `requests` is 0, because no model was asked."
         )
     )
 
@@ -299,7 +352,9 @@ ASK_SUCCESS = (
     "stream of server-sent events (`text/event-stream`): each piece of text as the model "
     'writes it, as `event: text` with `data: {"text": "..."}`, then one `event: answer` '
     "whose data is the same JSON object. If the answer fails after it has begun, the "
-    'stream ends with one `event: error` with `data: {"detail": "..."}` instead.'
+    'stream ends with one `event: error` with `data: {"detail": "..."}` instead. An '
+    "answer that comes from the cache is one `event: text` with the whole text, then "
+    "the `event: answer`."
 )
 ASK_STREAM_EXAMPLE = (
     "event: text\n"
@@ -313,7 +368,7 @@ ASK_STREAM_EXAMPLE = (
     '"heading_path":["Parental leave"],"text":"New parents get sixteen weeks of paid leave."}],'
     '"model":"gemini-3.5-flash-lite","stop_reason":"end_turn",'
     '"usage":{"input_tokens":1200,"output_tokens":20},"requests":1,"fallback":false,'
-    '"took_ms":1500.0,"first_text_ms":1300.0,"trace_id":null}\n'
+    '"took_ms":1500.0,"first_text_ms":1300.0,"trace_id":null,"cached":null}\n'
     "\n"
 )
 ASK_UNAVAILABLE = (
@@ -371,6 +426,15 @@ def _respond(answer: Answer, *, started: float, run: AnswerRun) -> AskResponse:
         took_ms=_milliseconds(time.perf_counter() - started),
         first_text_ms=first_text,
         trace_id=run.trace_id,
+        cached=None
+        if answer.cached is None
+        else CachedAnswer(
+            tier=answer.cached.tier,
+            question=answer.cached.question,
+            similarity=answer.cached.similarity,
+            score=answer.cached.score,
+            stored_at=answer.cached.stored_at,
+        ),
     )
 
 
@@ -499,11 +563,17 @@ def create_app(
     retriever: Retriever | None = None,
     store: VectorStore | None = None,
     generator: Generator | None = None,
+    cache: AnswerCache | None = None,
 ) -> FastAPI:
     """Build the application.
 
     Whatever is not passed is built from the settings when the application starts.
     Tests pass a ``retriever``, a ``store`` and a ``generator`` made of stand-in parts.
+
+    The answer cache is built together with the retriever, because it embeds a question
+    with the retriever's own model and keeps its answers in the retriever's store. So a
+    caller that passes a ``retriever`` passes the ``cache`` that goes with it, or has
+    none. A service without an answer model builds none either: it has nothing to keep.
     """
     settings = settings or get_settings()
     # A service embeds one question at a time, which a CPU does as fast as a GPU.
@@ -521,20 +591,34 @@ def create_app(
             if store is not None
             else wiring.make_store(serving, check=False, timeout=STORE_TIMEOUT_SECONDS)
         )
-        app.state.retriever = (
-            retriever
-            if retriever is not None
-            else wiring.make_retriever(serving, store=app.state.store)
-        )
-        with suppress(VectorStoreError), stage("warm_up"):
-            app.state.retriever.retrieve(WARM_UP_QUERY, limit=1)
         # Building the answer model sends no request. So a missing key is found out here,
         # and a wrong one only by the first question.
         app.state.generator = generator if generator is not None else _answer_model(settings)
+        held = app.state.store
+        if retriever is not None:
+            app.state.retriever, app.state.cache = retriever, cache
+        elif (
+            cache is None
+            and app.state.generator is not None
+            and isinstance(held, QdrantVectorStore)
+        ):
+            app.state.retriever, app.state.cache = wiring.make_retriever_and_cache(serving, held)
+        else:
+            app.state.retriever = wiring.make_retriever(serving, store=held)
+            app.state.cache = cache
+        with suppress(VectorStoreError), stage("warm_up"):
+            app.state.retriever.retrieve(WARM_UP_QUERY, limit=1)
+        if app.state.cache is not None:
+            # In the mode `semantic` this loads the verifier and asks it once. The first
+            # question that has a stored one near it then waits for neither.
+            with stage("cache.warm_up", mode=app.state.cache.mode):
+                app.state.cache.warm_up()
         app.state.answer_slots = Slots(settings.api_max_answers_in_flight)
         try:
             yield
         finally:
+            if app.state.cache is not None:
+                app.state.cache.close(CACHE_CLOSE_SECONDS)
             if provider is not None:
                 provider.shutdown()
 
@@ -691,6 +775,7 @@ def create_app(
                 headers={"Retry-After": str(BUSY_RETRY_AFTER_SECONDS)},
             )
         retriever: Retriever = app.state.retriever
+        answers: AnswerCache | None = app.state.cache
 
         def write(on_text: OnText, on_trace: OnTrace) -> Answer:
             return answer_question(
@@ -701,6 +786,8 @@ def create_app(
                 section=request.section,
                 on_text=on_text,
                 on_trace=on_trace,
+                cache=answers,
+                fresh=not request.cache,
             )
 
         run = AnswerRun.start(write, slots)

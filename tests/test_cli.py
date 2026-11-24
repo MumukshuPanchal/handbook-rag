@@ -11,6 +11,7 @@ from qdrant_client import QdrantClient
 from typer.testing import CliRunner
 
 from handbook_rag import __version__, wiring
+from handbook_rag.cache.store import QdrantAnswerStore, answer_collections
 from handbook_rag.cli import app
 from handbook_rag.config import Settings, get_settings
 from handbook_rag.evals import adversarial
@@ -27,6 +28,7 @@ from handbook_rag.index.store import QdrantVectorStore, ScoredChunk, VectorStore
 from handbook_rag.ingest.build import build_corpus
 from handbook_rag.ingest.models import Chunk
 from handbook_rag.retrieve.dense import Retriever
+from tests.cache.support import TableVerifier
 from tests.support import (
     FakeEmbedder,
     FakeReranker,
@@ -3057,3 +3059,354 @@ def test_eval_adversarial_reports_a_reply_that_cites_a_passage_it_was_not_given(
     assert not isinstance(result.exception, ValueError)
     attempts = json.loads((adversarial_run["run_dir"] / "run.json").read_text())["attempts"]
     assert attempts == len(model.sent) == 1
+
+
+# The answer cache on the command line. The store is the in-memory one of the fixture,
+# the cache's collection sits in it beside the handbook's, and the verifier is a stand-in
+# whenever one is built at all.
+
+
+class Counted(CannedGenerator):
+    """Answers as the canned generator does, and notes each question it was asked."""
+
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    def generate(
+        self,
+        question: str,
+        chunks: Sequence[Chunk],
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Answer:
+        self.asked.append(question)
+        return super().generate(question, chunks, on_text=on_text)
+
+
+class NotedVerifier(TableVerifier):
+    """A stand-in verifier that notes each time the command builds it."""
+
+    def __init__(self, scores: dict[tuple[str, str], tuple[float, float]] | None = None) -> None:
+        super().__init__(scores)
+        self.built = 0
+
+    def build(self, _settings: Settings) -> "NotedVerifier":
+        self.built += 1
+        return self
+
+
+ASKED = "how many weeks of parental leave"
+# Six of its nine words are the stored question's, so the stand-in embedding puts it near.
+NEAR = "how many weeks of parental leave do parents get"
+ELSEWHERE = "who approves a team offsite budget"
+
+
+@pytest.fixture
+def cached_ask(monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder) -> Counted:
+    """An indexed fake handbook and a stand-in answer model that counts its questions."""
+    model = Counted()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: model)
+    assert runner.invoke(app, ["index"]).exit_code == 0
+    return model
+
+
+def cached_answers() -> QdrantAnswerStore:
+    """The collection the commands keep answers in, for the settings of the moment."""
+    get_settings.cache_clear()
+    settings = get_settings()
+    return wiring.make_answer_store(settings, wiring.make_store(settings))
+
+
+def test_ask_prints_a_stored_answer_and_the_question_it_was_written_for(
+    cached_ask: Counted,
+) -> None:
+    first = runner.invoke(app, ["ask", ASKED])
+    second = runner.invoke(app, ["ask", f"  {ASKED.upper()}?  "])
+
+    assert first.exit_code == second.exit_code == 0, second.output
+    assert "From the cache" not in first.output
+    assert "3,000 tokens in" in first.output
+    # The second time no model is asked, and the command says where the answer is from.
+    assert cached_ask.asked == [ASKED]
+    assert "Sixteen weeks of paid leave." in second.output
+    assert "[1] Leave > Parental leave" in second.output
+    assert "From the cache: an exact match, stored 20" in second.output
+    assert "No request to the model." in second.output
+    assert f"  written for the question: {ASKED}\n" in second.output
+    assert second.output.rstrip().endswith("claude-haiku-5-5 | no request to the model")
+    assert "tokens in" not in second.output
+    assert "$" not in second.output
+    assert "similarity" not in second.output, "an exact match compares no embeddings"
+    assert "--no-cache" not in second.output
+
+
+def test_ask_with_no_cache_asks_the_model_and_keeps_the_new_answer(cached_ask: Counted) -> None:
+    runner.invoke(app, ["ask", ASKED])
+
+    fresh = runner.invoke(app, ["ask", ASKED, "--no-cache"])
+    after = runner.invoke(app, ["ask", ASKED])
+
+    assert fresh.exit_code == 0, fresh.output
+    assert "From the cache" not in fresh.output
+    assert "3,000 tokens in" in fresh.output
+    assert cached_ask.asked == [ASKED, ASKED]
+    assert "From the cache: an exact match" in after.output
+    assert cached_answers().held().answers == 1, "the new answer took the old one's place"
+
+
+def test_ask_serves_a_rewording_by_meaning_and_says_how_to_get_an_answer_of_its_own(
+    cached_ask: Counted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    verifier = NotedVerifier({(ASKED, NEAR): (0.99, 0.93)})
+    monkeypatch.setattr("handbook_rag.wiring.make_verifier", verifier.build)
+    runner.invoke(app, ["ask", ASKED])
+
+    result = runner.invoke(app, ["ask", NEAR])
+
+    assert result.exit_code == 0, result.output
+    assert cached_ask.asked == [ASKED]
+    assert "From the cache: matched by meaning, stored 20" in result.output
+    assert f"  written for the question: {ASKED}\n" in result.output
+    assert "  similarity 0.816, second check 0.930\n" in result.output
+    assert "If that is another question than yours, ask again with --no-cache." in result.output
+    assert verifier.calls == [[(ASKED, NEAR)]]
+    # Asked again with the flag, the question gets an answer of its own, and keeps it.
+    own = runner.invoke(app, ["ask", NEAR, "--no-cache"])
+    again = runner.invoke(app, ["ask", NEAR])
+    assert cached_ask.asked == [ASKED, NEAR]
+    assert "From the cache" not in own.output
+    assert "From the cache: an exact match" in again.output
+    assert f"written for the question: {NEAR}" in again.output
+
+
+def test_ask_does_not_serve_a_near_miss_the_verifier_turns_down(
+    cached_ask: Counted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    verifier = NotedVerifier({(ASKED, NEAR): (0.99, 0.86)})
+    monkeypatch.setattr("handbook_rag.wiring.make_verifier", verifier.build)
+    runner.invoke(app, ["ask", ASKED])
+
+    result = runner.invoke(app, ["ask", NEAR])
+
+    # 0.86 is under the default threshold, which is the one the saved measurement chose.
+    assert Settings().cache_threshold == 0.8669
+    assert "From the cache" not in result.output
+    assert cached_ask.asked == [ASKED, NEAR]
+
+
+def test_ask_loads_no_verifier_unless_a_stored_question_is_near_the_new_one(
+    cached_ask: Counted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default mode is `semantic`, and a command still loads no third model for nothing.
+
+    This is what keeps the other tests of `ask` free of a model: each asks one question
+    of an empty cache.
+    """
+    verifier = NotedVerifier()
+    monkeypatch.setattr("handbook_rag.wiring.make_verifier", verifier.build)
+    assert get_settings().cache_mode == "semantic"
+
+    runner.invoke(app, ["ask", ASKED])
+    assert verifier.built == 0, "an empty cache holds no candidate"
+    runner.invoke(app, ["ask", ASKED])
+    assert verifier.built == 0, "an exact match is not verified"
+    runner.invoke(app, ["ask", ELSEWHERE])
+    assert verifier.built == 0, "nothing stored is near this question"
+    runner.invoke(app, ["ask", NEAR])
+    assert verifier.built == 1, "now there is a candidate to check"
+
+
+def test_ask_in_the_exact_mode_serves_the_same_question_only_and_builds_no_verifier(
+    cached_ask: Counted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    verifier = NotedVerifier({(ASKED, NEAR): (1.0, 1.0)})
+    monkeypatch.setattr("handbook_rag.wiring.make_verifier", verifier.build)
+    monkeypatch.setenv("HANDBOOK_RAG_CACHE_MODE", "exact")
+    get_settings.cache_clear()
+
+    runner.invoke(app, ["ask", ASKED])
+    same = runner.invoke(app, ["ask", ASKED])
+    near = runner.invoke(app, ["ask", NEAR])
+
+    assert "From the cache: an exact match" in same.output
+    assert "From the cache" not in near.output
+    assert cached_ask.asked == [ASKED, NEAR]
+    assert verifier.built == 0
+
+
+def test_ask_with_the_cache_switched_off_asks_the_model_each_time_and_keeps_nothing(
+    cached_ask: Counted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HANDBOOK_RAG_CACHE_MODE", "off")
+    get_settings.cache_clear()
+
+    outputs = [runner.invoke(app, ["ask", ASKED]).output for _ in range(2)]
+
+    assert cached_ask.asked == [ASKED, ASKED]
+    assert not [output for output in outputs if "From the cache" in output]
+    store = wiring.make_store(get_settings())
+    assert answer_collections(store.client) == []
+
+
+def test_ask_keeps_no_answer_the_model_could_not_finish(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    cut_off = FixedReply("Sixteen weeks of", answered=True, stop_reason="max_tokens")
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: cut_off)
+    runner.invoke(app, ["index"])
+
+    first = runner.invoke(app, ["ask", ASKED])
+    second = runner.invoke(app, ["ask", ASKED])
+
+    assert "cut off at the token limit" in first.output
+    assert "From the cache" not in second.output
+    assert cached_answers().held().answers == 0
+
+
+def test_the_cache_commands_count_what_is_held_and_empty_it(
+    cached_ask: Counted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner.invoke(app, ["ask", ASKED])
+    runner.invoke(app, ["ask", ELSEWHERE])
+    current = cached_answers().collection
+
+    status = runner.invoke(app, ["cache-status"])
+
+    assert status.exit_code == 0, status.output
+    assert "  mode         semantic (HANDBOOK_RAG_CACHE_MODE)" in status.output
+    assert f"  collection   {current}" in status.output
+    assert current.startswith("answers-aaaaaaaa-")
+    assert "  answers      2 stored" in status.output
+    assert "2 may be served to a question that means the same" in status.output
+    assert "0 declines and 0 answers that decline in part or cite nothing" in status.output
+    assert "left behind" not in status.output
+
+    # Another setting that decides an answer: the answers stored before are left behind.
+    monkeypatch.setenv("HANDBOOK_RAG_ANSWER_CONTEXT_CHUNKS", "1")
+    get_settings.cache_clear()
+    runner.invoke(app, ["ask", ASKED])
+    other = cached_answers().collection
+    assert other != current
+    assert cached_ask.asked == [ASKED, ELSEWHERE, ASKED], "and are not served"
+    status = runner.invoke(app, ["cache-status"])
+    assert f"  collection   {other}" in status.output
+    assert "  answers      1 stored" in status.output
+    assert "  left behind  2 answers in 1 collections stored under other settings" in status.output
+    assert "`handbook-rag cache-clear --all` removes them." in status.output
+
+    cleared = runner.invoke(app, ["cache-clear"])
+    assert cleared.exit_code == 0, cleared.output
+    assert cleared.output == f"Removed 1 cached answers from {other}\n"
+    store = wiring.make_store(get_settings())
+    assert answer_collections(store.client) == [current]
+    everything = runner.invoke(app, ["cache-clear", "--all"])
+    assert f"Removed 0 cached answers from {other}\n" in everything.output
+    assert f"Removed 2 cached answers from {current}\n" in everything.output
+    assert answer_collections(store.client) == []
+    # The handbook's own index is not touched, and the next question is asked of the model.
+    assert store.count() == 2
+    runner.invoke(app, ["ask", ASKED])
+    assert len(cached_ask.asked) == 4
+
+
+def test_the_cache_commands_say_so_when_the_vector_store_cannot_be_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HANDBOOK_RAG_QDRANT_URL", "http://127.0.0.1:1")
+    get_settings.cache_clear()
+
+    for command in (["cache-status"], ["cache-clear"], ["cache-clear", "--all"]):
+        result = runner.invoke(app, command)
+
+        assert result.exit_code == 1, command
+        assert "error: Cannot reach Qdrant at http://127.0.0.1:1" in result.output
+        assert "Traceback" not in result.output
+
+
+def test_indexing_empties_the_cache_when_it_changes_the_index_and_only_then(
+    cached_ask: Counted, tmp_path: Path
+) -> None:
+    """The cache is named by the settings, and an index can change under the same settings."""
+    runner.invoke(app, ["ask", ASKED])
+    assert cached_answers().held().answers == 1
+
+    unchanged = runner.invoke(app, ["index"])
+    assert unchanged.exit_code == 0, unchanged.output
+    assert "cache " not in unchanged.output
+    assert "From the cache" in runner.invoke(app, ["ask", ASKED]).output
+
+    # The page on leave now says eighteen weeks: another chunk, under the same settings.
+    write_snapshot(
+        tmp_path / "data",
+        "a" * 40,
+        {
+            "people/leave.md": (
+                '---\ntitle: "Leave"\n---\n\n'
+                "## Parental leave\n\nNew parents get eighteen weeks of paid leave."
+            ),
+            "finance/expenses.md": "## Laptops\n\nExpense a laptop up to one thousand dollars.",
+        },
+    )
+    changed = runner.invoke(app, ["index"])
+
+    assert changed.exit_code == 0, changed.output
+    assert "  embedded    1 new" in changed.output
+    assert (
+        "  cache       1 cached answers removed: the index they were written from has changed"
+        in changed.output
+    )
+    assert cached_answers().held().answers == 0
+    again = runner.invoke(app, ["ask", ASKED])
+    assert "From the cache" not in again.output
+    assert cached_ask.asked == [ASKED, ASKED]
+
+
+# An evaluation measures the answer model, so it never gets a cache. Asked twice, a
+# question costs two requests, and nothing that builds a cache is touched.
+
+
+def guard_against_a_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    def never(*_arguments: object, **_options: object) -> None:
+        raise AssertionError("an evaluation must not build or use an answer cache")
+
+    for name in ("make_answer_cache", "make_retriever_and_cache", "make_answer_store"):
+        monkeypatch.setattr(f"handbook_rag.wiring.{name}", never)
+    monkeypatch.setattr("handbook_rag.wiring.make_verifier", never)
+    monkeypatch.setattr("handbook_rag.cache.answers.AnswerCache.__init__", never)
+    monkeypatch.setattr("handbook_rag.cache.store.QdrantAnswerStore.__init__", never)
+
+
+def test_eval_answers_never_gets_a_cache_so_a_question_asked_twice_is_two_requests(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str]
+) -> None:
+    model = EvalModel()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+    guard_against_a_cache(monkeypatch)
+    assert get_settings().cache_mode == "semantic", "the default, under which this must hold"
+
+    first = runner.invoke(app, [*answer_run, "--variant", "twice"])
+    second = runner.invoke(app, [*answer_run, "--variant", "twice", "--restart"])
+
+    assert first.exit_code == second.exit_code == 0, second.output
+    questions = sorted(question["question"] for question in ANSWER_QUESTIONS)
+    assert sorted(model.questions) == sorted(questions * 2)
+    store = wiring.make_store(get_settings())
+    assert answer_collections(store.client) == []
+
+
+def test_eval_adversarial_never_gets_a_cache_either(
+    monkeypatch: pytest.MonkeyPatch, adversarial_run: dict[str, Any]
+) -> None:
+    model = AdversarialModel()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+    guard_against_a_cache(monkeypatch)
+
+    first = runner.invoke(app, adversarial_run["command"])
+    second = runner.invoke(app, [*adversarial_run["command"], "--restart"])
+
+    assert first.exit_code == second.exit_code == 0, second.output
+    asked = [question for question, _ in model.sent]
+    assert len(asked) == 6
+    assert asked[:3] == asked[3:], "every case again, the one that is searched for too"
+    store = wiring.make_store(get_settings())
+    assert answer_collections(store.client) == []

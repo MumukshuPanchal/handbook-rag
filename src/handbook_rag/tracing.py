@@ -26,7 +26,8 @@ from handbook_rag.config import Settings
 
 if TYPE_CHECKING:
     # The vector store opens spans itself, so it cannot be imported here at run time.
-    # An answer holds chunks from the store, so the same goes for it.
+    # An answer holds chunks from the store, so the same goes for it, and for the cache.
+    from handbook_rag.cache.answers import Lookup
     from handbook_rag.generate.models import Answer
     from handbook_rag.index.store import ScoredChunk
 
@@ -257,6 +258,46 @@ def record_answer(span: Span, answer: "Answer") -> None:
     span.set_attribute(f"{ATTRIBUTE_PREFIX}.answered", answer.answered)
     if _record_content:
         span.set_attribute(f"{ATTRIBUTE_PREFIX}.answer.text", answer.text_with_markers)
+
+
+def record_cache_lookup(span: Span, lookup: "Lookup") -> None:
+    """Note what the answer cache did with a question: the tier, hit or miss, the scores.
+
+    Tiers, counts and scores are always recorded. With them a trace shows why a stored
+    answer was served or was not: how near each candidate was, and what the verifier
+    said of it in each direction. The stored questions themselves are questions that
+    people asked, so they are recorded only if content is on.
+    """
+    span.set_attribute(f"{ATTRIBUTE_PREFIX}.cache.read", lookup.read)
+    span.set_attribute(f"{ATTRIBUTE_PREFIX}.cache.hit", lookup.answer is not None)
+    if lookup.tier is not None:
+        span.set_attribute(f"{ATTRIBUTE_PREFIX}.cache.tier", lookup.tier)
+    if lookup.failure is not None:
+        # The kind of error only, as for any failed stage.
+        span.set_attribute(f"{ATTRIBUTE_PREFIX}.cache.failure", lookup.failure)
+    span.set_attribute(f"{ATTRIBUTE_PREFIX}.cache.candidates", len(lookup.checked))
+    if not lookup.checked:
+        return
+    # Nearest first, so the same place in each list is the same candidate.
+    span.set_attribute(
+        f"{ATTRIBUTE_PREFIX}.cache.similarities",
+        [round(candidate.similarity, 6) for candidate in lookup.checked],
+    )
+    verified = [candidate.entails for candidate in lookup.checked if candidate.entails is not None]
+    if len(verified) == len(lookup.checked):
+        span.set_attribute(
+            f"{ATTRIBUTE_PREFIX}.cache.entails_forward",
+            [round(entails.forward, 6) for entails in verified],
+        )
+        span.set_attribute(
+            f"{ATTRIBUTE_PREFIX}.cache.entails_backward",
+            [round(entails.backward, 6) for entails in verified],
+        )
+    if _record_content:
+        span.set_attribute(
+            f"{ATTRIBUTE_PREFIX}.cache.questions",
+            [candidate.question for candidate in lookup.checked],
+        )
 
 
 def trace_id(span: Span) -> str | None:

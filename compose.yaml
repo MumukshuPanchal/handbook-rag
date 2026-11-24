@@ -29,6 +29,14 @@ services:
       HANDBOOK_RAG_QDRANT_URL: http://qdrant:6333
       HANDBOOK_RAG_TRACING: "true"
       HANDBOOK_RAG_OTLP_ENDPOINT: http://jaeger:4318
+      # The answer cache, in the mode that is also the default outside Docker (ADR 0020):
+      # an answer stored earlier is served again to the same question, and to one that a
+      # second model judges to mean the same. With a key in .env, the first start
+      # downloads that model with the others into the model-cache volume (552 MB on
+      # disk when measured on the development laptop), and the container holds it in
+      # memory. Without a key no cache is built and nothing more is downloaded.
+      # Set it to exact for the same question only, with no third model, or to off.
+      HANDBOOK_RAG_CACHE_MODE: semantic
       # Empty when .env has no key, which the application treats as no key.
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     # No authentication, so it is published on this machine only.

@@ -247,3 +247,82 @@ def test_the_collection_of_another_commit_has_these_models_and_this_chunking() -
         "handbook-cccccccc-baai-bge-base-en-v1-5-qdrant-bm25-v1-max200-min60-overlap40"
     )
     assert settings.collection_for(settings.handbook_commit) == settings.collection_name
+
+
+def test_the_answer_cache_matches_by_meaning_unless_told_otherwise() -> None:
+    settings = Settings()
+
+    assert settings.cache_mode == "semantic", "the project owner's decision (ADR 0020)"
+    assert settings.cache_threshold == 0.8669
+    assert (settings.cache_candidates, settings.cache_floor) == (3, 0.5)
+    assert settings.cache_verifier_model == "cross-encoder/nli-deberta-v3-small"
+
+
+def test_the_answer_cache_can_be_set_in_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HANDBOOK_RAG_CACHE_MODE", "exact")
+    monkeypatch.setenv("HANDBOOK_RAG_CACHE_THRESHOLD", "0.95")
+    monkeypatch.setenv("HANDBOOK_RAG_CACHE_CANDIDATES", "5")
+    monkeypatch.setenv("HANDBOOK_RAG_CACHE_FLOOR", "0.7")
+
+    settings = Settings()
+
+    assert settings.cache_mode == "exact"
+    assert (settings.cache_threshold, settings.cache_candidates, settings.cache_floor) == (
+        0.95,
+        5,
+        0.7,
+    )
+    assert Settings(cache_mode="off").cache_mode == "off"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("cache_mode", "on"),
+        ("cache_mode", "fuzzy"),
+        ("cache_mode", ""),
+        # A threshold of 0 would serve the nearest stored question whatever the verifier says.
+        ("cache_threshold", 0),
+        ("cache_threshold", -0.1),
+        ("cache_threshold", 1.01),
+        ("cache_threshold", float("nan")),
+        ("cache_candidates", 0),
+        ("cache_candidates", 11),
+        ("cache_floor", -1.01),
+        ("cache_floor", 1.01),
+    ],
+)
+def test_a_cache_setting_that_makes_no_sense_is_rejected(field: str, value: object) -> None:
+    options: dict[str, Any] = {field: value}
+    with pytest.raises(ValidationError, match=field):
+        Settings(**options)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("cache_threshold", 1.0),
+        ("cache_threshold", 0.001),
+        ("cache_candidates", 1),
+        ("cache_candidates", 10),
+        ("cache_floor", -1.0),
+        ("cache_floor", 1.0),
+    ],
+)
+def test_a_cache_setting_at_the_edge_of_its_range_is_accepted(field: str, value: float) -> None:
+    options: dict[str, Any] = {field: value}
+    assert getattr(Settings(**options), field) == value
+
+
+def test_the_example_file_lists_the_cache_settings_with_their_defaults() -> None:
+    example = (Path(__file__).parents[1] / ".env.example").read_text(encoding="utf-8")
+    settings = Settings()
+
+    for line in (
+        f"HANDBOOK_RAG_CACHE_MODE={settings.cache_mode}",
+        f"HANDBOOK_RAG_CACHE_THRESHOLD={settings.cache_threshold}",
+        f"HANDBOOK_RAG_CACHE_CANDIDATES={settings.cache_candidates}",
+        f"HANDBOOK_RAG_CACHE_FLOOR={settings.cache_floor}",
+        f"HANDBOOK_RAG_CACHE_VERIFIER_MODEL={settings.cache_verifier_model}",
+    ):
+        assert f"\n{line}\n" in example, line

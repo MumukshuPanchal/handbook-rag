@@ -7,11 +7,13 @@ and the new one together, as the reranker reads a question with a passage, and s
 far each implies the other. It is too slow to compare a new question with every stored
 one, so it is asked only about the few candidates the embeddings put nearest.
 
-This module holds the check and nothing else. No cache uses it yet: what it is worth was
-measured first, by ``handbook-rag eval-cache`` (see ``evals/cache_pairs.py``).
+This module holds the check and nothing else. What it is worth was measured before the
+cache was built, by ``handbook-rag eval-cache`` (see ``evals/cache_pairs.py``). The
+cache that uses it is ``cache/answers.py``.
 """
 
-from collections.abc import Mapping, Sequence
+import threading
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, Self
 
@@ -62,6 +64,41 @@ class Verifier(Protocol):
         its few candidates, and a model reads them as one batch.
         """
         ...
+
+
+class LazyVerifier:
+    """A verifier that is loaded the first time it is asked, and only once.
+
+    The model takes seconds to load. A command that answers one question should not
+    pay for a check it may never make: with no stored question near the new one there
+    is nothing to verify. A service loads it when it starts instead, by asking once
+    (``AnswerCache.warm_up``), so that no question waits for it.
+
+    It is asked by one thread at a time. A service looks several questions up at once,
+    each in a thread of its own, and the tokenizer under the model is not made to be
+    used by two threads at the same moment. A check takes tens of milliseconds, so the
+    others wait briefly.
+    """
+
+    def __init__(self, load: Callable[[], Verifier], *, name: str) -> None:
+        self._load = load
+        self._name = name
+        self._verifier: Verifier | None = None
+        self._one_at_a_time = threading.Lock()
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def loaded(self) -> bool:
+        return self._verifier is not None
+
+    def score(self, pairs: Sequence[tuple[str, str]]) -> list[Verification]:
+        with self._one_at_a_time:
+            if self._verifier is None:
+                self._verifier = self._load()
+            return self._verifier.score(pairs)
 
 
 class _PairClassifier(Protocol):

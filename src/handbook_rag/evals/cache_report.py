@@ -127,6 +127,12 @@ def _chosen(summary: Mapping[str, Any]) -> list[str]:
         f"{cache['stored_unanswered']} of them ones the handbook does not answer. Each question "
         f"meets its {cache['candidates']} nearest above a cosine of {cache['floor']}",
     ]
+    declines = cache.get("stored_declines")
+    if declines is not None:
+        lines.append(
+            f"  a stored decline is no candidate: the {declines['left_out']} are left out, and "
+            f"each question meets the nearest of the other {declines['candidates_from']}"
+        )
     above = cache["stored_above_floor"]
     lines.append(
         f"  the floor left between {above['min']:.0f} and {above['max']:.0f} stored questions "

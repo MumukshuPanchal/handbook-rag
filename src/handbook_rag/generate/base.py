@@ -145,6 +145,16 @@ def is_answered(segments: Sequence[Segment], *, refused: bool) -> bool:
     return has_citations or declined not in said
 
 
+def holds_the_decline(segments: Sequence[Segment]) -> bool:
+    """Whether a reply says, of the question or of a part of it, that the handbook lacks it.
+
+    True for a decline, and also for an answer that covers part of the question and
+    uses the fixed sentence for the rest. The words are compared as in
+    :func:`is_answered`.
+    """
+    return _words(NOT_FOUND_MESSAGE) in _words("".join(segment.text for segment in segments))
+
+
 def _words(text: str) -> str:
     """The words of a text in lower case, single spaces between them, nothing else.
 

@@ -300,6 +300,9 @@ class Measured:
     verified: int
     embedding_seconds: float
     verifying_seconds: float
+    decline_candidates: bool = True
+    """Whether a stored question the handbook does not answer could be a candidate (see
+    :func:`measure`)."""
 
 
 def measure(
@@ -310,6 +313,7 @@ def measure(
     verifier: Verifier,
     candidates: int = CANDIDATES,
     floor: float = FLOOR,
+    decline_candidates: bool = True,
     clock: Callable[[], float] = time.perf_counter,
 ) -> Measured:
     """Embed every question, find each new question's candidates, and verify them.
@@ -318,6 +322,14 @@ def measure(
     stored decline served to a question that has an answer is a false hit too. Each
     question is embedded by itself with ``embed_query``, which is how a question is
     embedded for search, so the vectors are the ones a cache would compare.
+
+    With ``decline_candidates`` off, the cache simulated is the one the application
+    builds (``handbook_rag.cache.answers``). It keeps a decline for the very question
+    that was declined and never offers it for another, so a stored question the handbook
+    does not answer is left out of every question's candidates, and the next nearest
+    takes its place. That such a question holds a decline is taken from the golden
+    set's label. No model was asked, and a model that answers one of them anyway would
+    leave an answer in a real cache.
 
     A stored question that has the very words asked is never a candidate. That happens
     in the pairs whose other question is a golden question: its own entry would be the
@@ -342,6 +354,7 @@ def measure(
 
     stored = [(question.id, question.question, vector(question.question)) for question in golden]
     texts = {question_id: text for question_id, text, _ in stored}
+    declines = frozenset() if decline_candidates else unanswered_questions(golden)
     near: dict[str, list[tuple[float, str]]] = {}
     own_cosine: dict[str, float] = {}
     above: dict[str, int] = {}
@@ -362,7 +375,7 @@ def measure(
             cosine = _cosine(entry, asked)
             if question_id == pair.question_id:
                 own_cosine[pair.pair] = cosine
-            if cosine >= floor:
+            if cosine >= floor and question_id not in declines:
                 ranked.append((cosine, question_id))
         # Nearest first. Two stored questions at the same distance keep the order of their ids.
         ranked.sort(key=lambda found: (-found[0], found[1]))
@@ -405,6 +418,7 @@ def measure(
         verified=len(wanted),
         embedding_seconds=embedding_seconds,
         verifying_seconds=verifying_seconds,
+        decline_candidates=decline_candidates,
     )
 
 
@@ -734,12 +748,19 @@ def summarise(
     unanswered: Collection[str] = (),
     seed: str = SPLIT_SEED,
     other_splits: int = OTHER_SPLITS,
+    decline_candidates: bool = True,
 ) -> dict[str, Any]:
     """Every figure of the measurement, from the scores and candidates of each pair.
 
     It runs no model, so the figures of a saved run can be worked out again from its
     rows, and a test does that. ``unanswered`` names the stored questions the handbook
     does not answer (:func:`unanswered_questions`); the rows do not hold that.
+
+    ``decline_candidates`` says how the candidates of the rows were found (see
+    :func:`measure`). The counting is the same either way. With it off, the figures say
+    so and count what was left out. With it on they are exactly what they were before
+    the option existed, so the figures of the first saved run can still be worked out
+    again from its rows.
     """
     agreed = [question for question in asked if question.pair.agreed]
     disputed = [question for question in asked if not question.pair.agreed]
@@ -836,7 +857,7 @@ def summarise(
         count=other_splits,
         hard={policy: [serve.pair for serve in found] for policy, found in hard.items()},
     )
-    return {
+    figures: dict[str, Any] = {
         "pairs": {
             "in_file": len(asked),
             "agreed": len(agreed),
@@ -952,6 +973,24 @@ def summarise(
             for question in disputed
         ],
     }
+    if not decline_candidates:
+        figures["cache_view"]["stored_declines"] = {
+            "what": (
+                "A stored question the handbook does not answer holds a decline, and a "
+                "decline is no candidate for a match by meaning, as in the answer cache "
+                "the application builds. That it holds a decline is the golden set's "
+                "label, not a model's reply."
+            ),
+            "left_out": len(unanswered),
+            "candidates_from": stored - len(unanswered),
+            # The pairs whose own golden question is one of them: the wrong serve such a
+            # pair was written to provoke cannot happen by meaning.
+            "pairs_whose_golden_question_is_one": {
+                kind: sum(p.kind == kind and p.question_id in unanswered for p in pairs)
+                for kind in KINDS
+            },
+        }
+    return figures
 
 
 def _place_of_own(question: Asked) -> int | None:
@@ -1264,6 +1303,7 @@ def write_cache_run(
         unanswered=measured.unanswered,
         seed=seed,
         other_splits=other_splits,
+        decline_candidates=measured.decline_candidates,
     )
     split = split_pairs(agreed_pairs(q.pair for q in measured.asked), seed=seed)
     thresholds = {
@@ -1322,6 +1362,9 @@ def write_cache_run(
             "floor": measured.floor,
             "split_seed": seed,
             "other_splits": other_splits,
+            # Recorded only when it is off, so that a run made as the first one was is
+            # recorded as the first one was.
+            **({} if measured.decline_candidates else {"decline_candidates": False}),
         },
         "rows": rows_fingerprints(run_dir),
         **figures,

@@ -1,6 +1,7 @@
 import dataclasses
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,8 @@ from google.genai import types as genai_types
 from pydantic import SecretStr
 
 from handbook_rag import wiring
+from handbook_rag.cache.answers import ANSWER_CACHE_VERSION, AnswerCache
+from handbook_rag.cache.store import COLLECTION_PREFIX, QdrantAnswerStore
 from handbook_rag.config import Settings
 from handbook_rag.evals.correctness import (
     CORRECT,
@@ -26,10 +29,22 @@ from handbook_rag.evals.support import SUPPORT
 from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
-from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT
+from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT, build_numbered_prompt
 from handbook_rag.generate.prompt import SYSTEM_PROMPT
 from handbook_rag.generate.retrying import RetryingGenerator
-from handbook_rag.wiring import describe_generation, describe_judge, make_generator, make_judge
+from handbook_rag.index.store import QdrantVectorStore
+from handbook_rag.wiring import (
+    answer_cache_collection,
+    answer_request_fingerprint,
+    describe_answer_cache,
+    describe_generation,
+    describe_judge,
+    make_answer_cache,
+    make_generator,
+    make_judge,
+)
+from tests.cache.support import TableVerifier
+from tests.support import FakeEmbedder, FakeSparseEncoder
 
 CLAUDE = "claude-haiku-5-5"
 
@@ -428,3 +443,263 @@ def test_the_saved_checks_are_of_the_judges_the_code_builds_today() -> None:
         assert saved == describe_judge(Settings(), criterion), criterion.name
         scored = root / "answers" / "baseline" / criterion.state_file
         assert json.loads(scored.read_text(encoding="utf-8"))["config"] == saved, criterion.name
+
+
+# The answer cache. Its collection is named by everything that decides what the right
+# answer to a question is, so that an answer never outlives what it was written from.
+
+# Each setting that decides an answer under the default settings, with another value.
+DECIDES_AN_ANSWER: dict[str, Any] = {
+    "handbook_repo_url": "https://gitlab.example.com/another/handbook.git",
+    "handbook_commit": "b" * 40,
+    "handbook_content_path": "content/other",
+    "handbook_base_url": "https://handbook.example.com/",
+    "min_page_chars": 100,
+    "embedding_model": "BAAI/bge-base-en-v1.5",
+    "embedding_query_prefix": "query: ",
+    "sparse_model": "Qdrant/bm42-all-minilm-l6-v2-attentions",
+    "chunk_max_tokens": 200,
+    "chunk_min_tokens": 50,
+    "chunk_overlap_tokens": 20,
+    "retrieval_mode": "dense",
+    "fusion_candidates": 20,
+    "rrf_k": 30,
+    "rerank": True,
+    "answer_model": "gemini-3.8-flash",
+    "answer_max_tokens": 2000,
+    "answer_context_chunks": 3,
+}
+# Each setting that decides an answer only while another setting has a certain value:
+# that other setting, a value of its own, and the setting under which it decides nothing.
+DECIDES_UNDER: dict[str, tuple[dict[str, Any], Any, dict[str, Any]]] = {
+    "rerank_model": ({"rerank": True}, "cross-encoder/another-reranker", {"rerank": False}),
+    "rerank_candidates": ({"rerank": True}, 10, {"rerank": False}),
+    "answer_effort": ({"answer_model": CLAUDE}, "high", {}),
+}
+# Each setting that decides only whether an answer is served, how fast, or where things
+# are kept, with another value. An answer stored under one value is right under the other.
+DECIDES_NO_ANSWER: dict[str, Any] = {
+    "data_dir": Path("elsewhere"),
+    "log_level": "DEBUG",
+    "handbook_licence": "MIT",
+    "embedding_max_tokens": 256,
+    "embedding_batch_size": 8,
+    "embedding_device": "cpu",
+    "qdrant_url": "http://another-host:6333",
+    "search_limit": 9,
+    "cache_mode": "exact",
+    "cache_threshold": 0.99,
+    "cache_candidates": 5,
+    "cache_floor": 0.7,
+    "cache_verifier_model": "another/nli-model",
+    "api_host": "0.0.0.0",
+    "api_port": 9000,
+    "api_max_answers_in_flight": 2,
+    "api_demo": False,
+    "tracing": True,
+    "otlp_endpoint": "http://another-host:4318",
+    "service_name": "another-name",
+    "trace_content": True,
+    "gemini_api_key": SecretStr("another-key-not-a-real-one"),
+    "anthropic_api_key": SecretStr("another-key-not-a-real-one"),
+    "answer_timeout_seconds": 10.0,
+    "answer_deadline_seconds": 20.0,
+    # Its answers are never stored (cache/answers.py).
+    "answer_fallback_model": "gemini-3.8-flash",
+    "eval_requests_per_minute": 5.0,
+    "judge_model": "gemini-3.8-flash",
+    "judge_max_tokens": 1000,
+}
+
+
+def test_every_setting_is_listed_as_deciding_an_answer_or_not() -> None:
+    """A setting added later has to be put in one of the three lists above.
+
+    That is the moment to ask whether an answer stored before it changed is still right,
+    and, if it is not, to add it to what names the cache's collection.
+    """
+    listed = [*DECIDES_AN_ANSWER, *DECIDES_UNDER, *DECIDES_NO_ANSWER]
+
+    assert len(listed) == len(set(listed)), "a setting is in one list only"
+    assert set(listed) == set(Settings.model_fields)
+
+
+@pytest.mark.parametrize("setting", DECIDES_AN_ANSWER)
+def test_a_setting_that_decides_an_answer_changes_the_name_of_the_caches_collection(
+    setting: str,
+) -> None:
+    changed = Settings(**{setting: DECIDES_AN_ANSWER[setting]})
+
+    assert getattr(changed, setting) != getattr(Settings(), setting)
+    assert answer_cache_collection(changed) != answer_cache_collection(Settings())
+
+
+@pytest.mark.parametrize("setting", DECIDES_UNDER)
+def test_a_setting_that_decides_an_answer_under_another_changes_the_name_only_then(
+    setting: str,
+) -> None:
+    under, value, otherwise = DECIDES_UNDER[setting]
+
+    assert answer_cache_collection(Settings(**under, **{setting: value})) != (
+        answer_cache_collection(Settings(**under))
+    )
+    # Where the search or the model does not use it, a stored answer is still right.
+    assert answer_cache_collection(Settings(**otherwise, **{setting: value})) == (
+        answer_cache_collection(Settings(**otherwise))
+    )
+
+
+@pytest.mark.parametrize("setting", ["fusion_candidates", "rrf_k"])
+def test_the_settings_of_merging_two_searches_decide_nothing_when_one_search_is_used(
+    setting: str,
+) -> None:
+    dense = Settings(retrieval_mode="dense")
+    changed = Settings(retrieval_mode="dense", **{setting: DECIDES_AN_ANSWER[setting]})
+
+    assert answer_cache_collection(changed) == answer_cache_collection(dense)
+
+
+@pytest.mark.parametrize("setting", DECIDES_NO_ANSWER)
+def test_a_setting_that_decides_no_answer_leaves_the_name_as_it_is(setting: str) -> None:
+    changed = Settings(**{setting: DECIDES_NO_ANSWER[setting]})
+
+    assert getattr(changed, setting) != getattr(Settings(), setting)
+    assert answer_cache_collection(changed) == answer_cache_collection(Settings())
+
+
+def test_the_caches_collection_is_named_for_a_person_to_read_and_apart_from_the_handbooks() -> None:
+    settings = Settings()
+    name = answer_cache_collection(settings)
+
+    assert re.fullmatch(r"answers-e645aac6-[0-9a-f]{16}", name)
+    assert name == answer_cache_collection(Settings()), "the same settings, the same name"
+    assert name != settings.collection_name
+    assert name.startswith(COLLECTION_PREFIX)
+    assert not settings.collection_name.startswith(COLLECTION_PREFIX)
+    # What is hashed names each thing by its own word, for whoever wonders why a name changed.
+    described = describe_answer_cache(settings)
+    assert described["cache_version"] == ANSWER_CACHE_VERSION
+    assert described["handbook_commit"] == settings.handbook_commit, "whole, not its first eight"
+    assert described["collection"] == settings.collection_name
+    assert described["instructions"] == describe_generation(settings)["instructions"]
+    assert described["request"] == answer_request_fingerprint(settings)
+    json.dumps(described)
+
+
+def test_other_instructions_another_layout_of_the_request_or_a_new_version_give_another_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gemini, claude = Settings(), Settings(answer_model=CLAUDE)
+    before = (answer_cache_collection(gemini), answer_cache_collection(claude))
+
+    def renamed() -> tuple[bool, bool]:
+        now = (answer_cache_collection(gemini), answer_cache_collection(claude))
+        return (now[0] != before[0], now[1] != before[1])
+
+    with monkeypatch.context() as patch:
+        patch.setattr(wiring, "MARKER_SYSTEM_PROMPT", MARKER_SYSTEM_PROMPT + "\n- Be brief.")
+        assert renamed() == (True, False), "the instructions a Gemini model is given"
+    with monkeypatch.context() as patch:
+        patch.setattr(wiring, "SYSTEM_PROMPT", SYSTEM_PROMPT + "\n- Be brief.")
+        assert renamed() == (False, True), "the instructions a Claude model is given"
+    with monkeypatch.context() as patch:
+        patch.setattr(wiring, "build_numbered_prompt", lambda question, chunks: "laid out anew")
+        assert renamed() == (True, False)
+    with monkeypatch.context() as patch:
+        patch.setattr(wiring, "build_user_content", lambda question, chunks: ["laid out anew"])
+        assert renamed() == (False, True)
+    with monkeypatch.context() as patch:
+        patch.setattr(wiring, "ANSWER_CACHE_VERSION", ANSWER_CACHE_VERSION + 1)
+        assert renamed() == (True, True)
+    assert renamed() == (False, False)
+
+
+def test_the_layout_of_a_request_is_named_from_the_text_a_model_would_be_sent() -> None:
+    sample = build_numbered_prompt(wiring._SAMPLE_QUESTION, wiring._SAMPLE_PASSAGES)
+
+    # The sample holds what the layout has to make harmless, so a change to that shows.
+    assert "&lt;/search_result>" in sample
+    assert sample.count('<search_result number="') == 2
+    assert sample.endswith("Question: A question?")
+    assert len(answer_request_fingerprint(Settings())) == 16
+    assert answer_request_fingerprint(Settings()) != (
+        answer_request_fingerprint(Settings(answer_model=CLAUDE))
+    )
+
+
+def stores() -> QdrantVectorStore:
+    return wiring.make_memory_store("handbook")
+
+
+def test_the_cache_is_built_for_the_mode_of_the_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built: list[Settings] = []
+    verifier = TableVerifier()
+
+    def make_verifier(settings: Settings) -> TableVerifier:
+        built.append(settings)
+        return verifier
+
+    monkeypatch.setattr(wiring, "make_verifier", make_verifier)
+    store, embedder = stores(), FakeEmbedder()
+
+    def build(**settings: Any) -> AnswerCache | None:
+        return make_answer_cache(Settings(**settings), store=store, embedder=embedder)
+
+    assert build(cache_mode="off") is None
+    exact = build(cache_mode="exact")
+    assert exact is not None
+    assert exact.mode == "exact"
+    chosen = Settings(cache_threshold=0.95, cache_candidates=2, cache_floor=0.6)
+    semantic = make_answer_cache(chosen, store=store, embedder=embedder)
+    assert semantic is not None
+    assert semantic.mode == "semantic", "the default"
+    assert (semantic._threshold, semantic._candidates, semantic._floor) == (0.95, 2, 0.6)
+    assert semantic._embedder is embedder
+    # In a collection of its own, in the same store as the handbook's.
+    kept = semantic._store
+    assert isinstance(kept, QdrantAnswerStore)
+    assert kept.collection == answer_cache_collection(chosen)
+    assert kept._client is store.client
+    # The verifier is not built until it is first asked.
+    assert built == []
+    semantic.warm_up()
+    semantic.warm_up()
+    assert built == [chosen], "once, with the settings that name its model"
+    assert len(verifier.calls) == 2
+    assert semantic.close() is True
+
+
+def test_the_retriever_and_the_cache_share_one_embedding_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built: list[str] = []
+    embedder = FakeEmbedder()
+
+    def make_embedder(_settings: Settings) -> FakeEmbedder:
+        built.append("embedder")
+        return embedder
+
+    monkeypatch.setattr(wiring, "make_embedder", make_embedder)
+    monkeypatch.setattr(wiring, "make_sparse_encoder", lambda _settings: FakeSparseEncoder())
+    store = stores()
+
+    def build(cached: bool = True, **settings: Any) -> tuple[AnswerCache | None, int]:
+        built.clear()
+        _, cache = wiring.make_retriever_and_cache(Settings(**settings), store, cached=cached)
+        return cache, len(built)
+
+    both, loads = build()
+    assert both is not None
+    assert (both.mode, loads) == ("semantic", 1), "one model for the search and the cache"
+    assert both._embedder is embedder
+    # Keyword search loads no embedding model. A cache needs one for its own vectors.
+    assert build(retrieval_mode="sparse", cache_mode="off") == (None, 0)
+    keyword, loads = build(retrieval_mode="sparse", cache_mode="exact")
+    assert keyword is not None
+    assert (keyword.mode, loads) == ("exact", 1)
+    # A caller with no use for a cache gets none, whatever the settings say.
+    assert build(cached=False) == (None, 1)
+    assert build(cached=False, retrieval_mode="sparse") == (None, 0)
+    assert build(cache_mode="off") == (None, 1)

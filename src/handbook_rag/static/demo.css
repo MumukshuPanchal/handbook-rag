@@ -203,6 +203,26 @@ button[aria-disabled="true"] {
   font-weight: 700;
 }
 
+/* An answer that came from the cache says so above its text. */
+.cached {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.cached p {
+  margin: 0.25rem 0 0;
+}
+
+.cached .cached-label {
+  margin: 0;
+  color: var(--accent);
+  font-weight: 700;
+}
+
 /* Kept in the page when empty, so that a screen reader hears it when it fills. */
 .failure:not(:empty) {
   margin: 1rem 0;

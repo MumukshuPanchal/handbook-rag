@@ -1,1 +1,1 @@
-"""Parts of a semantic cache. So far only the second check on a candidate: no cache is built."""
+"""The answer cache: its two tiers, where it keeps answers, and the second check."""

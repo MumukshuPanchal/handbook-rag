@@ -113,6 +113,12 @@ class QdrantVectorStore:
     def collection(self) -> str:
         return self._collection
 
+    @property
+    def client(self) -> QdrantClient:
+        """The connection, for what keeps another kind of collection in the same store:
+        the answer cache (``cache/store.py``)."""
+        return self._client
+
     def with_collection(self, collection: str) -> "QdrantVectorStore":
         """Another collection in the same store, reached through the same connection."""
         return QdrantVectorStore(self._client, collection)

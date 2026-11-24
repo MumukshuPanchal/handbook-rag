@@ -23,7 +23,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from handbook_rag import demo, wiring
-from handbook_rag.api import MAX_QUERY_CHARS, create_app
+from handbook_rag.api import MAX_QUERY_CHARS, AskResponse, CachedAnswer, create_app
 from handbook_rag.config import Settings
 from handbook_rag.demo import CONTENT_SECURITY_POLICY, FILES
 from handbook_rag.index.indexer import index_chunks
@@ -484,3 +484,40 @@ def test_the_one_function_that_makes_a_link_checks_the_address_first() -> None:
     assert body.count("createElement") == 1
     assert 'link.target = "_blank";' in body
     assert 'link.rel = "noopener noreferrer";' in body
+
+
+# An answer that came from the answer cache (ADR 0020).
+
+
+def body_of(name: str) -> str:
+    source = static("demo.js")
+    span = function_body(source, name)
+    return source[span.start : span.stop]
+
+
+def test_a_cached_answer_names_the_question_it_was_written_for_as_text() -> None:
+    lines, render = body_of("cacheLines"), body_of("renderAnswer")
+
+    assert "`It was written for the question: ${hit.question}`" in lines
+    assert "No request was sent to the answer model." in lines
+    assert "That judgement can be wrong." in lines, "said of a match by meaning"
+    # Each line is given to make, which sets it as text. The stored question is a
+    # question somebody typed, and is shown like everything else that comes from the API.
+    assert 'note.append(make("p", "", line));' in render
+    assert 'make("p", "cached-label", "From the cache")' in render
+    assert ".cached {" in static("demo.css")
+    # The search beside the answer is the new question's, not the one the answer was written from.
+    assert "An answer that came from the cache ran no search" in static("demo.html")
+
+
+def test_the_page_reads_the_fields_the_api_sends_for_a_cached_answer() -> None:
+    script = static("demo.js")
+
+    assert set(re.findall(r"\bhit\.(\w+)", script)) == set(CachedAnswer.model_fields)
+    assert "answer.cached" in body_of("cacheHit")
+    assert "cached" in AskResponse.model_fields
+    # A service older than the field sends none, and its answers are still shown.
+    assert "cached" not in body_of("isAnswer")
+    facts = body_of("cacheFacts")
+    for label in ('"Served from"', '"Stored"', '"Similarity"', '"Second check"'):
+        assert label in facts, label

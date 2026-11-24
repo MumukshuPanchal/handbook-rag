@@ -157,6 +157,7 @@ function answerFacts(answer) {
   const firstText = answer.first_text_ms === null ? "no text came" : seconds(answer.first_text_ms);
   return [
     ["Model", shown(answer.model)],
+    ...cacheFacts(answer),
     ...attemptFacts(answer),
     ["Tokens", tokens],
     ["First text after", firstText],
@@ -180,6 +181,46 @@ function attemptFacts(answer) {
   const facts = requests === null ? [] : [["Requests to the model", String(requests)]];
   const by = fallback ? "the fallback model, after the answer model gave up" : "the answer model";
   facts.push(["Written by", by]);
+  return facts;
+}
+
+// Where an answer came from when the model did not produce it for this request: the
+// answer cache of the service (docs/adr/0020-an-answer-cache-that-matches-by-meaning.md).
+// Null when the model produced it now. A service older than the field sends none, so
+// isAnswer does not ask for it: a field that is missing, or not of this shape, counts
+// as not sent.
+function cacheHit(answer) {
+  const hit = answer.cached;
+  return isObject(hit) && typeof hit.question === "string" ? hit : null;
+}
+
+// What a reader is told above an answer that came from the cache, as lines of text.
+// The stored question is given word for word. For a match by meaning it is another
+// wording than the reader's own, and seeing it is how a wrong match is noticed.
+function cacheLines(hit) {
+  const how =
+    hit.tier === "exact"
+      ? "This answer was stored earlier for the same question."
+      : "This answer was stored earlier for a question that a second model judged to mean the same as yours. That judgement can be wrong.";
+  return [
+    `${how} No request was sent to the answer model.`,
+    `It was written for the question: ${hit.question}`,
+  ];
+}
+
+// The same, as pairs of a label and a value for the facts of the request.
+function cacheFacts(answer) {
+  const hit = cacheHit(answer);
+  if (hit === null) {
+    return [];
+  }
+  const facts = [
+    ["Served from", hit.tier === "exact" ? "the cache, an exact match" : "the cache, matched by meaning"],
+    ["Stored", shown(hit.stored_at)],
+  ];
+  if (Number.isFinite(hit.similarity) && Number.isFinite(hit.score)) {
+    facts.push(["Similarity", hit.similarity.toFixed(3)], ["Second check", hit.score.toFixed(3)]);
+  }
   return facts;
 }
 
@@ -371,6 +412,15 @@ function renderAnswer(answer) {
   const box = make("div", answer.answered ? "answer" : "answer decline");
   if (!answer.answered) {
     box.append(make("p", "decline-label", "Not an answer"));
+  }
+  const hit = cacheHit(answer);
+  if (hit !== null) {
+    const note = make("div", "cached");
+    note.append(make("p", "cached-label", "From the cache"));
+    for (const line of cacheLines(hit)) {
+      note.append(make("p", "", line));
+    }
+    box.append(note);
   }
   const text = make("p", "answer-text");
   const pieces = answerPieces(answer);
@@ -569,10 +619,11 @@ function showAnswer(data) {
     fail(UNREADABLE_ANSWER);
     return;
   }
+  const from = cacheHit(data) === null ? "" : " It came from the cache.";
   say(
     data.answered
-      ? `The answer is complete. It cites ${plural(data.sources.length, "source", "sources")}.`
-      : "Not an answer: the assistant declined, or its reply did not come to a proper end.",
+      ? `The answer is complete. It cites ${plural(data.sources.length, "source", "sources")}.${from}`
+      : `Not an answer: the assistant declined, or its reply did not come to a proper end.${from}`,
   );
 }
 

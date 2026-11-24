@@ -335,8 +335,9 @@ def create_server(
 def serve_stdio(wire: TextIO, settings: Settings | None = None) -> None:
     """Serve the tool until the client closes its end of standard input.
 
-    On this transport standard output carries the protocol, and one line of anything else
-    there breaks the client's connection. So the command has already given the protocol a
+    On this transport standard output carries the protocol, and the protocol allows
+    nothing else there. A client may log a line it cannot read and go on, as the SDK's
+    own client does, or drop the connection. So the command has already given the protocol a
     copy of standard output of its own, ``wire``, where the replies go, and pointed the
     process's standard output at standard error. Log records go to standard error too.
     """

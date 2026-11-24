@@ -24,6 +24,7 @@ What each version of this project contains. The format follows [Keep a Changelog
 
 ### Fixed
 
+- The decision record of the MCP server and a comment in its code said that one line of anything else on standard output breaks the client's connection. The protocol allows nothing else there, but what a client does with such a line is its own choice: the SDK's own client logs an error and reads on. Found while the study notes of this project were checked against the installed SDK ([ADR 0017]).
 - `index` skipped a chunk whenever a point with its id was stored, even when that point had another title, other headings, another address or another section, which a change of `HANDBOOK_RAG_HANDBOOK_BASE_URL` or of how titles are read can cause without changing any id. It now stores such a chunk again, and says how many it replaced ([#21], [ADR 0019]).
 - A replacement of the snapshot that failed after the files changed left the manifest of the old commit beside them. The manifest is now removed before the files change ([ADR 0019]).
 - The documents said that measuring the answers again after a change to the instructions costs more than a day of the free allowance. It is about 460 requests of the 500 a day, and more than a day only when attempts have to be repeated ([#69]).

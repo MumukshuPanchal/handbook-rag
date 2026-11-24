@@ -8,6 +8,7 @@ compared. The older snapshot and the older collection are never changed.
 import dataclasses
 import json
 import math
+import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,8 +18,11 @@ import pytest
 from qdrant_client import QdrantClient
 from typer.testing import CliRunner
 
+from handbook_rag import wiring
+from handbook_rag.cache.store import Entry
 from handbook_rag.cli import app
 from handbook_rag.config import Settings, get_settings
+from handbook_rag.generate.models import Segment
 from handbook_rag.index.indexer import IndexReport
 from handbook_rag.index.sparse import SparseVector
 from handbook_rag.index.store import QdrantVectorStore
@@ -626,3 +630,56 @@ def test_without_reuse_the_rate_counts_the_whole_run(
 
     assert result.exit_code == 0, result.output
     assert "embedded    20 new (2 per second)" in result.output
+
+
+# The answer cache (ADR 0020): an index that was filled by lending vectors has changed too.
+
+
+def test_an_index_filled_by_reusing_vectors_alone_empties_the_caches_of_its_commit(
+    handbook: Handbook,
+) -> None:
+    # The newer commit holds the same pages, so every chunk takes its vectors from the
+    # older collection: nothing is embedded and nothing removed.
+    shutil.rmtree(handbook.root / "data-next")
+    write_snapshot(handbook.root / "data-next", NEW, OLD_PAGES)
+    indexed_at_the_older_commit(handbook)
+    settings = get_settings()
+    assert settings.handbook_commit == NEW
+    store = QdrantVectorStore(handbook.client, settings.collection_name)
+    # An answer cached for the newer commit before its index was there, under settings
+    # the command is not run with, and one cached from the older commit's index.
+    reranked = settings.model_copy(update={"rerank": True})
+    of_the_newer = wiring.make_answer_store(reranked, store)
+    of_the_older = wiring.make_answer_store(
+        settings.model_copy(update={"handbook_commit": OLD}), store
+    )
+    for cache in (of_the_newer, of_the_older):
+        cache.put(a_cached_answer(), [1.0] + [0.0] * 63)
+
+    result = runner.invoke(app, ["index", "--reuse-from", OLD])
+
+    assert result.exit_code == 0, result.output
+    assert "  reused      3 chunks' vectors" in result.output
+    assert "  embedded    0 new" in result.output
+    assert "  removed     0 no longer produced" in result.output
+    assert (
+        "  cache       1 cached answers removed: the index they were written from has changed"
+        in result.output
+    )
+    assert of_the_newer.held().answers == 0
+    assert of_the_older.held().answers == 1, "the older commit's index did not change"
+
+
+def a_cached_answer() -> Entry:
+    return Entry(
+        entry_id="00000000-0000-4000-8000-000000000002",
+        question="A question asked before the index was there?",
+        comparable="a question asked before the index was there",
+        scope="all",
+        segments=(Segment("An answer."),),
+        answered=True,
+        model="stand-in",
+        stop_reason="end_turn",
+        stored_at="2031-02-03T04:05:06+00:00",
+        by_meaning=True,
+    )

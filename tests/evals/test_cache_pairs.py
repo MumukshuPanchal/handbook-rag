@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from handbook_rag.cache import rules
 from handbook_rag.cache.verify import Verification
 from handbook_rag.evals import cache_pairs
 from handbook_rag.evals.cache_pairs import (
@@ -50,6 +51,7 @@ from handbook_rag.evals.cache_pairs import (
     tally,
     write_cache_run,
 )
+from handbook_rag.evals.cache_replies import StoredReplies
 from handbook_rag.evals.cache_report import report_lines
 from handbook_rag.evals.dataset import DatasetError, Evidence, GoldenQuestion
 from handbook_rag.evals.metrics import share_with_interval
@@ -544,8 +546,8 @@ def test_two_scores_too_close_for_a_middle_still_give_a_threshold_above_the_wron
 
 
 def by_trying_every_threshold(asked: Sequence[Asked], policy: str) -> float | None:
-    """The rule as it is stated, by brute force: the loosest threshold at which, and at
-    every stricter one, nothing wrong is served."""
+    """The rule as it is stated, by brute force: of the thresholds halfway between two
+    scores, the loosest at which, and at every stricter one, nothing wrong is served."""
     seen = sorted({c.scores.of(policy) for question in asked for c in question.candidates})
     if not seen:
         return None
@@ -1027,6 +1029,237 @@ def test_a_run_made_as_the_first_one_was_says_nothing_of_declines(tmp_path: Path
     assert "decline_candidates" not in summary["config"]
     assert "stored_declines" not in summary["cache_view"]
     assert not [line for line in report_lines(as_a_summary(figures)) if "stored decline is" in line]
+
+
+# --- a cache filled with the replies of an answer run ---------------------------------------
+
+
+def test_filled_with_replies_only_a_reply_the_cache_may_serve_by_meaning_is_a_candidate() -> None:
+    # By their labels the handbook does not answer q1 to q4, and it answers q5. A model's
+    # replies part ways with that: it answered q1 and q3, and it declined q5. Its reply
+    # to q2 may not be served to another question, and q4 holds no reply at all.
+    held = {"q1": True, "q2": False, "q3": True, "q5": False}
+    rows = [
+        different_row(other="new question"),
+        different_row("d002", "q2", other="another new question"),
+    ]
+    embedder = TableEmbedder(
+        {
+            "new question": [1.0, 0.0, 0.0],
+            "another new question": [1.0, 0.0, 0.0],
+            TEXT["q1"]: towards(0.95),
+            TEXT["q2"]: towards(0.9),
+            TEXT["q3"]: towards(0.8),
+            TEXT["q4"]: towards(0.7),
+            ANSWERED.question: towards(0.6),
+        }
+    )
+    verifier = FakeVerifier()
+
+    measured = measure(
+        [as_pair(row) for row in rows],
+        [*GOLDEN, ANSWERED],
+        embedder=embedder,
+        verifier=verifier,
+        candidates=2,
+        floor=0.65,
+        held=held,
+    )
+
+    one, other = measured.asked
+    # The two nearest of those that may be served. q2 is nearer than q3 and is passed
+    # over, and q5 is below the floor as well as declined.
+    assert [c.question_id for c in one.candidates] == ["q1", "q3"]
+    assert [c.question_id for c in other.candidates] == ["q1", "q3"]
+    assert (one.above_floor, other.above_floor) == (2, 2)
+    # A pair's own golden question is scored also when its reply is no candidate.
+    assert other.own.cosine == pytest.approx(0.9)
+    (asked_of_the_verifier,) = verifier.calls
+    assert set(asked_of_the_verifier) == {
+        (TEXT["q1"], "new question"),
+        (TEXT["q3"], "new question"),
+        (TEXT["q2"], "another new question"),
+        (TEXT["q1"], "another new question"),
+        (TEXT["q3"], "another new question"),
+    }
+    # The cache holds what the answer run left it. The labels are what they were, and
+    # nothing says that declines were left out by them.
+    assert measured.stored == 4
+    assert measured.unanswered == {"q1", "q2", "q3", "q4"}
+    assert measured.decline_candidates is True
+
+
+def test_replies_that_follow_the_labels_give_what_the_labels_give() -> None:
+    golden, pairs = half_answered()
+
+    def measured(**options: Any) -> cache_pairs.Measured:
+        return measure(pairs, golden, embedder=FakeEmbedder(), verifier=FakeVerifier(), **options)
+
+    by_the_label = measured(decline_candidates=False)
+    # An answer where the label says the handbook answers, and a decline where it does not.
+    as_labelled = measured(held={q.id: q.type != "unanswerable" for q in golden})
+    # No reply at all where the label says it does not: left out the same way.
+    answers_only = measured(held={q.id: True for q in golden if q.type != "unanswerable"})
+    # An answer that may be served to every question: the cache of the first run.
+    every_one = measured(held={q.id: True for q in golden})
+
+    assert as_labelled.asked == by_the_label.asked
+    assert answers_only.asked == by_the_label.asked
+    assert every_one.asked == measured().asked
+    assert every_one.asked != by_the_label.asked, "or the three above would show nothing"
+    assert (as_labelled.stored, answers_only.stored, every_one.stored) == (12, 6, 12)
+
+
+def test_stored_questions_are_left_out_by_the_label_or_by_the_replies_and_not_by_both() -> None:
+    with pytest.raises(ValueError, match="not by both"):
+        measure(
+            [as_pair(same_row())],
+            GOLDEN,
+            embedder=FakeEmbedder(),
+            verifier=FakeVerifier(),
+            decline_candidates=False,
+            held={"q1": True},
+        )
+
+
+def some_replies() -> StoredReplies:
+    """What a cache would hold after an answer run on the questions of ``half_answered``.
+
+    By the label the handbook answers g0 to g5. The model declined g0, said of g1 that a
+    part is missing, and answered g6, which by the label the handbook does not answer.
+    """
+    return StoredReplies(
+        source="evals/runs/answers/a-run",
+        fingerprint="0123456789abcdef",
+        held={
+            "g0": rules.DECLINE,
+            "g1": rules.SAYS_SOMETHING_IS_MISSING,
+            "g2": None,
+            "g3": None,
+            "g4": None,
+            "g6": None,
+            "g7": rules.DECLINE,
+            "g8": rules.DECLINE,
+            "g9": rules.DECLINE,
+            "g10": rules.CITES_NOTHING,
+        },
+        not_kept=("g5",),
+        without_a_reply=("g11",),
+    )
+
+
+def test_a_run_filled_with_replies_records_them_and_its_report_says_so(tmp_path: Path) -> None:
+    golden, pairs = half_answered()
+    replies = some_replies()
+    held = replies.figures(golden)
+    measured = measure(
+        pairs,
+        golden,
+        embedder=FakeEmbedder(),
+        verifier=FakeVerifier(),
+        held=replies.may_be_candidates,
+    )
+
+    summary = write_cache_run(
+        measured,
+        tmp_path / "run",
+        description="A run for a test.",
+        config={"embedding_model": "fake-embedder"},
+        measured_on=DAY,
+        other_splits=5,
+        stored_replies=held,
+    )
+
+    # It is no run by the label: nothing in it says that declines were left out.
+    assert "decline_candidates" not in summary["config"]
+    cache = summary["cache_view"]
+    assert "stored_declines" not in cache
+    assert cache["stored_replies"] == json.loads(json.dumps(held))
+    # Ten replies are kept, and the labels of the twelve questions are counted as before.
+    assert (cache["stored_questions"], cache["stored_unanswered"]) == (10, 6)
+    # No row holds a candidate whose reply may not be served, and the rows give the
+    # figures again.
+    again = load_cache_run(tmp_path / "run", pairs)
+    assert again == measured.asked
+    assert {c.question_id for q in again for c in q.candidates} == {"g2", "g3", "g4", "g6"}
+    figures = summarise(
+        again,
+        stored=10,
+        candidates=3,
+        floor=0.5,
+        unanswered=cache_pairs.unanswered_questions(golden),
+        other_splits=5,
+        stored_replies=held,
+    )
+    assert {name: summary[name] for name in figures} == json.loads(json.dumps(figures))
+    # Without the replies the figures are the same in everything else: they describe
+    # the replies, and no count is made from them.
+    plain = summarise(
+        again,
+        stored=10,
+        candidates=3,
+        floor=0.5,
+        unanswered=cache_pairs.unanswered_questions(golden),
+        other_splits=5,
+    )
+    assert "stored_replies" not in plain["cache_view"]
+    figures["cache_view"].pop("stored_replies")
+    assert figures == plain
+    report = report_lines(as_a_summary({**plain, "cache_view": cache}))
+    assert (
+        "  filled with the replies of evals/runs/answers/a-run: 10 kept, and 4 of them "
+        "candidates by the cache's own rule"
+    ) in report
+    assert (
+        "  kept from the second tier: 4 decline, 0 declines_in_part, "
+        "1 says_something_is_missing, 1 cites_nothing"
+    ) in report
+    assert not [line for line in report if "stored decline" in line]
+    assert not [line for line in report_lines(as_a_summary(plain)) if "filled with" in line]
+
+
+def test_filled_with_replies_a_question_the_handbook_does_not_answer_is_not_called_a_decline() -> (
+    None
+):
+    rows, _, split = two_groups()
+    asked = [
+        ask(rows[0], ("q1", scores(0.9, 0.9))),
+        ask(rows[1], ("q1", scores(0.9, 0.3))),
+        ask(rows[2], ("q4", scores(0.9, 0.5)), ("q3", scores(0.8, 0.7))),
+        # Served q4, which by its label the handbook does not answer.
+        ask(rows[3], ("q4", scores(0.9, 0.6))),
+    ]
+    replies = StoredReplies(
+        source="evals/runs/answers/a-run",
+        fingerprint="0123456789abcdef",
+        held={"q1": None, "q3": None, "q4": None},
+        not_kept=(),
+        without_a_reply=("q2",),
+    ).figures(GOLDEN)
+
+    def report(**options: Any) -> str:
+        figures = summarise(
+            asked,
+            stored=3,
+            candidates=3,
+            floor=0.5,
+            unanswered={"q4"},
+            other_splits=0,
+            **options,
+        )
+        return "\n".join(report_lines(as_a_summary(figures)))
+
+    with_q4 = REPORTING if "s001" in split.choosing else CHOOSING
+    wrong = (
+        f"entails_min, {with_q4}, a near-miss: d002 (region) at 0.6000, its own golden question q4"
+    )
+    # By the label alone, what a cache holds for such a question is a decline.
+    assert f"{wrong}, a stored decline" in report()
+    # Filled with replies, q4 is a candidate because the model wrote an answer to it,
+    # and a decline is never a candidate there.
+    from_replies = report(stored_replies=replies)
+    assert f"{wrong}, a question the handbook does not answer" in from_replies
+    assert "a stored decline" not in from_replies
 
 
 def test_disputed_pairs_are_in_no_figure_and_are_listed_with_their_scores() -> None:

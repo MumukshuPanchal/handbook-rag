@@ -2,6 +2,7 @@
 
 import dataclasses
 import datetime
+import functools
 import json
 import math
 import os
@@ -19,7 +20,7 @@ from handbook_rag.cache.answers import AnswerCache
 from handbook_rag.cache.store import QdrantAnswerStore, answer_collections
 from handbook_rag.cache.verify import VerifierError
 from handbook_rag.config import Settings, get_settings
-from handbook_rag.evals import adversarial, cache_pairs
+from handbook_rag.evals import adversarial, cache_pairs, cache_replies
 from handbook_rag.evals import answers as answer_runs
 from handbook_rag.evals.agreement import measure_agreement
 from handbook_rag.evals.cache_report import report_lines
@@ -89,6 +90,7 @@ from handbook_rag.ingest.build import CorpusError, build_corpus, chunk_documents
 from handbook_rag.ingest.models import Chunk
 from handbook_rag.ingest.snapshot import SnapshotError, download_snapshot, snapshot_commit
 from handbook_rag.ingest.tokens import token_counter
+from handbook_rag.measuring import measuring_the_model
 from handbook_rag.pipeline import answer_question
 from handbook_rag.retrieve.dense import Retriever
 from handbook_rag.tracing import record_query, record_results, stage, trace_id, tracing_session
@@ -116,6 +118,25 @@ _RUN_DESCRIPTIONS = {
     "sparse": "Keyword search only (BM25).",
     "hybrid": "Dense and BM25 merged with reciprocal rank fusion.",
 }
+
+
+def measures[**P, R](command: Callable[P, R]) -> Callable[P, R]:
+    """Mark a command as one that measures: while it runs, no answer cache can exist.
+
+    An evaluation measures what the model writes, and the answer cache serves what it
+    wrote before. Inside a command marked like this, building a cache and handing one
+    to the entry point of an answer both fail, however the code that tries is written
+    (``measuring.py``). A test asks of every command whether it is marked or is listed
+    as one that is not an evaluation, so a new command has to be put on one side.
+    """
+
+    @functools.wraps(command)
+    def measured(*args: P.args, **kwargs: P.kwargs) -> R:
+        with measuring_the_model():
+            return command(*args, **kwargs)
+
+    measured.__dict__["measures_the_model"] = True
+    return measured
 
 
 def _show_version(value: bool) -> None:
@@ -327,7 +348,9 @@ def index(
     typer.echo(f"  removed     {report.removed:,} no longer produced")
     if report.replaced:
         typer.echo(f"  replaced    {report.replaced:,} stored under the same id with other details")
-    if report.embedded or report.reused or report.removed or report.replaced:
+    # A chunk that was replaced was embedded or took its vectors from the older
+    # collection, so the three counts below cover it.
+    if report.embedded or report.reused or report.removed:
         _empty_the_answer_cache(settings, store)
     typer.echo(f"  time        {report.seconds:.1f} seconds")
     if previous is not None:
@@ -339,20 +362,36 @@ def index(
 
 
 def _empty_the_answer_cache(settings: Settings, store: QdrantVectorStore) -> None:
-    """Remove the answers cached under these settings, after the index they came from changed.
+    """Remove every answer cached from this commit's index, after a run that changed it.
 
-    The cache's collection is named by the settings, and an index can change under the
+    The cache's collections are named by the settings, and an index can change under the
     same settings: while it is first built, when a run that stopped is finished, or when
     pages are read another way. An answer written from the index as it was, a decline
     from a half-built one above all, must not be served from the index as it is.
-    Failing to empty the cache does not undo the indexing, so it is reported and no more.
+
+    Every collection of the commit is emptied, and not only the one of the settings this
+    command ran with. One index serves many of them: the answer model, reranking, the
+    kind of search and the number of passages change the cache's name and not the
+    index's. That also empties a cache whose index, made with another embedding model,
+    did not change: too much is removed sooner than too little.
+
+    The collections are emptied and kept, so a service that is running does not meet a
+    collection that is being made again. It happens only after a run that finished: a
+    run that stopped halfway has changed the index and emptied nothing, and the run
+    that finishes it empties the caches if anything was left for it to change.
+    Failing to empty a cache does not undo the indexing, so it is reported and no more.
     """
     try:
-        removed = wiring.make_answer_store(settings, store).clear()
+        removed = sum(
+            QdrantAnswerStore(store.client, name).clear()
+            for name in answer_collections(
+                store.client, commit=wiring.answer_cache_commit(settings)
+            )
+        )
     except Exception as error:
         typer.echo(
             f"note: the answers cached from the index as it was could not be removed "
-            f"({type(error).__name__}). Run `handbook-rag cache-clear`.",
+            f"({type(error).__name__}). Run `handbook-rag cache-clear --all`.",
             err=True,
         )
         return
@@ -646,6 +685,7 @@ def _keep_standard_output_for_the_protocol() -> TextIO:
 
 
 @app.command(name="eval-retrieval")
+@measures
 def eval_retrieval(
     dataset: Annotated[
         Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
@@ -726,6 +766,7 @@ def eval_retrieval(
 
 
 @app.command(name="eval-compare")
+@measures
 def eval_compare(
     base: Annotated[str, typer.Argument(help="The run to compare against, such as 'baseline'.")],
     candidate: Annotated[str, typer.Argument(help="The run being judged, such as 'v1'.")],
@@ -775,6 +816,7 @@ def eval_compare(
 
 
 @app.command(name="eval-table")
+@measures
 def eval_table(
     runs: Annotated[
         Path, typer.Option(help="Directory that holds one sub-directory per run.")
@@ -802,6 +844,7 @@ def eval_table(
 
 
 @app.command(name="eval-answers")
+@measures
 def eval_answers(
     dataset: Annotated[
         Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
@@ -1250,6 +1293,7 @@ def _judge_stopped_badly(run: JudgeRun, max_requests: int | None) -> bool:
 
 
 @app.command(name="eval-judge")
+@measures
 def eval_judge(
     criterion_name: Annotated[
         CriterionName,
@@ -1555,6 +1599,7 @@ _RESTART_OPTION = typer.Option(
 
 
 @app.command(name="eval-support")
+@measures
 def eval_support(
     dataset: Annotated[Path, _DATASET_OPTION] = Path("evals/golden/questions.jsonl"),
     variant: Annotated[str, _VARIANT_OPTION] = "current",
@@ -1580,6 +1625,7 @@ def eval_support(
 
 
 @app.command(name="eval-correct")
+@measures
 def eval_correct(
     dataset: Annotated[Path, _DATASET_OPTION] = Path("evals/golden/questions.jsonl"),
     variant: Annotated[str, _VARIANT_OPTION] = "current",
@@ -1637,6 +1683,7 @@ def _retriever_for_out_of_scope_cases(settings: Settings) -> Retriever:
 
 
 @app.command(name="eval-adversarial")
+@measures
 def eval_adversarial(
     cases: Annotated[
         Path, typer.Option(help="Adversarial cases: a JSON Lines file with one case per line.")
@@ -1879,6 +1926,7 @@ def _echo_adversarial_figures(report: adversarial.AdversarialReport) -> None:
 
 
 @app.command(name="eval-gate")
+@measures
 def eval_gate(
     dataset: Annotated[
         Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
@@ -1952,6 +2000,7 @@ def eval_gate(
 
 
 @app.command(name="eval-cache")
+@measures
 def eval_cache(
     pairs: Annotated[
         Path, typer.Option(help="Cache question pairs: a JSON Lines file with one pair per line.")
@@ -1989,11 +2038,22 @@ def eval_cache(
             "--declines/--no-declines",
             help=(
                 "Whether a stored question the handbook does not answer can be a candidate. "
-                "The answer cache never serves a stored decline by meaning, and --no-declines "
-                "measures it as it is built."
+                "--no-declines leaves those out by the golden set's label. To leave out what "
+                "the answer cache itself leaves out, use --replies."
             ),
         ),
     ] = True,
+    replies: Annotated[
+        Path | None,
+        typer.Option(
+            help=(
+                "A saved answer run, such as evals/runs/answers/baseline. The simulated "
+                "cache is filled with its replies, and the answer cache's own rule decides "
+                "which of them may be served to a question worded differently: the cache as "
+                "it is built."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Measure what a semantic cache would serve, on labelled pairs of questions.
 
@@ -2002,10 +2062,17 @@ def eval_cache(
     threshold is chosen for each score on one half of the pairs, and the result is
     reported on the other half. The answer cache itself is not read or written.
     """
+    if replies is not None and not decline_candidates:
+        raise typer.BadParameter(
+            "--replies and --no-declines are two ways to leave stored questions out. "
+            "Give one of them.",
+            param_hint="--replies",
+        )
     settings = get_settings()
     try:
         questions = _load_questions(dataset)
         loaded = cache_pairs.load_pairs(pairs, questions)
+        held = None if replies is None else cache_replies.stored_replies(questions, replies)
         # A cache would sit in the service, which embeds one question at a time on the CPU.
         embedder = wiring.make_embedder(wiring.settings_for_serving(settings))
         verifier = wiring.make_verifier(settings)
@@ -2017,19 +2084,23 @@ def eval_cache(
             candidates=candidates,
             floor=floor,
             decline_candidates=decline_candidates,
+            held=None if held is None else held.may_be_candidates,
         )
+        description = (
+            "The cosine of two question embeddings, and an entailment check in both "
+            "directions, as the test of a semantic cache."
+        )
+        if not decline_candidates:
+            description += " A stored decline is no candidate, as in the answer cache."
+        if held is not None:
+            description += (
+                f" The cache holds the replies of the answer run {held.source}, and the "
+                "answer cache's own rule decides which of them are candidates."
+            )
         summary = cache_pairs.write_cache_run(
             measured,
             output / variant,
-            description=(
-                "The cosine of two question embeddings, and an entailment check in both "
-                "directions, as the test of a semantic cache."
-                + (
-                    ""
-                    if decline_candidates
-                    else " A stored decline is no candidate, as in the answer cache."
-                )
-            ),
+            description=description,
             config={
                 "embedding_model": settings.embedding_model,
                 "embedding_query_prefix": settings.embedding_query_prefix,
@@ -2038,10 +2109,17 @@ def eval_cache(
                 "verifier_device": wiring.VERIFIER_DEVICE,
                 **verifier.describe(),
                 **cache_pairs.data_fingerprints(loaded, questions),
+                # Recorded only for a run that was filled from replies, as the option above.
+                **(
+                    {}
+                    if held is None
+                    else {"replies_from": held.source, "replies_fingerprint": held.fingerprint}
+                ),
             },
             measured_on=datetime.date.today(),
+            stored_replies=None if held is None else held.figures(questions),
         )
-    except (DatasetError, VerifierError) as error:
+    except (DatasetError, VerifierError, SavedRunError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=1) from error
     for line in report_lines(summary):
@@ -2050,6 +2128,7 @@ def eval_cache(
 
 
 @app.command(name="golden-candidates")
+@measures
 def golden_candidates(
     output: Annotated[Path, typer.Argument(help="Where to write the sampled passages.")],
     count: Annotated[int, typer.Option(help="How many passages to sample.")] = 180,
@@ -2079,6 +2158,7 @@ def golden_candidates(
 
 
 @app.command(name="golden-check")
+@measures
 def golden_check(
     dataset: Annotated[
         Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
@@ -2123,6 +2203,7 @@ def golden_check(
 
 
 @app.command(name="golden-review")
+@measures
 def golden_review(
     dataset: Annotated[
         Path, typer.Option(help="Golden set: a JSON Lines file with one question per line.")
@@ -2171,7 +2252,7 @@ def ask(
             "--cache/--no-cache",
             help=(
                 "With --no-cache the answer model is asked, also when a stored answer would "
-                "do, and the new answer is stored in its place."
+                "do. The new answer takes the stored one's place if it is one the cache keeps."
             ),
         ),
     ] = True,
@@ -2206,6 +2287,12 @@ def ask(
                 settings, wiring.make_store(settings)
             )
             generator = wiring.make_generator(settings)
+            if answers is not None:
+                # The collection the answers are kept in is made here, before the
+                # question is looked up, and not by the answer that is stored at the
+                # end: making it can take longer than this command waits for that.
+                # When it is there, this is one question to the store.
+                answers.prepare()
             answer = answer_question(
                 question,
                 retriever=retriever,
@@ -2319,14 +2406,14 @@ def cache_status() -> None:
         f"               {held.by_meaning:,} may be served to a question that means the same"
     )
     typer.echo(
-        f"               {held.declines:,} declines and {exact_only:,} answers that decline in "
-        "part or cite nothing: served to the same question only"
+        f"               {held.declines:,} declines and {exact_only:,} answers that a guard "
+        "found to say something is missing, or that cite nothing: served to the same question only"
     )
     if others:
         stored = sum(other.answers for other in others.values())
         typer.echo(
             f"  left behind  {stored:,} answers in {len(others):,} collections stored under "
-            "other settings. They are never served now."
+            "other settings. They are not served under these."
         )
         typer.echo("               `handbook-rag cache-clear --all` removes them.")
 
@@ -2338,26 +2425,35 @@ def cache_clear(
         typer.Option(
             "--all",
             help=(
-                "Also remove the answers stored under other settings. They are never "
-                "served under the current ones."
+                "Also remove the collections of answers stored under other settings. "
+                "They are not served under the current ones."
             ),
         ),
     ] = False,
 ) -> None:
-    """Empty the answer cache of the current settings. The handbook's index is not touched."""
+    """Empty the answer cache of the current settings. The handbook's index is not touched.
+
+    The answers are removed and their collection is kept, so a service that is running
+    goes on without a pause. With --all, the collections left behind under other
+    settings are removed whole. Only collections named as this project names them are
+    touched.
+    """
     settings = get_settings()
     try:
         store = wiring.make_store(settings)
         answers = wiring.make_answer_store(settings, store)
-        names = [answers.collection]
-        if everything:
-            names += [n for n in answer_collections(store.client) if n != answers.collection]
-        removed = {name: QdrantAnswerStore(store.client, name).clear() for name in names}
+        emptied = answers.clear()
+        left_behind = {
+            name: QdrantAnswerStore(store.client, name).remove()
+            for name in (answer_collections(store.client) if everything else [])
+            if name != answers.collection
+        }
     except VectorStoreError as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=1) from error
-    for name, count in removed.items():
-        typer.echo(f"Removed {count:,} cached answers from {name}")
+    typer.echo(f"Removed {emptied:,} cached answers from {answers.collection}")
+    for name, count in left_behind.items():
+        typer.echo(f"Removed {count:,} cached answers and their collection {name}")
 
 
 def _show_what_was_found(error: GenerationError, *, broke_off: bool) -> None:

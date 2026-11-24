@@ -94,6 +94,16 @@ class LazyVerifier:
     def loaded(self) -> bool:
         return self._verifier is not None
 
+    def load(self) -> None:
+        """Load the model now, if it is not loaded yet.
+
+        For whoever wants the loading apart from the asking: the answer cache limits how
+        long a question waits for a check, and loading a model is not part of that.
+        """
+        with self._one_at_a_time:
+            if self._verifier is None:
+                self._verifier = self._load()
+
     def score(self, pairs: Sequence[tuple[str, str]]) -> list[Verification]:
         with self._one_at_a_time:
             if self._verifier is None:

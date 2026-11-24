@@ -9,12 +9,14 @@ import dataclasses
 import datetime
 import logging
 import threading
+import time
 from collections.abc import Sequence
 from typing import Any
 
 import pytest
 
 from handbook_rag.cache import answers as cache_answers
+from handbook_rag.cache import rules
 from handbook_rag.cache.answers import (
     DECIDED_BY,
     AnswerCache,
@@ -25,6 +27,11 @@ from handbook_rag.cache.answers import (
     scope_of,
     servable_by_meaning,
     storable,
+)
+from handbook_rag.cache.rules import (
+    MISSING_PHRASES,
+    kept_from_the_second_tier,
+    says_something_is_missing,
 )
 from handbook_rag.cache.store import Entry, QdrantAnswerStore
 from handbook_rag.cache.verify import LazyVerifier, Verification
@@ -459,6 +466,9 @@ class Unfiltered:
     def __init__(self, entries: Sequence[tuple[Entry, float]]) -> None:
         self._entries = list(entries)
 
+    def ensure(self, dimension: int) -> None:
+        return None
+
     def get(self, entry_id: str) -> Entry | None:
         return None
 
@@ -650,6 +660,9 @@ class Down:
     def _fail(self, what: str) -> Any:
         self.asked.append(what)
         raise ConnectionError("connection refused by 10.1.2.3:6333")
+
+    def ensure(self, dimension: int) -> None:
+        self._fail("ensure")
 
     def get(self, entry_id: str) -> Entry | None:
         return self._fail("get")  # type: ignore[no-any-return]
@@ -916,3 +929,363 @@ def test_a_write_that_fails_in_the_background_is_logged_and_the_next_one_still_r
 
     assert "the answer cache could not be stored: builtins.ConnectionError" in caplog.text
     assert store.held().answers == 1
+
+
+# --- what a review's mutants got past ------------------------------------------------------
+
+
+def stored_entry(question: str, **changes: Any) -> Entry:
+    made = Entry(
+        entry_id=entry_id(comparable(question), scope_of(None)),
+        question=question,
+        comparable=comparable(question),
+        scope=scope_of(None),
+        segments=written().segments,
+        answered=True,
+        model="stand-in-model-002",
+        stop_reason="end_turn",
+        stored_at="2031-02-03T04:05:06+00:00",
+        by_meaning=True,
+    )
+    return dataclasses.replace(made, **changes)
+
+
+def test_an_entry_under_the_right_id_that_is_of_another_part_of_the_handbook_is_not_served() -> (
+    None
+):
+    # The id is a hash of the question and the part asked of. An entry under it that says
+    # it was written from one section is not the answer to the question asked of all.
+    store = memory_answers()
+    cache = cache_over(store, {})
+    store.put(stored_entry(STORED, scope=scope_of("people")), towards(1.0))
+
+    assert store.get(entry_id(comparable(STORED), scope_of(None))) is not None
+    assert cache.lookup(STORED).answer is None
+
+
+def test_a_candidate_exactly_at_the_floor_is_read_by_the_verifier() -> None:
+    verifier = TableVerifier({("at the floor", "new"): (1.0, 1.0)})
+    cache = AnswerCache(
+        Unfiltered([(stored_entry("at the floor"), 0.5), (stored_entry("under it"), 0.4999)]),
+        embedder=Vectors({}),
+        verifier=verifier,
+        threshold=THRESHOLD,
+        floor=0.5,
+    )
+
+    found = cache.lookup("new")
+
+    assert verifier.calls == [[("at the floor", "new")]]
+    assert found.answer is not None
+
+
+def test_an_answer_that_came_from_the_cache_is_not_kept_though_it_is_whole() -> None:
+    # Whole, written by the answer model, one request: all that sets it apart is its mark.
+    whole = written(requests=1)
+    served = dataclasses.replace(whole, cached=CacheHit("semantic", STORED, "2031-02-03T04:05:06"))
+
+    assert storable(whole) is True
+    assert storable(served) is False
+
+
+# --- an answer that says in plain words that something is missing --------------------------
+
+# What the answer model wrote in the saved answer run where part of an answer was missing
+# (evals/runs/answers/baseline: q092, q112, u004 and u006), sentence by sentence.
+SAID_WHEN_PART_WAS_MISSING = [
+    "The handbook does not cover any additional data sources beyond these.",
+    "The search results do not specify what *must* be included in the message to prevent "
+    "it from being overlooked, other than ensuring there is an identified DRI.",
+    "However, the specific monetary amount allocated is not provided in the handbook.",
+    "The search results do not cover insurance payouts specifically for flight delays.",
+]
+# What it wrote in answers that lack nothing: a no that is the answer.
+A_NO_THAT_IS_THE_ANSWER = [
+    "Pods do not have a separate budget line.",
+    "The Digital Experience team does not perform content changes, updates, or moving content.",
+    "GitLab does not currently require subsequent background screenings for current team members.",
+    "Your order will be paid for centrally, so you do not need to submit an expense report.",
+    "No employee contribution is required.",
+    "If an epic has no `section::` label, it will not show up on the AI org status dashboard.",
+    "Quotations, order forms, agreements, and contracts are not valid.",
+    "New features that do not leverage FIPS-validated modules cannot be made available to "
+    "customers who use GitLab's FIPS releases.",
+    "A login does not mean the account is active.",
+    "They do not covertly record calls, and the statement of work lists no penalty.",
+]
+
+
+@pytest.mark.parametrize("sentence", SAID_WHEN_PART_WAS_MISSING)
+def test_an_answer_that_says_in_plain_words_that_something_is_missing_is_no_candidate(
+    sentence: str,
+) -> None:
+    answer = written(f"Each member has a budget for three quarters. {sentence}")
+    cache, verifier = stored_near(("stored", 0.99, answer))
+
+    assert storable(answer) is True, "it is kept, for the very same question"
+    assert says_something_is_missing(answer) is True
+    assert kept_from_the_second_tier(answer) == rules.SAYS_SOMETHING_IS_MISSING
+    assert servable_by_meaning(answer) is False
+    assert cache.lookup("new").answer is None
+    assert verifier.calls == [], "no candidate, so the verifier is not asked"
+    assert cache.lookup("stored").answer is not None
+
+
+@pytest.mark.parametrize("sentence", A_NO_THAT_IS_THE_ANSWER)
+def test_a_no_that_is_the_answer_keeps_an_answer_a_candidate(sentence: str) -> None:
+    answer = written(sentence)
+
+    assert says_something_is_missing(answer) is False
+    assert kept_from_the_second_tier(answer) is None
+    assert servable_by_meaning(answer) is True
+
+
+def test_the_guard_errs_towards_keeping_an_answer_out_and_a_reply_can_get_past_it() -> None:
+    # A plain answer about a benefit, in words the list holds: kept out, which costs a saving.
+    assert servable_by_meaning(written("Dental care is not covered by the plan.")) is False
+    # A decline in part, in words the list does not hold: a candidate like any other.
+    silent = written("The budget runs for three quarters. The handbook is silent on the amount.")
+    assert says_something_is_missing(silent) is False
+    assert servable_by_meaning(silent) is True
+    # So is one with more between the words than the list allows for.
+    wordy = written("The handbook does not, as far as I can see, state the amount.")
+    assert says_something_is_missing(wordy) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The handbook DOES NOT SPECIFY the amount.",
+        "The handbook **doesn't** specify the amount.",
+        "The handbook does\nnot   specify the amount.",
+        "the amount is *not provided*.",
+        "There is no information about the amount.",
+        "I could not find the amount.",
+        "The amount is not in the handbook.",
+        # The instructions' own word for it, and the shortened form of "is not".
+        "The search results do not contain the amount.",
+        "The amount isn't mentioned in the search results.",
+        # With the apostrophe a model may write: a typographic one.
+        "The amounts aren\u2019t listed anywhere.",
+        # With a word in between, as a model likes to put one.
+        "The handbook does not explicitly state the amount.",
+        "The amount is not specifically given.",
+        "There is no specific information about the amount.",
+        "It is not clear from the search results how much it is.",
+    ],
+)
+def test_case_markup_spacing_and_an_apostrophe_do_not_hide_a_phrase(text: str) -> None:
+    assert says_something_is_missing(written(text)) is True
+
+
+def test_the_phrases_are_words_as_a_reply_is_compared_and_each_is_found_as_whole_words() -> None:
+    assert len(MISSING_PHRASES) == len(set(MISSING_PHRASES))
+    for phrase in MISSING_PHRASES:
+        # Lower case, single spaces, no apostrophe: as plain_words leaves a reply.
+        assert phrase == " ".join(phrase.split()) == phrase.lower(), phrase
+        assert "'" not in phrase, phrase
+        assert says_something_is_missing(written(f"Sixteen weeks. It is so: {phrase}.")), phrase
+    for phrase in ("does not specify", "do not cover", "not provided", "not covered"):
+        assert phrase in MISSING_PHRASES
+    # The four the model used in the saved answer run are in it as they were written.
+    assert {"does not cover", "do not cover", "do not specify", "not provided"} <= set(
+        MISSING_PHRASES
+    )
+    assert len(MISSING_PHRASES) == 1093
+    # A phrase inside a longer word is another word.
+    assert says_something_is_missing(written("The teams do not specifying anything.")) is False
+    assert says_something_is_missing(written("It is cannot provided.")) is False
+
+
+def test_the_reason_a_reply_is_kept_from_the_second_tier_is_the_first_that_holds() -> None:
+    missing = "The handbook does not specify the amount."
+
+    assert kept_from_the_second_tier(DECLINE_IN_OTHER_WORDS) == rules.DECLINE
+    assert kept_from_the_second_tier(DECLINE) == rules.DECLINE
+    assert kept_from_the_second_tier(PARTIAL) == rules.DECLINES_IN_PART
+    assert (
+        kept_from_the_second_tier(written(missing, cite=False)) == rules.SAYS_SOMETHING_IS_MISSING
+    )
+    assert kept_from_the_second_tier(UNCITED) == rules.CITES_NOTHING
+    assert kept_from_the_second_tier(written()) is None
+
+
+DECLINE_IN_OTHER_WORDS = written("The handbook does not specify this.", answered=False)
+
+
+# --- a lookup has a time limit -------------------------------------------------------------
+
+
+class Hangs:
+    """A store that stops at one of its calls until the test lets it go on."""
+
+    def __init__(self, at: str) -> None:
+        self.at = at
+        self.release = threading.Event()
+        self.entries = [(stored_entry(STORED), 0.99)]
+
+    def _wait(self, call: str) -> None:
+        if call == self.at:
+            assert self.release.wait(10.0), "the test never let the store go on"
+
+    def ensure(self, dimension: int) -> None:
+        return None
+
+    def get(self, entry_id: str) -> Entry | None:
+        self._wait("get")
+        return None
+
+    def nearest(
+        self, vector: Sequence[float], *, scope: str, limit: int, floor: float
+    ) -> list[tuple[Entry, float]]:
+        self._wait("nearest")
+        return list(self.entries)
+
+    def put(self, entry: Entry, vector: Sequence[float]) -> None:
+        return None
+
+
+class SlowVerifier(TableVerifier):
+    """A verifier that reads for as long as the test makes it."""
+
+    def __init__(self) -> None:
+        super().__init__({(STORED, REWORDED): (1.0, 1.0)})
+        self.release = threading.Event()
+
+    def score(self, pairs: Sequence[tuple[str, str]]) -> list[Verification]:
+        assert self.release.wait(10.0), "the test never let the verifier go on"
+        return super().score(pairs)
+
+
+@pytest.mark.parametrize("at", ["get", "nearest", "the verifier"])
+def test_a_lookup_that_takes_too_long_is_given_up_and_counts_as_a_miss(
+    at: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    store, verifier = Hangs(at), SlowVerifier()
+    if at != "the verifier":
+        verifier.release.set()
+    cache = AnswerCache(
+        store, embedder=Vectors({}), verifier=verifier, threshold=THRESHOLD, lookup_seconds=0.1
+    )
+
+    began = time.monotonic()
+    with caplog.at_level(logging.WARNING):
+        found = cache.lookup(REWORDED)
+    waited = time.monotonic() - began
+
+    assert (found.answer, found.failure) == (None, "timeout")
+    assert 0.1 <= waited < 2.0, "the caller waits its time and no longer"
+    assert "the answer cache was given up after 0.1 s" in caplog.text
+    # The answer the model then writes is kept as after any other miss.
+    cache.store(found, written())
+    store.release.set()
+    verifier.release.set()
+
+
+def test_within_its_time_a_lookup_that_goes_through_every_step_is_served() -> None:
+    store, verifier = Hangs("nothing"), SlowVerifier()
+    verifier.release.set()
+    cache = AnswerCache(
+        store, embedder=Vectors({}), verifier=verifier, threshold=THRESHOLD, lookup_seconds=5.0
+    )
+
+    found = cache.lookup(REWORDED)
+
+    assert found.answer is not None
+    assert (found.tier, found.failure) == ("semantic", None)
+    with pytest.raises(ValueError, match="above 0 seconds"):
+        cache_over(memory_answers(), {}, lookup_seconds=0)
+
+
+def test_loading_the_verifier_is_not_counted_in_the_time_a_lookup_may_take() -> None:
+    # A command loads the model the first time a stored question is near, which takes
+    # longer than a lookup may. That is start-up, and the answer is still served.
+    loaded = threading.Event()
+
+    def load() -> TableVerifier:
+        time.sleep(0.3)
+        loaded.set()
+        return TableVerifier({(STORED, REWORDED): (1.0, 1.0)})
+
+    lazy = LazyVerifier(load, name="slow to load")
+    cache = AnswerCache(
+        Hangs("nothing"),
+        embedder=Vectors({}),
+        verifier=lazy,
+        threshold=THRESHOLD,
+        lookup_seconds=0.2,
+    )
+
+    found = cache.lookup(REWORDED)
+
+    assert loaded.is_set()
+    assert found.answer is not None
+    assert found.failure is None
+
+
+def test_a_verifier_that_cannot_be_loaded_at_the_first_question_is_a_miss(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def load() -> TableVerifier:
+        raise OSError("the model is not on disk and the Hub cannot be reached")
+
+    cache = AnswerCache(
+        Hangs("nothing"),
+        embedder=Vectors({}),
+        verifier=LazyVerifier(load, name="missing"),
+        threshold=THRESHOLD,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        found = cache.lookup(REWORDED)
+
+    assert (found.answer, found.failure) == (None, "builtins.OSError")
+    assert [(c.question, c.entails) for c in found.checked] == [(STORED, None)]
+    assert "the answer cache could not be verified: builtins.OSError" in caplog.text
+
+
+# --- the place for the answers is made before anything is looked up ------------------------
+
+
+def test_preparing_makes_the_collection_in_the_size_of_the_embedding_model() -> None:
+    store = memory_answers()
+    cache = cache_over(store, {})
+    assert not store._client.collection_exists(store.collection)
+
+    assert cache.prepare() is True
+
+    made = store._client.get_collection(store.collection).config.params.vectors
+    assert made.size == Vectors({}).dimension == 3  # type: ignore[union-attr]
+    # Nothing is in it, and reading it fails nothing.
+    found = cache.lookup(STORED)
+    assert (found.answer, found.failure) == (None, None)
+    assert cache.prepare() is True, "a second time changes nothing"
+
+
+def test_a_store_that_cannot_be_prepared_is_logged_and_nothing_else(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = Down()
+    cache = AnswerCache(store, embedder=Vectors({}), threshold=THRESHOLD)
+
+    with caplog.at_level(logging.WARNING):
+        assert cache.prepare() is False
+
+    assert store.asked == ["ensure"]
+    assert "the answer cache could not be prepared: builtins.ConnectionError" in caplog.text
+
+
+def test_answers_still_waiting_when_the_cache_is_closed_are_counted_in_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = Slow()
+    cache = cache_over(store, {}, background=True)
+    for number in range(3):
+        cache.store(Lookup(f"question {number}", None, f"question {number}"), written())
+    assert store.writing.wait(5.0)
+
+    with caplog.at_level(logging.WARNING):
+        assert cache.close(timeout=0.05) is False
+
+    assert "3 answers were not stored in the answer cache" in caplog.text
+    store.release.set()

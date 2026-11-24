@@ -151,21 +151,26 @@ class Settings(BaseSettings):
             "count. semantic: also to a question that a second model, the verifier, "
             "judges to mean the same. That serves more and is the risky tier: a question "
             "that only looks the same will sometimes get another question's answer. It "
-            "also loads a third model. The default is the project owner's decision, and "
-            "ADR 0020 records it with the measured risk beside it."
+            "also loads a third model, which is downloaded the first time it is needed: "
+            "by the service when it starts, and by `ask` at the first question that has a "
+            "stored one near it. The default is the project owner's decision, and ADR "
+            "0020 records it with the measured risk beside it."
         ),
     )
     cache_threshold: float = Field(
-        default=0.8669,
+        default=0.91,
         gt=0.0,
         le=1.0,
         description=(
             "How sure the verifier must be, in its weaker direction, before a stored "
-            "answer is served to a question worded differently. The default is fitted "
-            "on labelled pairs of questions: the threshold the saved run "
-            "evals/runs/cache/no-decline-candidates chose on one half of them, rounded "
-            "up. That run's other half and its other splits are the only evidence of how "
-            "it behaves, and there is none about real questions. Higher is stricter."
+            "answer is served to a question worded differently. Higher is stricter. The "
+            "default is fitted on labelled pairs of questions. In the saved run "
+            "evals/runs/cache/as-built the measurement's rule gave 0.8669, and every "
+            "threshold from there to 0.9131 serves that run exactly the same. The "
+            "default is the top of that range, to two places: it costs nothing on the "
+            "run, and it stands further above the highest score at which the run holds "
+            "a wrong serve, 0.854. That run's other half and its other splits are the "
+            "only evidence of how it behaves, and there is none about real questions."
         ),
     )
     cache_candidates: int = Field(
@@ -179,13 +184,18 @@ class Settings(BaseSettings):
         ),
     )
     cache_floor: float = Field(
-        default=0.5,
+        default=0.7,
         ge=-1.0,
         le=1.0,
         description=(
             "The cosine below which a stored question is no candidate at all, so that "
-            "questions that have nothing to do with each other are never verified. The "
-            "default is the measurement's; nothing chose it from the pairs."
+            "the verifier does not read questions that have little to do with each "
+            "other. It saves work, and does nothing for correctness. The default was "
+            "read from the labelled pairs with every pair in view: in the three saved "
+            "runs no candidate under a cosine of 0.76 scored above 0.13, and with a "
+            "floor of 0.7 every question is served what it is served with the "
+            "measurement's own 0.5. The wrong serve that scores highest in the runs is "
+            "at a cosine of 0.789, above it."
         ),
     )
     cache_verifier_model: str = Field(

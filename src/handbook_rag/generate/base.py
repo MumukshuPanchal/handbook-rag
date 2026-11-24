@@ -155,6 +155,15 @@ def holds_the_decline(segments: Sequence[Segment]) -> bool:
     return _words(NOT_FOUND_MESSAGE) in _words("".join(segment.text for segment in segments))
 
 
+def plain_words(text: str) -> str:
+    """A text as its words alone, as a reply is compared with the fixed sentence.
+
+    For whoever looks for other phrases in a reply (``cache/rules.py``), so that case,
+    punctuation and Markdown count for as little there as they do here.
+    """
+    return _words(text)
+
+
 def _words(text: str) -> str:
     """The words of a text in lower case, single spaces between them, nothing else.
 

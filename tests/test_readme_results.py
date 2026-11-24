@@ -545,13 +545,15 @@ def test_the_cache_measurement_is_the_committed_run() -> None:
     assert "Whether the threshold is stricter than real use needs is not measured." in said(start)
 
 
-def test_the_answer_cache_section_is_the_second_committed_cache_run() -> None:
+def test_the_answer_cache_section_is_the_third_committed_cache_run() -> None:
     """The cache as it is built: its row, its default threshold, and what did not test it.
 
     The figures of the one check with the real service, and what the default costs on
-    the development laptop, were measured by hand and are held by no run.
+    the development laptop, were measured by hand and are held by no run. The range of
+    thresholds the default is the top of is worked out from the run in
+    ``tests/evals/test_committed_cache_run_as_built.py``, which also holds it to this text.
     """
-    run = summary("cache/no-decline-candidates")
+    run = summary("cache/as-built")
     cache = run["cache_view"]
     assert cache["chosen_policy"] == "entails_min"
     weaker = cache["policies"]["entails_min"]
@@ -571,17 +573,33 @@ def test_the_answer_cache_section_is_the_second_committed_cache_run() -> None:
         counted(same["wrong"], same["pairs"], same["wrong_share"]),
         counted(different["wrong"], different["pairs"], different["wrong_share"]),
     ]
-    assert f"{weaker['threshold']:.4f}" == str(threshold), "the setting is the run's threshold"
-    assert "(evals/runs/cache/no-decline-candidates)" in section
-    assert "with stored declines left out of the candidates" in section
-    assert cache["stored_declines"]["left_out"] == cache["stored_unanswered"]
+    assert "(evals/runs/cache/as-built)" in section
+    # The run by the label is said to be by the label, and is not called the cache as built.
+    assert "(evals/runs/cache/no-decline-candidates)" not in section
+    assert "Once with stored declines left out of the candidates, by the label of each" in section
 
     def says(start: str) -> list[str]:
         return numbers(line_starting(section, start))
 
-    assert says("- **The cache's default threshold is that") == [str(threshold)]
-    assert "there is none about real questions" in line_starting(
-        section, "- **The cache's default threshold is that"
+    # What the cache's own code did with the replies the run was filled with.
+    held = cache["stored_replies"]
+    kept_out = {reason: len(ids) for reason, ids in held["kept_from_the_second_tier"].items()}
+    assert says("The measurement of the last section was run twice more.") == [
+        str(held["kept"]),
+        str(held["kept"] - held["candidates"]),
+        str(kept_out["decline"]),
+        str(kept_out["says_something_is_missing"]),
+        str(kept_out["cites_nothing"]),
+    ]
+    assert kept_out["declines_in_part"] == 0
+    assert sum(kept_out.values()) == held["kept"] - held["candidates"]
+
+    start_of_line = "- **The cache's default threshold is 0.91, and not that"
+    assert says(start_of_line)[:2] == [str(threshold), f"{weaker['threshold']:.4f}"]
+    assert len(says(start_of_line)) == 4, "then the two ends of the range, held elsewhere"
+    assert "there is no evidence about real questions" in line_starting(section, start_of_line)
+    assert "chosen with every pair in view, so nothing tests the choice" in line_starting(
+        section, start_of_line
     )
     hardest = weaker["highest_wrong"]["reporting"]
     over = cache["other_splits"]["policies"]["entails_min"]
@@ -595,13 +613,34 @@ def test_the_answer_cache_section_is_the_second_committed_cache_run() -> None:
     ]
     assert f"`{hardest['same']['pair']}`" in line_starting(section, start_of_line)
     assert hardest["same"]["own"] is False, "another stored question's answer"
+    assert "the rule's own threshold served something wrong" in line_starting(
+        section, start_of_line
+    )
+    # The near-miss that only the second guard keeps out, by its row in the run.
+    lines = (RUNS / "cache" / "as-built" / "pairs.jsonl").read_text(encoding="utf-8").splitlines()
+    (near_miss,) = [row for row in map(json.loads, lines) if row["pair"] == "d067"]
+    assert (
+        near_miss["question_id"] in held["kept_from_the_second_tier"]["says_something_is_missing"]
+    )
+    start_of_line = "- **One near-miss is kept out by the second guard alone.**"
+    assert says(start_of_line) == [
+        three(min(near_miss["entails_forward"], near_miss["entails_backward"]))
+    ]
+    assert "`d067`" in line_starting(section, start_of_line)
+    # What the second guard is, said with both of its faults.
+    assert (
+        "It errs towards keeping an answer out, and a reply that words the gap another way "
+        "gets past it."
+    ) in section
     # The trade-off is said once, plainly, and the cache is nowhere called safe.
     assert section.count("will sometimes be served its answer") == 1
     for word in ("safe", "guarantee", "proves"):
         assert word not in section.lower(), word
-    # The day of the check by hand is the day of the run.
+    # The day of the check by hand is the day of the run, and it is said to be older
+    # than the defaults.
     year, month, day = run["measured_on"].split("-")
     assert f"on {int(day)} {MONTHS.split()[int(month) - 1]} {year}, by hand" in section
+    assert "The check was made with the defaults of that day" in section
 
 
 def test_every_link_to_a_file_or_a_heading_leads_to_one() -> None:

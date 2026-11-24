@@ -28,6 +28,7 @@ from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.models import Answer
 from handbook_rag.generate.retrying import RetryingGenerator, traced_request
 from handbook_rag.ingest.models import Chunk
+from handbook_rag.measuring import refuse_a_cache
 from handbook_rag.retrieve.dense import Retriever
 from handbook_rag.tracing import (
     record_answer,
@@ -67,10 +68,15 @@ def answer_question(
     (``Answer.cached``) and counts no request, and ``on_text`` receives its text as one
     piece. Otherwise the answer is written as always and then handed to the cache,
     which keeps it if it is one to keep. ``fresh`` skips the looking up and not the
-    keeping: the new answer takes the place of what the cache held for the question.
-    Without a ``cache``, which is the default and what an evaluation gets, none of this
-    happens.
+    keeping: the new answer, if it is one the cache keeps, takes the place of what the
+    cache held for the question. Without a ``cache``, which is the default and what an
+    evaluation gets, none of this happens.
+
+    While an evaluation runs, a ``cache`` is refused with an error (``measuring.py``):
+    an evaluation measures what the model writes.
     """
+    if cache is not None:
+        refuse_a_cache("used")
     with stage("answer", section=section) as span:
         traced = trace_id(span)
         if traced is not None and on_trace is not None:

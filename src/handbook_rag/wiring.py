@@ -16,8 +16,9 @@ from google import genai
 from google.genai import types as genai_types
 from qdrant_client import QdrantClient
 
-from handbook_rag.cache.answers import ANSWER_CACHE_VERSION, AnswerCache
-from handbook_rag.cache.store import COLLECTION_PREFIX, QdrantAnswerStore
+from handbook_rag.cache.answers import AnswerCache
+from handbook_rag.cache.rules import ANSWER_CACHE_VERSION
+from handbook_rag.cache.store import QdrantAnswerStore, collection_name
 from handbook_rag.cache.verify import EntailmentVerifier, LazyVerifier
 from handbook_rag.config import Settings, collection_slug
 from handbook_rag.evals.judging import Criterion, Judge, JudgedCase
@@ -180,6 +181,10 @@ def describe_answer_cache(settings: Settings) -> dict[str, object]:
     - **The answer**: what :func:`describe_generation` lists, and the layout of a
       request (:func:`answer_request_fingerprint`).
     - **The cache's own version**, for changes to the code that no setting shows.
+      The code that reads a model's reply, the code that finds passages and the cache's
+      own rules decide an answer too, and no setting names them. A person raises the
+      version when one of them changes what an answer is (``cache/rules.py``), and a
+      test that pins those modules asks for that decision.
 
     What is not listed decides only whether an answer is served or how fast: the cache's
     mode, threshold, candidates, floor and verifier, the time limits, the fallback
@@ -204,13 +209,20 @@ def answer_cache_collection(settings: Settings) -> str:
     """The collection that holds the answers cached under these settings.
 
     A change to anything :func:`describe_answer_cache` lists gives another name. The
-    answers stored before are then never served again. They stay in their old
-    collection until `handbook-rag cache-clear --all` removes them. The first eight
-    characters of the handbook commit are in the name for a person to read.
+    answers stored before are then not served under the new settings. They stay in
+    their old collection, and are served again when the setting is put back, unless
+    `handbook-rag cache-clear --all` removed them or `handbook-rag index` changed the
+    index in between, which empties every collection of the commit.
     """
     described = json.dumps(describe_answer_cache(settings), sort_keys=True, ensure_ascii=False)
     digest = hashlib.sha256(described.encode("utf-8")).hexdigest()[:16]
-    return f"{COLLECTION_PREFIX}{collection_slug(settings.handbook_commit[:8])}-{digest}"
+    return collection_name(answer_cache_commit(settings), digest)
+
+
+def answer_cache_commit(settings: Settings) -> str:
+    """The handbook commit as the names of its answer collections hold it: its first eight
+    characters, for a person to read, and for finding every collection of the commit."""
+    return collection_slug(settings.handbook_commit[:8])
 
 
 def answer_request_fingerprint(settings: Settings) -> str:
@@ -270,23 +282,22 @@ def make_answer_cache(
 
 
 def make_retriever_and_cache(
-    settings: Settings, store: QdrantVectorStore, *, cached: bool = True
+    settings: Settings, store: QdrantVectorStore
 ) -> tuple[Retriever, AnswerCache | None]:
     """The retriever, and the answer cache that shares its embedding model and its store.
 
-    This is what the ``ask`` command and the service build. An evaluation builds its
-    retriever with :func:`make_retriever`, and never a cache: it measures the model.
+    This is what the ``ask`` command builds, and the service when it has an answer
+    model. An evaluation builds its retriever with :func:`make_retriever`, and never a
+    cache: it measures the model, and while it runs a cache cannot be built at all
+    (``measuring.py``).
 
-    ``cached`` is False for a caller that has no use for a cache, such as a service
-    without an answer model. Nothing is then built for it, whatever the settings say.
-    With keyword search and no cache, no embedding model is loaded at all.
+    With keyword search and the cache switched off, no embedding model is loaded.
     """
-    mode = settings.cache_mode if cached else "off"
     embedder: Embedder | None = None
-    if settings.retrieval_mode != "sparse" or mode != "off":
+    if settings.retrieval_mode != "sparse" or settings.cache_mode != "off":
         embedder = make_embedder(settings)
     retriever = make_retriever(settings, store=store, embedder=embedder)
-    if mode == "off" or embedder is None:
+    if embedder is None:
         return retriever, None
     return retriever, make_answer_cache(settings, store=store, embedder=embedder)
 

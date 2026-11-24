@@ -2,6 +2,7 @@ import dataclasses
 import hashlib
 import json
 import re
+import shutil
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from qdrant_client import QdrantClient
 from typer.testing import CliRunner
 
 from handbook_rag import __version__, wiring
-from handbook_rag.cache.store import QdrantAnswerStore, answer_collections
+from handbook_rag.cache.store import Entry, QdrantAnswerStore, answer_collections
 from handbook_rag.cli import app
 from handbook_rag.config import Settings, get_settings
 from handbook_rag.evals import adversarial
@@ -27,6 +28,8 @@ from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.store import QdrantVectorStore, ScoredChunk, VectorStoreError
 from handbook_rag.ingest.build import build_corpus
 from handbook_rag.ingest.models import Chunk
+from handbook_rag.measuring import CacheNotAllowed, measuring
+from handbook_rag.pipeline import answer_question
 from handbook_rag.retrieve.dense import Retriever
 from tests.cache.support import TableVerifier
 from tests.support import (
@@ -3182,16 +3185,29 @@ def test_ask_serves_a_rewording_by_meaning_and_says_how_to_get_an_answer_of_its_
 def test_ask_does_not_serve_a_near_miss_the_verifier_turns_down(
     cached_ask: Counted, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    verifier = NotedVerifier({(ASKED, NEAR): (0.99, 0.86)})
+    verifier = NotedVerifier({(ASKED, NEAR): (0.99, 0.9099)})
     monkeypatch.setattr("handbook_rag.wiring.make_verifier", verifier.build)
     runner.invoke(app, ["ask", ASKED])
 
     result = runner.invoke(app, ["ask", NEAR])
 
-    # 0.86 is under the default threshold, which is the one the saved measurement chose.
-    assert Settings().cache_threshold == 0.8669
+    # Just under the default threshold, which rests on the saved measurement.
+    assert Settings().cache_threshold == 0.91
     assert "From the cache" not in result.output
     assert cached_ask.asked == [ASKED, NEAR]
+
+
+def test_ask_serves_a_question_whose_weaker_direction_is_exactly_the_threshold(
+    cached_ask: Counted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    verifier = NotedVerifier({(ASKED, NEAR): (0.99, 0.91)})
+    monkeypatch.setattr("handbook_rag.wiring.make_verifier", verifier.build)
+    runner.invoke(app, ["ask", ASKED])
+
+    result = runner.invoke(app, ["ask", NEAR])
+
+    assert "From the cache: matched by meaning" in result.output
+    assert "second check 0.910" in result.output
 
 
 def test_ask_loads_no_verifier_unless_a_stored_question_is_near_the_new_one(
@@ -3263,6 +3279,29 @@ def test_ask_keeps_no_answer_the_model_could_not_finish(
     assert cached_answers().held().answers == 0
 
 
+def test_an_answer_left_behind_is_served_again_when_the_setting_is_put_back(
+    cached_ask: Counted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner.invoke(app, ["ask", ASKED])
+    kept = cached_answers().collection
+    # Another setting that decides an answer: the cache has another name, and holds nothing.
+    monkeypatch.setenv("HANDBOOK_RAG_ANSWER_CONTEXT_CHUNKS", "1")
+    get_settings.cache_clear()
+    elsewhere = runner.invoke(app, ["ask", ASKED])
+    assert cached_answers().collection != kept
+    assert "From the cache" not in elsewhere.output
+    assert cached_ask.asked == [ASKED, ASKED], "so the model is asked again"
+
+    monkeypatch.delenv("HANDBOOK_RAG_ANSWER_CONTEXT_CHUNKS")
+    get_settings.cache_clear()
+    back = runner.invoke(app, ["ask", ASKED])
+
+    # The first answer stayed in its collection, and is not gone for good.
+    assert cached_answers().collection == kept
+    assert "From the cache: an exact match" in back.output
+    assert cached_ask.asked == [ASKED, ASKED]
+
+
 def test_the_cache_commands_count_what_is_held_and_empty_it(
     cached_ask: Counted, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3278,7 +3317,10 @@ def test_the_cache_commands_count_what_is_held_and_empty_it(
     assert current.startswith("answers-aaaaaaaa-")
     assert "  answers      2 stored" in status.output
     assert "2 may be served to a question that means the same" in status.output
-    assert "0 declines and 0 answers that decline in part or cite nothing" in status.output
+    assert (
+        "0 declines and 0 answers that a guard found to say something is missing, or that cite "
+        "nothing: served to the same question only"
+    ) in status.output
     assert "left behind" not in status.output
 
     # Another setting that decides an answer: the answers stored before are left behind.
@@ -3298,11 +3340,18 @@ def test_the_cache_commands_count_what_is_held_and_empty_it(
     assert cleared.exit_code == 0, cleared.output
     assert cleared.output == f"Removed 1 cached answers from {other}\n"
     store = wiring.make_store(get_settings())
-    assert answer_collections(store.client) == [current]
+    # Emptied and kept: a running service never meets a collection being made again.
+    assert answer_collections(store.client) == sorted([current, other])
+    assert cached_answers().held().answers == 0
+    # Something else in the same store, under a name that starts like a cache's.
+    QdrantAnswerStore(store.client, "answers-of-the-survey").ensure(3)
     everything = runner.invoke(app, ["cache-clear", "--all"])
-    assert f"Removed 0 cached answers from {other}\n" in everything.output
-    assert f"Removed 2 cached answers from {current}\n" in everything.output
-    assert answer_collections(store.client) == []
+    assert everything.output == (
+        f"Removed 0 cached answers from {other}\n"
+        f"Removed 2 cached answers and their collection {current}\n"
+    )
+    assert answer_collections(store.client) == [other]
+    assert store.client.collection_exists("answers-of-the-survey"), "not ours to remove"
     # The handbook's own index is not touched, and the next question is asked of the model.
     assert store.count() == 2
     runner.invoke(app, ["ask", ASKED])
@@ -3323,42 +3372,123 @@ def test_the_cache_commands_say_so_when_the_vector_store_cannot_be_reached(
         assert "Traceback" not in result.output
 
 
-def test_indexing_empties_the_cache_when_it_changes_the_index_and_only_then(
-    cached_ask: Counted, tmp_path: Path
-) -> None:
-    """The cache is named by the settings, and an index can change under the same settings."""
+LEAVE_PAGE = (
+    '---\ntitle: "Leave"\n---\n\n## Parental leave\n\nNew parents get sixteen weeks of paid leave.'
+)
+EXPENSES_PAGE = "## Laptops\n\nExpense a laptop up to one thousand dollars."
+TRAVEL_PAGE = "## Trains\n\nBook a train in second class for a trip under four hours."
+
+
+def test_indexing_that_changes_nothing_leaves_the_cache_as_it_is(cached_ask: Counted) -> None:
     runner.invoke(app, ["ask", ASKED])
-    assert cached_answers().held().answers == 1
 
     unchanged = runner.invoke(app, ["index"])
+
     assert unchanged.exit_code == 0, unchanged.output
+    assert "  embedded    0 new" in unchanged.output
+    assert "  removed     0 no longer produced" in unchanged.output
     assert "cache " not in unchanged.output
     assert "From the cache" in runner.invoke(app, ["ask", ASKED]).output
 
-    # The page on leave now says eighteen weeks: another chunk, under the same settings.
-    write_snapshot(
-        tmp_path / "data",
-        "a" * 40,
-        {
-            "people/leave.md": (
-                '---\ntitle: "Leave"\n---\n\n'
-                "## Parental leave\n\nNew parents get eighteen weeks of paid leave."
-            ),
-            "finance/expenses.md": "## Laptops\n\nExpense a laptop up to one thousand dollars.",
-        },
-    )
+
+@pytest.mark.parametrize(
+    ("pages", "embedded", "removed"),
+    [
+        # A page more: something is embedded, and nothing removed.
+        (
+            {
+                "people/leave.md": LEAVE_PAGE,
+                "finance/expenses.md": EXPENSES_PAGE,
+                "travel/trains.md": TRAVEL_PAGE,
+            },
+            1,
+            0,
+        ),
+        # A page fewer: something is removed, and nothing embedded.
+        ({"people/leave.md": LEAVE_PAGE}, 0, 1),
+    ],
+    ids=["only embedding", "only removing"],
+)
+def test_indexing_empties_every_cache_of_the_commit_whatever_it_changed(
+    cached_ask: Counted, tmp_path: Path, pages: dict[str, str], embedded: int, removed: int
+) -> None:
+    """The cache is named by the settings, and an index can change under the same settings.
+
+    One index also serves many caches: reranking, the answer model and the number of
+    passages change the cache's name and not the index's.
+    """
+    runner.invoke(app, ["ask", ASKED])
+    settings = get_settings()
+    store = wiring.make_store(settings)
+    reranked = settings.model_copy(update={"rerank": True})
+    assert reranked.collection_name == settings.collection_name, "one index for both"
+    under_other_settings = wiring.make_answer_store(reranked, store)
+    under_other_settings.put(an_entry(), [1.0] + [0.0] * 63)
+    # Answers cached from another commit's index, and something that is no cache of ours.
+    of_another_commit = QdrantAnswerStore(store.client, "answers-bbbbbbbb-0123456789abcdef")
+    of_another_commit.put(an_entry(), [1.0] + [0.0] * 63)
+    QdrantAnswerStore(store.client, "answers-of-the-survey").put(an_entry(), [1.0] + [0.0] * 63)
+
+    # The snapshot again from nothing, so that a page that is no longer named is gone.
+    shutil.rmtree(tmp_path / "data" / "handbook")
+    write_snapshot(tmp_path / "data", "a" * 40, pages)
     changed = runner.invoke(app, ["index"])
 
     assert changed.exit_code == 0, changed.output
-    assert "  embedded    1 new" in changed.output
+    assert f"  embedded    {embedded} new" in changed.output
+    assert f"  removed     {removed} no longer produced" in changed.output
     assert (
-        "  cache       1 cached answers removed: the index they were written from has changed"
+        "  cache       2 cached answers removed: the index they were written from has changed"
         in changed.output
     )
     assert cached_answers().held().answers == 0
+    assert under_other_settings.held().answers == 0, "served again under those settings, else"
+    # Emptied and kept, both of them.
+    assert store.client.collection_exists(under_other_settings.collection)
+    assert store.client.collection_exists(cached_answers().collection)
+    assert of_another_commit.held().answers == 1
+    assert QdrantAnswerStore(store.client, "answers-of-the-survey").held().answers == 1
     again = runner.invoke(app, ["ask", ASKED])
     assert "From the cache" not in again.output
     assert cached_ask.asked == [ASKED, ASKED]
+
+
+def an_entry() -> Entry:
+    return Entry(
+        entry_id="00000000-0000-4000-8000-000000000001",
+        question="A question asked under other settings?",
+        comparable="a question asked under other settings",
+        scope="all",
+        segments=(Segment("An answer."),),
+        answered=True,
+        model="stand-in",
+        stop_reason="end_turn",
+        stored_at="2031-02-03T04:05:06+00:00",
+        by_meaning=True,
+    )
+
+
+def test_ask_makes_the_place_for_answers_before_it_looks_the_question_up(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    """Not the answer that is stored at the end: making it can take longer than the command
+    waits for that, and the answer would be lost and the collection left half made."""
+    seen: list[bool] = []
+
+    class Looks(Counted):
+        def generate(self, *args: Any, **kwargs: Any) -> Answer:
+            store = wiring.make_store(get_settings())
+            seen.append(store.client.collection_exists(cached_answers().collection))
+            raise GenerationError("The model is overloaded.")
+
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: Looks())
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["ask", ASKED])
+
+    assert result.exit_code == 1, "the model failed, so nothing was stored"
+    assert seen == [True], "and the collection was there before the model was asked"
+    assert cached_answers().held().answers == 0
 
 
 # An evaluation measures the answer model, so it never gets a cache. Asked twice, a
@@ -3374,6 +3504,127 @@ def guard_against_a_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("handbook_rag.wiring.make_verifier", never)
     monkeypatch.setattr("handbook_rag.cache.answers.AnswerCache.__init__", never)
     monkeypatch.setattr("handbook_rag.cache.store.QdrantAnswerStore.__init__", never)
+
+
+# Every command that measures, with arguments it takes. `eval-cache` measures the second
+# check and simulates a cache, and builds none either.
+MEASURES = {
+    "eval-retrieval": [],
+    "eval-compare": ["baseline", "v1"],
+    "eval-table": [],
+    "eval-answers": [],
+    "eval-judge": [],
+    "eval-support": [],
+    "eval-correct": [],
+    "eval-adversarial": [],
+    "eval-gate": [],
+    "eval-cache": [],
+    "golden-candidates": ["candidates.jsonl"],
+    "golden-check": [],
+    "golden-review": [],
+}
+# Every other command. `ask` and `serve` answer people and use the cache. The rest search,
+# build the index or look after the cache, and answer nothing.
+NOT_AN_EVALUATION = {
+    "snapshot",
+    "chunks",
+    "index",
+    "check-reuse",
+    "compare-collections",
+    "search",
+    "serve",
+    "mcp",
+    "ask",
+    "cache-status",
+    "cache-clear",
+}
+
+
+def commands() -> dict[str, Any]:
+    return {
+        info.name or str(getattr(info.callback, "__name__", "")).replace("_", "-"): info.callback
+        for info in app.registered_commands
+    }
+
+
+def test_every_command_is_marked_as_one_that_measures_or_listed_as_one_that_does_not() -> None:
+    """A new command has to be put on one side, which is the moment to ask which it is."""
+    marked = {
+        name for name, callback in commands().items() if getattr(callback, "measures_the_model", 0)
+    }
+
+    assert marked == set(MEASURES)
+    assert set(commands()) - marked == NOT_AN_EVALUATION
+    for name in commands():
+        if name.startswith(("eval-", "golden-")):
+            assert name in marked, name
+
+
+@pytest.mark.parametrize("command", MEASURES)
+def test_while_a_command_that_measures_runs_no_answer_cache_can_be_built_or_used(
+    command: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Whatever the command does inside, and whether it ends well: the switch is on."""
+    seen: list[str] = []
+
+    def probe(*_arguments: object, **_options: object) -> None:
+        # What any code inside the command would meet if it tried.
+        try:
+            wiring.make_answer_cache(
+                Settings(), store=wiring.make_memory_store("probe"), embedder=FakeEmbedder()
+            )
+        except CacheNotAllowed:
+            seen.append("building refused")
+        try:
+            answer_question(
+                "q",
+                retriever=None,  # type: ignore[arg-type]
+                generator=None,  # type: ignore[arg-type]
+                limit=1,
+                **{"cache": object()},  # type: ignore[arg-type]
+            )
+        except CacheNotAllowed:
+            seen.append("using refused")
+        raise RuntimeError("the probe ends the command here")
+
+    # The first thing each of these commands does is to read its settings or its files.
+    for name in ("get_settings", "_load_questions", "load_golden_set", "compare_runs"):
+        monkeypatch.setattr(f"handbook_rag.cli.{name}", probe)
+    monkeypatch.setattr("handbook_rag.cli.overview_of_runs", probe)
+
+    result = runner.invoke(app, [command, *MEASURES[command]])
+
+    assert isinstance(result.exception, RuntimeError), result.output
+    assert seen == ["building refused", "using refused"], command
+    # Afterwards a cache can be built again: the switch is for the command's time only.
+    assert not measuring()
+    assert wiring.make_answer_cache(
+        Settings(), store=wiring.make_memory_store("after"), embedder=FakeEmbedder()
+    )
+
+
+@pytest.mark.parametrize("command", sorted(NOT_AN_EVALUATION - {"serve", "mcp"}))
+def test_a_command_that_is_no_evaluation_runs_with_the_switch_off(
+    command: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[bool] = []
+
+    def probe(*_arguments: object, **_options: object) -> None:
+        seen.append(measuring())
+        raise RuntimeError("the probe ends the command here")
+
+    monkeypatch.setattr("handbook_rag.cli.get_settings", probe)
+    arguments = {
+        "search": ["leave"],
+        "ask": ["leave"],
+        "compare-collections": ["a", "b"],
+        "check-reuse": ["--reuse-from", "a" * 40],
+    }
+
+    result = runner.invoke(app, [command, *arguments.get(command, [])])
+
+    assert isinstance(result.exception, RuntimeError), result.output
+    assert seen == [False]
 
 
 def test_eval_answers_never_gets_a_cache_so_a_question_asked_twice_is_two_requests(

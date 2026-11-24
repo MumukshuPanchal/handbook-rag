@@ -91,7 +91,11 @@ CANDIDATES = 3
 FLOOR = 0.5
 """The cosine below which a stored question is no candidate at all. It is there to keep a
 cache from verifying questions that have nothing to do with each other. These pairs
-cannot choose it: every question in them is near a stored one by construction."""
+cannot choose it: every question in them is near a stored one by construction.
+
+It is the floor of every saved run. The answer cache's own default is higher. It was
+read from those runs with every pair in view, as a floor that changes nothing they
+served (``docs/evaluation.md``)."""
 SPLIT_SEED = "cache-pairs-split-1"
 """Names the one split the results are reported for. It is fixed here, and the command
 has no option for it. Whether a split is a typical one cannot be seen from a seed, which
@@ -314,6 +318,7 @@ def measure(
     candidates: int = CANDIDATES,
     floor: float = FLOOR,
     decline_candidates: bool = True,
+    held: Mapping[str, bool] | None = None,
     clock: Callable[[], float] = time.perf_counter,
 ) -> Measured:
     """Embed every question, find each new question's candidates, and verify them.
@@ -323,13 +328,19 @@ def measure(
     question is embedded by itself with ``embed_query``, which is how a question is
     embedded for search, so the vectors are the ones a cache would compare.
 
-    With ``decline_candidates`` off, the cache simulated is the one the application
-    builds (``handbook_rag.cache.answers``). It keeps a decline for the very question
-    that was declined and never offers it for another, so a stored question the handbook
-    does not answer is left out of every question's candidates, and the next nearest
-    takes its place. That such a question holds a decline is taken from the golden
+    With ``decline_candidates`` off, a stored question the handbook does not answer is
+    left out of every question's candidates, and the next nearest takes its place: the
+    answer cache keeps a decline for the very question that was declined and never
+    offers it for another. That such a question holds a decline is taken from the golden
     set's label. No model was asked, and a model that answers one of them anyway would
     leave an answer in a real cache.
+
+    ``held`` simulates the cache as it is built. It names each stored question the cache
+    holds a reply for, and says whether that reply may be served to a question worded
+    differently. Both come from replies a model really wrote and from the cache's own
+    rules (``evals/cache_replies.py``), not from a label. A stored question that is not
+    named, or may not be served, is no candidate. The two ways of leaving stored
+    questions out are not combined: with ``held``, ``decline_candidates`` stays on.
 
     A stored question that has the very words asked is never a candidate. That happens
     in the pairs whose other question is a golden question: its own entry would be the
@@ -354,7 +365,15 @@ def measure(
 
     stored = [(question.id, question.question, vector(question.question)) for question in golden]
     texts = {question_id: text for question_id, text, _ in stored}
-    declines = frozenset() if decline_candidates else unanswered_questions(golden)
+    if held is not None and not decline_candidates:
+        raise ValueError(
+            "Stored questions are left out by the golden set's label or by the replies a "
+            "cache would hold, not by both."
+        )
+    if held is None:
+        left_out = frozenset() if decline_candidates else unanswered_questions(golden)
+    else:
+        left_out = frozenset(question.id for question in golden if not held.get(question.id))
     near: dict[str, list[tuple[float, str]]] = {}
     own_cosine: dict[str, float] = {}
     above: dict[str, int] = {}
@@ -375,7 +394,7 @@ def measure(
             cosine = _cosine(entry, asked)
             if question_id == pair.question_id:
                 own_cosine[pair.pair] = cosine
-            if cosine >= floor and question_id not in declines:
+            if cosine >= floor and question_id not in left_out:
                 ranked.append((cosine, question_id))
         # Nearest first. Two stored questions at the same distance keep the order of their ids.
         ranked.sort(key=lambda found: (-found[0], found[1]))
@@ -410,7 +429,8 @@ def measure(
             )
             for pair in pairs
         ],
-        stored=len(stored),
+        # With the replies of an answer run, the cache holds what that run left it.
+        stored=len(stored) if held is None else len(held),
         unanswered=unanswered_questions(golden),
         candidates=candidates,
         floor=floor,
@@ -647,7 +667,7 @@ def highest_wrong_serve(asked: Iterable[Asked], policy: str) -> WrongServe | Non
 
 
 def choose_threshold(asked: Sequence[Asked], policy: str) -> Threshold:
-    """The loosest threshold from which upwards nothing wrong is served to these questions.
+    """A threshold from which upwards nothing wrong is served to these questions.
 
     A false hit costs far more than a miss, so the rule allows none on the questions it
     sees: the threshold is put above the highest score at which a wrong answer would be
@@ -749,6 +769,7 @@ def summarise(
     seed: str = SPLIT_SEED,
     other_splits: int = OTHER_SPLITS,
     decline_candidates: bool = True,
+    stored_replies: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Every figure of the measurement, from the scores and candidates of each pair.
 
@@ -761,6 +782,10 @@ def summarise(
     so and count what was left out. With it on they are exactly what they were before
     the option existed, so the figures of the first saved run can still be worked out
     again from its rows.
+
+    ``stored_replies`` is what a run filled from the replies of an answer run held
+    (``StoredReplies.figures``). It is recorded with the figures as it is given: it
+    describes the replies, and the rows cannot give it again.
     """
     agreed = [question for question in asked if question.pair.agreed]
     disputed = [question for question in asked if not question.pair.agreed]
@@ -990,6 +1015,8 @@ def summarise(
                 for kind in KINDS
             },
         }
+    if stored_replies is not None:
+        figures["cache_view"]["stored_replies"] = dict(stored_replies)
     return figures
 
 
@@ -1285,6 +1312,7 @@ def write_cache_run(
     measured_on: datetime.date,
     seed: str = SPLIT_SEED,
     other_splits: int = OTHER_SPLITS,
+    stored_replies: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write a score for every pair, what the cache did with every question, and the figures.
 
@@ -1304,6 +1332,7 @@ def write_cache_run(
         seed=seed,
         other_splits=other_splits,
         decline_candidates=measured.decline_candidates,
+        stored_replies=stored_replies,
     )
     split = split_pairs(agreed_pairs(q.pair for q in measured.asked), seed=seed)
     thresholds = {

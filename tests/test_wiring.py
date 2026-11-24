@@ -2,6 +2,7 @@ import dataclasses
 import hashlib
 import json
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
 from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT, build_numbered_prompt
+from handbook_rag.generate.models import Answer, Segment
 from handbook_rag.generate.prompt import SYSTEM_PROMPT
 from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.store import QdrantVectorStore
@@ -490,7 +492,7 @@ DECIDES_NO_ANSWER: dict[str, Any] = {
     "cache_mode": "exact",
     "cache_threshold": 0.99,
     "cache_candidates": 5,
-    "cache_floor": 0.7,
+    "cache_floor": 0.6,
     "cache_verifier_model": "another/nli-model",
     "api_host": "0.0.0.0",
     "api_port": 9000,
@@ -685,9 +687,9 @@ def test_the_retriever_and_the_cache_share_one_embedding_model(
     monkeypatch.setattr(wiring, "make_sparse_encoder", lambda _settings: FakeSparseEncoder())
     store = stores()
 
-    def build(cached: bool = True, **settings: Any) -> tuple[AnswerCache | None, int]:
+    def build(**settings: Any) -> tuple[AnswerCache | None, int]:
         built.clear()
-        _, cache = wiring.make_retriever_and_cache(Settings(**settings), store, cached=cached)
+        _, cache = wiring.make_retriever_and_cache(Settings(**settings), store)
         return cache, len(built)
 
     both, loads = build()
@@ -699,7 +701,55 @@ def test_the_retriever_and_the_cache_share_one_embedding_model(
     keyword, loads = build(retrieval_mode="sparse", cache_mode="exact")
     assert keyword is not None
     assert (keyword.mode, loads) == ("exact", 1)
-    # A caller with no use for a cache gets none, whatever the settings say.
-    assert build(cached=False) == (None, 1)
-    assert build(cached=False, retrieval_mode="sparse") == (None, 0)
+    # Switched off, there is no cache, and the search loads what it needs itself.
     assert build(cache_mode="off") == (None, 1)
+
+
+def test_the_cache_the_settings_build_stores_an_answer_without_making_its_caller_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The command and the service both get this cache. Stored in the foreground, an
+    answer would wait for the store before it reached whoever asked."""
+    release, writing, stored = threading.Event(), threading.Event(), []
+
+    def slow_put(self: QdrantAnswerStore, entry: Any, vector: Any) -> None:
+        writing.set()
+        assert release.wait(5.0), "the test never let the store go on"
+        stored.append(entry.question)
+
+    monkeypatch.setattr(QdrantAnswerStore, "put", slow_put)
+    cache = make_answer_cache(Settings(cache_mode="exact"), store=stores(), embedder=FakeEmbedder())
+    assert cache is not None
+    answer = Answer(
+        question="How long is leave?",
+        segments=(Segment("Sixteen weeks."),),
+        answered=True,
+        model="stand-in",
+        stop_reason="end_turn",
+    )
+
+    cache.store(cache.lookup("How long is leave?"), answer)
+
+    assert writing.wait(5.0), "the write has begun, in a thread of its own"
+    assert stored == [], "and store() came back before it ended"
+    release.set()
+    assert cache.close() is True
+    assert stored == ["How long is leave?"]
+
+
+def test_the_commit_of_a_caches_name_is_how_every_cache_of_that_commit_is_found() -> None:
+    settings = Settings()
+    names = {
+        answer_cache_collection(settings),
+        answer_cache_collection(Settings(rerank=True)),
+        answer_cache_collection(Settings(answer_context_chunks=3)),
+    }
+
+    assert wiring.answer_cache_commit(settings) == "e645aac6"
+    assert len(names) == 3
+    for name in names:
+        assert name.startswith(f"answers-{wiring.answer_cache_commit(settings)}-")
+    # A commit named by a word is held as a collection's name can hold it.
+    odd = Settings(handbook_commit="feature/new-pages")
+    assert wiring.answer_cache_commit(odd) == "feature"
+    assert re.fullmatch(r"answers-feature-[0-9a-f]{16}", answer_cache_collection(odd))

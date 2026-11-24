@@ -25,6 +25,7 @@ from handbook_rag import wiring
 from handbook_rag.api import create_app
 from handbook_rag.config import Settings
 from handbook_rag.index.indexer import index_chunks
+from handbook_rag.measuring import measuring
 from tests.support import FakeEmbedder, FakeSparseEncoder, make_chunk
 
 pytestmark = pytest.mark.live
@@ -100,6 +101,9 @@ def read_events(lines: Iterator[str]) -> Iterator[tuple[str, Any]]:
 
 
 def test_a_real_question_is_answered_over_http_as_a_stream_of_events(server: str) -> None:
+    # Every live test runs with the answer cache switched off (conftest.py): this one is
+    # here to see what the model writes today.
+    assert measuring()
     with (
         httpx.Client(timeout=ANSWER_SECONDS) as client,
         client.stream(
@@ -122,6 +126,7 @@ def test_a_real_question_is_answered_over_http_as_a_stream_of_events(server: str
     assert "[1]" in answer["answer"]
     assert [source["doc_id"] for source in answer["sources"]] == ["people/leave.md"]
     assert answer["stop_reason"] == "end_turn"
+    assert (answer["cached"], answer["requests"]) == (None, 1), "the model wrote it just now"
     assert answer["model"].startswith("gemini-")
     assert answer["usage"]["input_tokens"] > 0
     assert answer["usage"]["output_tokens"] > 0

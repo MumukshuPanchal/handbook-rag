@@ -150,13 +150,13 @@ answer                                  1781.9 ms   1 request
 | `handbook_rag.cache.candidates` | How many stored questions the second model was asked about |
 | `handbook_rag.cache.similarities` | The cosine of each candidate, nearest first |
 | `handbook_rag.cache.entails_forward`, `handbook_rag.cache.entails_backward` | What the second model said of each candidate, in the same order: that the stored question implies the new one, and the other way round. The weaker of the two is compared with the threshold |
-| `handbook_rag.cache.failure` | When a tier could not be asked: the kind of error. The lookup then counts as a miss, and the span is not marked as failed |
+| `handbook_rag.cache.failure` | When a tier could not be asked: the kind of error, or `timeout` when the lookup was given up after its 2 seconds. The lookup then counts as a miss, and the span is not marked as failed |
 
 For the near-miss above the three lists held one entry each: a cosine of 0.895544, and 0.092647 and 0.042248 from the second model. With them a trace says why a stored answer was served or was not. `cache.verify` records the second model's name and how many pairs it read. The two calls to the vector store name the cache's own collection in `db.collection.name`.
 
 **The stored questions are questions that people asked**, so they are recorded only when content is on: `handbook_rag.cache.questions` then lists the stored question of each candidate. In the check, with content off, none of the questions asked was in any span.
 
-The answer is stored after the `answer` span has closed, by a thread of its own, and leaves no span: a failure to store is logged. When the service starts, loading the second model and asking it once is the span `cache.warm_up`, which took 1,106.0 ms in the check.
+The answer is stored after the `answer` span has closed, by a thread of its own, and leaves no span: a failure to store is logged, and so is an answer that was still waiting to be stored when the process ended. When the service starts, loading the second model and asking it once is the span `cache.warm_up`, which took 1,106.0 ms in the check. A command loads the second model only when a stored question is near the one asked. That is the span `cache.load_verifier` under `cache.lookup`, and its time does not count towards the lookup's 2 seconds. The check was made before that span existed, and before a lookup had a time limit.
 
 ## Through the HTTP API
 
@@ -175,6 +175,7 @@ Start the service with `HANDBOOK_RAG_TRACING=true make serve`.
 | `answer` | One question, from search to answer | `answered`, `query.chars`, `requests`, `fallback` |
 | `cache.lookup` | What the answer cache did with the question, when the caller has a cache | The table in the section on a cached answer, above |
 | `cache.verify` | The cache's second model, when a stored question was near | `model` and `pairs` |
+| `cache.load_verifier` | A command loading the cache's second model, the first time a stored question was near | `model` |
 | `generate_content <model>` or `chat <model>` | One request to the language model; an answer can have several | The table in the section above |
 | `search` | The whole search: the request to `/search`, or the search inside an answer | `mode` (for `/search`), and the ids, pages and scores of what was returned |
 | `retrieve.reranked` | Search plus reranking, when reranking is on | The final order |

@@ -32,10 +32,12 @@ services:
       # The answer cache, in the mode that is also the default outside Docker (ADR 0020):
       # an answer stored earlier is served again to the same question, and to one that a
       # second model judges to mean the same. With a key in .env, the first start
-      # downloads that model with the others into the model-cache volume (552 MB on
+      # downloads that model with the others into the model-cache volume (552 MiB on
       # disk when measured on the development laptop), and the container holds it in
-      # memory. Without a key no cache is built and nothing more is downloaded.
-      # Set it to exact for the same question only, with no third model, or to off.
+      # memory. If it cannot be downloaded, the API does not start, and its log says
+      # which setting to change. Without a key no cache is built and nothing more is
+      # downloaded. Set it to exact for the same question only, with no third model,
+      # or to off.
       HANDBOOK_RAG_CACHE_MODE: semantic
       # Empty when .env has no key, which the application treats as no key.
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -63,8 +65,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
-      # The first start downloads the models, which takes a while.
-      start_period: 180s
+      # The first start downloads the models, which takes a while: the embedding
+      # model, and with a key in .env the answer cache's second model, 552 MiB more.
+      # Ten minutes allow for a slow line. How long the download takes in a container
+      # was not measured.
+      start_period: 600s
     # No restart policy, unlike the two services below: the API holds port 8000, which
     # `make serve` also wants, so it should not come back by itself.
 

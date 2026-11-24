@@ -253,8 +253,8 @@ def test_the_answer_cache_matches_by_meaning_unless_told_otherwise() -> None:
     settings = Settings()
 
     assert settings.cache_mode == "semantic", "the project owner's decision (ADR 0020)"
-    assert settings.cache_threshold == 0.8669
-    assert (settings.cache_candidates, settings.cache_floor) == (3, 0.5)
+    assert settings.cache_threshold == 0.91
+    assert (settings.cache_candidates, settings.cache_floor) == (3, 0.7)
     assert settings.cache_verifier_model == "cross-encoder/nli-deberta-v3-small"
 
 

@@ -96,6 +96,10 @@ NOT_FINISHED = "The answer could not be finished."
 logger = logging.getLogger(__name__)
 
 
+class CacheStartError(RuntimeError):
+    """The answer cache's second model could not be loaded when the service started."""
+
+
 class SearchRequest(BaseModel):
     """A question to search the handbook for."""
 
@@ -193,8 +197,10 @@ class AskRequest(BaseModel):
         strict=True,
         description=(
             "False asks the answer model, also when the service holds a stored answer "
-            "for the question. The new answer is stored in its place. It has no effect "
-            "on a service whose cache is switched off."
+            "for the question. The new answer takes the stored one's place if it is one "
+            "the cache keeps. A reply that was cut off, for one, is not kept, and the "
+            "stored answer then stays. It has no effect on a service whose cache is "
+            "switched off."
         ),
     )
 
@@ -540,6 +546,24 @@ def _answer_model(settings: Settings) -> Generator | None:
         return None
 
 
+def _warm_up(cache: AnswerCache, settings: Settings) -> None:
+    """Load the cache's second model and ask it once, or say which settings to change.
+
+    A service that cannot load a model it is set to use does not start. The error names
+    the settings, because the model's own error names none of them.
+    """
+    try:
+        cache.warm_up()
+    except Exception as error:
+        raise CacheStartError(
+            f"The answer cache's second model, {settings.cache_verifier_model}, could not be "
+            f"loaded: {type(error).__name__}: {error}. HANDBOOK_RAG_CACHE_MODE=semantic "
+            "needs it. Its files are downloaded the first time, so check the network, and "
+            "the model's name in HANDBOOK_RAG_CACHE_VERIFIER_MODEL. To start without it, "
+            "set HANDBOOK_RAG_CACHE_MODE to exact or to off."
+        ) from error
+
+
 # The addresses whose requests are not worth a trace: health probes, and the demo page
 # and its two files.
 UNTRACED_PATHS = frozenset({"/health", *demo.FILES})
@@ -602,6 +626,7 @@ def create_app(
             and app.state.generator is not None
             and isinstance(held, QdrantVectorStore)
         ):
+            # Only a service that can answer has a use for stored answers.
             app.state.retriever, app.state.cache = wiring.make_retriever_and_cache(serving, held)
         else:
             app.state.retriever = wiring.make_retriever(serving, store=held)
@@ -609,10 +634,15 @@ def create_app(
         with suppress(VectorStoreError), stage("warm_up"):
             app.state.retriever.retrieve(WARM_UP_QUERY, limit=1)
         if app.state.cache is not None:
+            # The collection the answers are kept in is made now, before any question.
+            # Made by the first answer that is stored, it would be made while questions
+            # are already being looked up. A store that is not there is logged, and the
+            # service starts without it, as it does for its index.
+            app.state.cache.prepare()
             # In the mode `semantic` this loads the verifier and asks it once. The first
             # question that has a stored one near it then waits for neither.
             with stage("cache.warm_up", mode=app.state.cache.mode):
-                app.state.cache.warm_up()
+                _warm_up(app.state.cache, settings)
         app.state.answer_slots = Slots(settings.api_max_answers_in_flight)
         try:
             yield

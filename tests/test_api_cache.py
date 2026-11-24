@@ -6,6 +6,7 @@ leaves the machine.
 """
 
 import json
+import logging
 import threading
 from typing import Any
 
@@ -14,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from handbook_rag import wiring
-from handbook_rag.api import create_app
+from handbook_rag.api import CacheStartError, create_app
 from handbook_rag.cache.answers import AnswerCache
 from handbook_rag.cache.verify import Verification
 from handbook_rag.config import Settings
@@ -353,10 +354,56 @@ def test_a_verifier_that_cannot_be_loaded_stops_the_service_from_starting(
     model = Writing(("Sixteen weeks.", (0,)))
 
     with (
-        pytest.raises(OSError, match="the Hub is down"),
+        pytest.raises(CacheStartError) as raised,
         TestClient(built_by_the_service(Settings(), model)),
     ):
         pass
+
+    # The model's own error names no setting. This one says which to change.
+    message = str(raised.value)
+    assert "cross-encoder/nli-deberta-v3-small" in message
+    assert "OSError: the model is not on disk and the Hub is down" in message
+    assert "HANDBOOK_RAG_CACHE_MODE=semantic needs it" in message
+    assert "HANDBOOK_RAG_CACHE_VERIFIER_MODEL" in message
+    assert "set HANDBOOK_RAG_CACHE_MODE to exact or to off" in message
+    assert isinstance(raised.value.__cause__, OSError)
+
+
+def test_the_service_has_made_the_caches_collection_before_it_takes_a_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Made by the first answer that is stored, it would be made while questions are
+    already being looked up, and for those seconds a lookup finds nothing or fails."""
+    Models(monkeypatch)
+    model = Writing(("Sixteen weeks.", (0,)))
+
+    with TestClient(built_by_the_service(Settings(), model)) as client:
+        store: Any = client.app.state.cache._store  # type: ignore[attr-defined]
+        assert store._client.collection_exists(store.collection)
+        made = store._client.get_collection(store.collection).config.params.vectors
+        assert made.size == FakeEmbedder.dimension, "in the size of the embedding model"
+        assert model.asked == [], "before any question"
+
+
+def test_a_service_whose_store_is_down_starts_all_the_same_and_logs_the_cache(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    Models(monkeypatch)
+    model = Writing(("Sixteen weeks.", (0,)))
+    settings = Settings(qdrant_url="http://127.0.0.1:1")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        TestClient(create_app(settings, generator=model)) as client,
+    ):
+        cache = client.app.state.cache  # type: ignore[attr-defined]
+        assert isinstance(cache, AnswerCache), "the cache is there, for when the store is back"
+        refused = client.post("/ask", json={"query": QUESTION})
+
+    assert "the answer cache could not be prepared" in caplog.text
+    # The search has no store either, so there is no answer, and the cache did not hide that.
+    assert refused.status_code == 503
+    assert model.asked == []
 
 
 def test_a_score_from_the_verifier_reaches_the_caller_as_the_weaker_direction() -> None:

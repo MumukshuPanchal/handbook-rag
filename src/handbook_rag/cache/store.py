@@ -5,10 +5,20 @@ run. A point is one stored answer. Its vector is the embedding of the question t
 answer was written for. Its payload is the answer with the passages it cites, whole, so
 that serving it needs nothing from the handbook's collection.
 
-The collection is made when the first answer is stored. Until then, and after the cache
-has been emptied, reading it finds nothing, which is not a failure.
+The collection is made before the first question is looked up: by a service when it
+starts, and by a command before it asks (:meth:`QdrantAnswerStore.ensure`). Making it
+takes the store seconds on a busy machine, and a collection that the first write made
+would be made while questions were already being looked up: for those seconds a lookup
+finds nothing, or fails. A service that started without its store makes the collection
+with its first write after all, and has those seconds once.
+
+Emptying the cache removes the answers and keeps the collection, so that a service that
+runs under the same settings does not meet a collection that is being made again. Only a
+collection left behind under other settings is removed whole. Reading a collection that
+is not there finds nothing, which is not a failure.
 """
 
+import re
 import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, suppress
@@ -25,6 +35,14 @@ from handbook_rag.tracing import stage
 
 COLLECTION_PREFIX = "answers-"
 """How the name of every collection of cached answers starts, whatever settings it is for."""
+# A name as collection_name makes it: the prefix, a commit as a collection name holds it,
+# and sixteen hexadecimal digits for the settings.
+_NAME = re.compile(rf"{COLLECTION_PREFIX}(?P<commit>[a-z0-9-]*)-[0-9a-f]{{16}}")
+# The two fields every search by meaning filters on, and the kind of index each has.
+_INDEXED = {
+    "scope": models.PayloadSchemaType.KEYWORD,
+    "by_meaning": models.PayloadSchemaType.BOOL,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +83,10 @@ class Held:
 
 class AnswerStore(Protocol):
     """What the answer cache needs of the place its answers are kept."""
+
+    def ensure(self, dimension: int) -> None:
+        """Make the place ready for vectors of this size, before anything is looked up."""
+        ...
 
     def get(self, entry_id: str) -> Entry | None:
         """The entry stored under this id, or ``None``."""
@@ -143,15 +165,19 @@ class QdrantAnswerStore:
     def put(self, entry: Entry, vector: Sequence[float]) -> None:
         point = models.PointStruct(id=entry.entry_id, vector=list(vector), payload=_payload(entry))
         try:
-            self._ensure(len(vector))
+            # Nothing to do when the collection was made before, as it should have been.
+            self.ensure(len(vector))
             self._client.upsert(self._collection, points=[point], wait=True)
         except Exception as error:
+            # Only a collection that has gone is worth a second try. Any other failure,
+            # a refused point for one, would fail the same way again.
             if not self._nothing_stored(error):
                 raise
-            # The collection was removed after this store had made it: the cache was
-            # emptied while the service ran. It is made again, and the answer is stored.
+            # The collection was removed after this store had made it, as
+            # `cache-clear --all` does to the collections of other settings. It is made
+            # again, and the answer is stored.
             self._made = False
-            self._ensure(len(vector))
+            self.ensure(len(vector))
             self._client.upsert(self._collection, points=[point], wait=True)
 
     def held(self) -> Held:
@@ -173,21 +199,49 @@ class QdrantAnswerStore:
             raise
 
     def clear(self) -> int:
-        """Remove every stored answer, and the collection with them. Returns how many."""
+        """Remove every stored answer and keep the collection. Returns how many there were.
+
+        The collection stays, with its indexes. A service that runs on this collection
+        goes on looking questions up and storing answers, and does not meet a collection
+        that is being made again.
+        """
+        removed = self.held().answers
+        if removed:
+            self._client.delete(
+                self._collection,
+                # A filter without a condition holds for every point.
+                points_selector=models.FilterSelector(filter=models.Filter()),
+                wait=True,
+            )
+        return removed
+
+    def remove(self) -> int:
+        """Remove the collection with everything in it. Returns how many answers it held.
+
+        For a collection that was left behind under other settings and is read by nothing
+        any more. A service that does still run under those settings makes the collection
+        again with the next answer it stores.
+        """
         removed = self.held().answers
         if self._client.collection_exists(self._collection):
             self._client.delete_collection(self._collection)
         self._made = False
         return removed
 
-    def _ensure(self, dimension: int) -> None:
-        """Make the collection if it is not there. Asked once, then remembered."""
+    def ensure(self, dimension: int) -> None:
+        """Make the collection and its two indexes, whichever of them is missing.
+
+        Asked once for each store, then remembered. When everything is there, that is one
+        question to the store. A collection that exists without an index, because the
+        process that was making it ended in between, gets the index now.
+        """
         if self._made:
             return
         with self._making:
             if self._made:
                 return
-            if not self._client.collection_exists(self._collection):
+            indexed = self._indexed_fields()
+            if indexed is None:
                 try:
                     self._client.create_collection(
                         self._collection,
@@ -199,18 +253,23 @@ class QdrantAnswerStore:
                     # Another process may have made it in the same moment.
                     if not self._client.collection_exists(self._collection):
                         raise
-                # The two fields every search by meaning filters on.
-                self._client.create_payload_index(
-                    self._collection,
-                    field_name="scope",
-                    field_schema=models.PayloadSchemaType.KEYWORD,
-                )
-                self._client.create_payload_index(
-                    self._collection,
-                    field_name="by_meaning",
-                    field_schema=models.PayloadSchemaType.BOOL,
-                )
+                indexed = set()
+            for field, kind in _INDEXED.items():
+                if field not in indexed:
+                    self._client.create_payload_index(
+                        self._collection, field_name=field, field_schema=kind
+                    )
             self._made = True
+
+    def _indexed_fields(self) -> set[str] | None:
+        """The payload fields the collection has an index for. ``None``: no collection."""
+        try:
+            described = self._client.get_collection(self._collection)
+        except Exception as error:
+            if self._nothing_stored(error):
+                return None
+            raise
+        return set(described.payload_schema or {})
 
     def _nothing_stored(self, error: Exception) -> bool:
         """Whether a failed call means only that the collection does not exist.
@@ -238,10 +297,29 @@ class QdrantAnswerStore:
             yield span
 
 
-def answer_collections(client: QdrantClient) -> list[str]:
-    """Every collection of cached answers in a store, for whatever settings it was made."""
-    names = (item.name for item in client.get_collections().collections)
-    return sorted(name for name in names if name.startswith(COLLECTION_PREFIX))
+def collection_name(commit: str, settings: str) -> str:
+    """The name of the collection for one handbook commit under one set of settings.
+
+    ``commit`` is the start of the commit as a collection name can hold it, for a person
+    to read, and ``settings`` sixteen hexadecimal digits that stand for everything else
+    that decides an answer (``wiring.answer_cache_collection``).
+    """
+    return f"{COLLECTION_PREFIX}{commit}-{settings}"
+
+
+def answer_collections(client: QdrantClient, *, commit: str | None = None) -> list[str]:
+    """The collections of cached answers in a store, for whatever settings they were made.
+
+    Only a name of the form :func:`collection_name` gives is taken for one. A collection
+    that something else made is left alone, also when its name starts the same way.
+    With ``commit``, only the collections of that handbook commit.
+    """
+    found = []
+    for item in client.get_collections().collections:
+        named = _NAME.fullmatch(item.name)
+        if named is not None and commit in (None, named["commit"]):
+            found.append(item.name)
+    return sorted(found)
 
 
 def _is(field: str, value: str | bool) -> models.FieldCondition:

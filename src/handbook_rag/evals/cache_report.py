@@ -56,17 +56,27 @@ def _share(estimate: Mapping[str, Any] | None) -> str:
     return f"{estimate['mean']:.3f} ({estimate['low']:.3f} to {estimate['high']:.3f})"
 
 
-def _whose(serve: Mapping[str, Any]) -> str:
+def _whose(serve: Mapping[str, Any], replies: bool) -> str:
     whose = "its own golden question" if serve["own"] else "another stored question"
-    # What a cache holds for a question the handbook does not answer is a decline.
-    return f"{whose} {serve['served']}{', a stored decline' if serve['stored_unanswered'] else ''}"
+    if not serve["stored_unanswered"]:
+        return f"{whose} {serve['served']}"
+    # By the golden set's label, what a cache holds for a question the handbook does not
+    # answer is a decline. Filled with a model's replies, it holds what the model wrote,
+    # and a decline is never served there.
+    what = "a question the handbook does not answer" if replies else "a stored decline"
+    return f"{whose} {serve['served']}, {what}"
 
 
-def _serve(serve: Mapping[str, Any] | None) -> str:
+def _serve(serve: Mapping[str, Any] | None, replies: bool = False) -> str:
     """A wrong serve in one phrase, or ``none`` where a half holds no such question."""
     if serve is None:
         return "none"
-    return f"{serve['pair']} ({serve['group']}) at {serve['score']:.4f}, {_whose(serve)}"
+    return f"{serve['pair']} ({serve['group']}) at {serve['score']:.4f}, {_whose(serve, replies)}"
+
+
+def _from_replies(summary: Mapping[str, Any]) -> bool:
+    """Whether the run's cache was filled with the replies of an answer run."""
+    return "stored_replies" in summary["cache_view"]
 
 
 def _models(summary: Mapping[str, Any]) -> list[str]:
@@ -133,6 +143,17 @@ def _chosen(summary: Mapping[str, Any]) -> list[str]:
             f"  a stored decline is no candidate: the {declines['left_out']} are left out, and "
             f"each question meets the nearest of the other {declines['candidates_from']}"
         )
+    replies = cache.get("stored_replies")
+    if replies is not None:
+        kept_out = replies["kept_from_the_second_tier"]
+        lines.append(
+            f"  filled with the replies of {replies['from']}: {replies['kept']} kept, and "
+            f"{replies['candidates']} of them candidates by the cache's own rule"
+        )
+        lines.append(
+            "  kept from the second tier: "
+            + ", ".join(f"{len(ids)} {reason}" for reason, ids in kept_out.items())
+        )
     above = cache["stored_above_floor"]
     lines.append(
         f"  the floor left between {above['min']:.0f} and {above['max']:.0f} stored questions "
@@ -164,13 +185,13 @@ def _chosen(summary: Mapping[str, Any]) -> list[str]:
         )
     lines += [
         "",
-        "  Chosen on the choosing half: the loosest threshold from which upwards nothing "
-        "wrong was served",
+        "  Chosen on the choosing half: above the highest score at which something wrong "
+        "was served, halfway to the next score",
         f"  {'score':<14}{'threshold':>10}   {'same served right':<19}set by",
     ]
     for policy, figures in cache["policies"].items():
         chose, by = figures[CHOOSING][SAME], figures["decided_by"]
-        set_by = "nothing wrong at any threshold" if by is None else _serve(by)
+        set_by = "nothing wrong at any threshold" if by is None else _serve(by, replies is not None)
         if figures["halfway_to"] is not None:
             set_by += f"; halfway to the next score, {figures['halfway_to']:.4f}"
         right = f"{chose[RIGHT]} of {chose['pairs']}"
@@ -207,7 +228,7 @@ def _reported(summary: Mapping[str, Any]) -> list[str]:
             f"{different['pairs']:<4}{share}".rstrip()
         )
         for wrong in figures["wrong_on_reporting"]:
-            lines.append(f"      wrong: {_serve(wrong)}")
+            lines.append(f"      wrong: {_serve(wrong, _from_replies(summary))}")
         for right in figures["right_only_by_the_margin"]:
             lines.append(
                 f"      right only because the threshold is halfway to the next score: "
@@ -237,9 +258,11 @@ def _tested(summary: Mapping[str, Any]) -> list[str]:
     for policy, figures in cache["policies"].items():
         for half in (CHOOSING, REPORTING):
             highest = figures["highest_wrong"][half]
-            lines.append(f"  {policy}, {half}, a near-miss: {_serve(highest[DIFFERENT])}")
+            replies = _from_replies(summary)
+            lines.append(f"  {policy}, {half}, a near-miss: {_serve(highest[DIFFERENT], replies)}")
             lines.append(
-                f"  {policy}, {half}, a rewording served another answer: {_serve(highest[SAME])}"
+                f"  {policy}, {half}, a rewording served another answer: "
+                f"{_serve(highest[SAME], replies)}"
             )
     for policy, found in above["policies"].items():
         named = ", ".join(

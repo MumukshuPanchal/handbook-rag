@@ -6,6 +6,7 @@ fixtures: no snapshot, no index and no answer model.
 
 import datetime
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,9 @@ from tests.evals.test_cache_pairs import a_small_world
 from tests.support import FakeEmbedder
 
 runner = CliRunner()
+# The colour codes a terminal gets. In CI the usage errors come with them, and they can
+# stand in the middle of an option's name.
+COLOUR_CODES = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class StoppedClock:
@@ -213,7 +217,7 @@ def test_eval_cache_needs_at_least_one_candidate_and_a_floor_that_is_a_cosine(
         result = runner.invoke(app, ["eval-cache", *files, option, value])
 
         assert result.exit_code == 2, option
-        assert option in result.output
+        assert option in COLOUR_CODES.sub("", result.output)
 
 
 def test_eval_cache_has_no_option_for_the_split() -> None:

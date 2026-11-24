@@ -6,6 +6,7 @@ removed a case would show up there and not as a test that passes for the wrong r
 """
 
 import dataclasses
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -24,7 +25,8 @@ from handbook_rag.index.reuse import (
     find_reuse_source,
     read_previous_index,
 )
-from handbook_rag.index.store import QdrantVectorStore, ReadableStore
+from handbook_rag.index.sparse import SparseVector
+from handbook_rag.index.store import QdrantVectorStore, ReadableStore, VectorStoreError
 from handbook_rag.ingest.chunker import ChunkingConfig, chunk_document
 from handbook_rag.ingest.loader import load_documents
 from handbook_rag.ingest.models import Chunk
@@ -408,24 +410,28 @@ def leave_page_read_then_changed(
 ) -> tuple[list[Chunk], IndexReport, ExactEmbedder]:
     """The leave page indexed and read, then changed by someone else, then updated from.
 
-    Its first chunk's point is left alone. Its second is given another title, or
-    deleted, after the older collection was read and before its vectors are fetched.
+    Its first chunk's point is left alone. Its second is given another title or other
+    headings, or deleted, after the older collection was read and before its vectors
+    are fetched.
     """
     client = QdrantClient(":memory:")
     old = chunk_pages(tmp_path, {"people/leave.md": OLD_PAGES["people/leave.md"]}, OLD_COMMIT)
     old_store = QdrantVectorStore(client, "old")
     build(old_store, old)
     previous = read_previous_index(old_store)
-    if change == "retitled":
-        retitled = dataclasses.replace(old[1], title="Something else")
-        text = retitled.text_for_embedding
+    if change == "deleted":
+        old_store.delete_except({old[0].chunk_id})
+    else:
+        if change == "retitled":
+            changed = dataclasses.replace(old[1], title="Something else")
+        else:
+            changed = dataclasses.replace(old[1], heading_path=("Something else",))
+        text = changed.text_for_embedding
         old_store.upsert(
-            [retitled],
+            [changed],
             [ExactEmbedder().embed_query(text)],
             [FakeSparseEncoder().encode_query(text)],
         )
-    else:
-        old_store.delete_except({old[0].chunk_id})
     newer = [dataclasses.replace(chunk, source_commit=NEW_COMMIT) for chunk in old]
     report, embedder = build(
         QdrantVectorStore(client, "new"), newer, Reuse(old_store, previous.points)
@@ -433,12 +439,60 @@ def leave_page_read_then_changed(
     return newer, report, embedder
 
 
-@pytest.mark.parametrize("change", ["retitled", "deleted"])
+@pytest.mark.parametrize("change", ["retitled", "reheaded", "deleted"])
 def test_a_point_that_changed_after_it_was_read_is_not_reused(tmp_path: Path, change: str) -> None:
     newer, report, embedder = leave_page_read_then_changed(tmp_path, change)
 
     assert (report.reused, report.embedded) == (1, 1)
     assert embedder.embedded == [newer[1].text_for_embedding]
+
+
+def test_the_token_count_stored_is_the_newer_chunks_not_the_lenders() -> None:
+    client = QdrantClient(":memory:")
+    old_store, new_store = QdrantVectorStore(client, "old"), QdrantVectorStore(client, "new")
+    build(old_store, [dataclasses.replace(LEAVE, token_count=99)])
+    newer = dataclasses.replace(LEAVE, source_commit=NEW_COMMIT)
+
+    done = update(old_store, new_store, [newer])
+
+    assert done.report.reused == 1
+    assert new_store.stored_chunks([newer.chunk_id]) == {newer.chunk_id: newer}
+
+
+def test_an_update_removes_what_an_earlier_run_left_that_the_newer_commit_lacks(
+    tmp_path: Path,
+) -> None:
+    client = QdrantClient(":memory:")
+    old = chunk_pages(tmp_path, {"people/leave.md": OLD_PAGES["people/leave.md"]}, OLD_COMMIT)
+    old_store, new_store = QdrantVectorStore(client, "old"), QdrantVectorStore(client, "new")
+    build(old_store, old)
+    build(new_store, [make_chunk("Left behind by an earlier run.", doc_id="gone.md")])
+    newer = [dataclasses.replace(chunk, source_commit=NEW_COMMIT) for chunk in old]
+
+    done = update(old_store, new_store, newer)
+
+    assert (done.report.reused, done.report.removed) == (2, 1)
+    assert sorted(new_store.point_ids()) == sorted(chunk.chunk_id for chunk in newer)
+
+
+def test_a_lent_point_without_a_keyword_vector_gets_one_computed_from_its_text() -> None:
+    client = QdrantClient(":memory:")
+    old_store, new_store = QdrantVectorStore(client, "old"), QdrantVectorStore(client, "new")
+    old_store.ensure_collection(ExactEmbedder.dimension)
+    text = LEAVE.text_for_embedding
+    old_store.upsert([LEAVE], [ExactEmbedder().embed_query(text)], [SparseVector([], [])])
+    newer = dataclasses.replace(LEAVE, source_commit=NEW_COMMIT)
+
+    done = update(old_store, new_store, [newer])
+
+    assert (done.report.reused, done.report.embedded) == (1, 0)
+    stored = new_store.points([newer.chunk_id])[newer.chunk_id].sparse
+    expected = FakeSparseEncoder().encode_query(text)
+    assert expected.indices
+    # The store keeps a keyword vector in word order.
+    assert dict(zip(stored.indices, stored.values, strict=True)) == dict(
+        zip(expected.indices, expected.values, strict=True)
+    )
 
 
 def test_reuse_reports_its_progress_batch_by_batch(commits: Commits) -> None:
@@ -501,7 +555,8 @@ def test_a_page_whose_chunks_differ_only_in_their_commit_is_unchanged() -> None:
         {"url": "https://handbook.example.com/handbook/holidays/"},
         {"section": "benefits"},
         {"heading_path": ("Holidays",)},
-        {"start_char": 1, "end_char": 14},
+        {"start_char": 1},
+        {"end_char": 14},
         {"text": "Take 30 days."},
         {"token_count": 4},
     ],
@@ -514,6 +569,26 @@ def test_a_page_is_changed_when_anything_its_chunk_is_stored_with_differs(
 
 
 # Finding the older collection, and refusing one made with other models or chunking.
+
+
+def test_a_page_that_gained_a_chunk_is_changed() -> None:
+    store = QdrantVectorStore(QdrantClient(":memory:"), "old")
+    build(store, [LEAVE])
+    gained = make_chunk("Carry over five days.", heading_path=("Annual leave",))
+
+    changes = compare_pages(read_previous_index(store), [LEAVE, gained])
+
+    assert changes == PageChanges(added=[], changed=["people/leave.md"], removed=[], unchanged=[])
+
+
+def test_an_older_point_that_is_not_a_whole_chunk_stops_the_update() -> None:
+    client = QdrantClient(":memory:")
+    old_store = QdrantVectorStore(client, "old")
+    build(old_store, [LEAVE])
+    client.delete_payload("old", keys=["text"], points=[LEAVE.chunk_id])
+
+    with pytest.raises(VectorStoreError, match=f"Point {LEAVE.chunk_id} in old has no 'text'"):
+        read_previous_index(old_store)
 
 
 @pytest.fixture
@@ -535,9 +610,14 @@ def test_the_older_commits_collection_is_found_by_its_commit(store: QdrantVector
     )
 
 
-def test_a_commit_that_is_not_a_full_hash_is_refused(store: QdrantVectorStore) -> None:
+@pytest.mark.parametrize(
+    "commit",
+    [OLD_COMMIT[:12], OLD_COMMIT + "0", OLD_COMMIT.upper()],
+    ids=["short", "long", "upper"],
+)
+def test_a_commit_that_is_not_a_full_hash_is_refused(store: QdrantVectorStore, commit: str) -> None:
     with pytest.raises(ReuseError, match="not a full commit hash"):
-        find_reuse_source(store, Settings(handbook_commit=NEW_COMMIT), OLD_COMMIT[:12])
+        find_reuse_source(store, Settings(handbook_commit=NEW_COMMIT), commit)
 
 
 def test_the_collection_being_built_is_refused_as_a_source(store: QdrantVectorStore) -> None:
@@ -562,6 +642,11 @@ def test_a_commit_with_no_collection_at_all_is_refused(store: QdrantVectorStore)
             {"embedding_model": "BAAI/bge-base-en-v1.5"},
             "another embedding model (these settings use BAAI/bge-small-en-v1.5)",
             id="embedding model",
+        ),
+        pytest.param(
+            {"embedding_model": "BAAI/bge-small-en-v1.5b"},
+            "another embedding model (these settings use BAAI/bge-small-en-v1.5)",
+            id="embedding model whose name starts like this one",
         ),
         pytest.param(
             {"sparse_model": "Qdrant/bm42"},
@@ -594,14 +679,30 @@ def test_vectors_made_with_another_model_or_chunking_are_refused_by_name(
     assert "c" * 8 not in message
 
 
-def test_a_collection_of_that_commit_named_in_an_unknown_way_is_still_refused(
-    store: QdrantVectorStore,
+@pytest.mark.parametrize(
+    "rename",
+    [
+        pytest.param(lambda name: f"{name}-full-check", id="a word added at the end"),
+        pytest.param(
+            lambda name: name.replace("-qdrant-bm25-", "-extra-qdrant-bm25-"),
+            id="a word added in the middle",
+        ),
+    ],
+)
+def test_a_collection_of_that_commit_named_otherwise_is_not_said_to_have_other_settings(
+    store: QdrantVectorStore, rename: Callable[[str], str]
 ) -> None:
-    expected = Settings().collection_for(OLD_COMMIT)
-    odd = expected.replace("-qdrant-bm25-", "-extra-qdrant-bm25-")
+    # Such a name shows the same models and chunking, and may hide anything; so the
+    # refusal says only what the name shows.
+    odd = rename(Settings().collection_for(OLD_COMMIT))
     store.with_collection(odd).ensure_collection(dimension=8)
 
     with pytest.raises(ReuseError) as refused:
         find_reuse_source(store, Settings(handbook_commit=NEW_COMMIT), OLD_COMMIT)
 
-    assert f"The store holds {odd}, made with another set of settings." in str(refused.value)
+    message = str(refused.value)
+    assert (
+        f"The store holds {odd}, which is named otherwise, so what it was made with cannot be "
+        "read from its name." in message
+    )
+    assert "made with another" not in message

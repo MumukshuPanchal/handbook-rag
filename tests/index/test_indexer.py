@@ -70,7 +70,7 @@ def test_only_new_chunks_are_embedded_and_stale_ones_are_removed(
 
     assert (report.total, report.embedded, report.already_indexed, report.removed) == (2, 1, 1, 2)
     assert embedder.embedded == [new_chunk.text_for_embedding]
-    assert store.existing_ids([c.chunk_id for c in CHUNKS]) == {CHUNKS[0].chunk_id}
+    assert set(store.point_ids()) == {CHUNKS[0].chunk_id, new_chunk.chunk_id}
 
 
 def test_progress_is_reported_until_done(store: QdrantVectorStore) -> None:

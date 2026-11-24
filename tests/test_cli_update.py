@@ -286,8 +286,13 @@ def test_index_stores_again_a_chunk_whose_details_changed_under_the_same_id(
 # Checking reuse on a slice, and comparing two collections.
 
 
-def slice_command(root: Path, *extra: str) -> list[str]:
-    """The check-reuse command line, with a golden set whose evidence spans three pages."""
+def slice_command(
+    root: Path, *extra: str, evidence: Sequence[str] = tuple(sorted(OLD_PAGES))
+) -> list[str]:
+    """The check-reuse command line, with a golden set whose evidence is on these pages.
+
+    By default the evidence spans the three pages of the older commit.
+    """
     rows = [
         {
             "id": f"q{number}",
@@ -297,7 +302,7 @@ def slice_command(root: Path, *extra: str) -> list[str]:
             "type": "answerable",
             "origin": "hand-written",
         }
-        for number, doc_id in enumerate(sorted(OLD_PAGES), start=1)
+        for number, doc_id in enumerate(evidence, start=1)
     ]
     dataset = root / "questions.jsonl"
     dataset.write_text("".join(json.dumps(row) + "\n" for row in rows))
@@ -466,3 +471,142 @@ def test_after_a_reuse_the_rate_counts_only_the_time_spent_embedding(
     assert "reused      40 chunks' vectors, in 47.0 seconds" in result.output
     assert "time        50.0 seconds" in result.output
     assert "reusing 47.0, embedding 2.0" in result.output
+
+
+# What the review of these commands found.
+
+
+@pytest.mark.parametrize("manifest", [None, '{"commit": null}'], ids=["no manifest", "null"])
+def test_snapshot_refuses_to_replace_another_commit_whose_manifest_names_none(
+    monkeypatch: pytest.MonkeyPatch, upstream: Upstream, tmp_path: Path, manifest: str | None
+) -> None:
+    # As after a replacement that failed halfway: the clone still says what is there.
+    data_dir = tmp_path / "data"
+    snapshot_at(monkeypatch, upstream, data_dir, upstream.first_commit)
+    manifest_path = data_dir / "handbook" / "manifest.json"
+    if manifest is None:
+        manifest_path.unlink()
+    else:
+        manifest_path.write_text(manifest)
+
+    refused = snapshot_at(monkeypatch, upstream, data_dir, upstream.second_commit)
+
+    assert refused.exit_code == 1
+    assert f"holds the snapshot of commit {upstream.first_commit[:12]}" in refused.output
+    assert "25 days" in leave_page(data_dir)
+
+
+def test_snapshot_explains_a_manifest_it_cannot_read(
+    monkeypatch: pytest.MonkeyPatch, upstream: Upstream, tmp_path: Path
+) -> None:
+    data_dir = tmp_path / "data"
+    snapshot_at(monkeypatch, upstream, data_dir, upstream.first_commit)
+    (data_dir / "handbook" / "manifest.json").write_text("not json")
+
+    refused = snapshot_at(monkeypatch, upstream, data_dir, upstream.second_commit)
+
+    assert refused.exit_code == 1
+    assert isinstance(refused.exception, SystemExit)
+    assert "manifest.json cannot be read" in refused.output
+    assert "25 days" in leave_page(data_dir)
+
+
+def broken_older_point(handbook: Handbook) -> str:
+    """Strip the title from the payload of one point of the older collection. Its id."""
+    older = handbook.collection(OLD)
+    point_id = sorted(older.point_ids())[0]
+    handbook.client.delete_payload(older.collection, keys=["title"], points=[point_id])
+    return point_id
+
+
+def test_index_names_a_stored_point_that_is_not_a_whole_chunk(handbook: Handbook) -> None:
+    runner.invoke(app, ["index"])
+    point_id = broken_older_point(handbook)
+
+    result = runner.invoke(app, ["index"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    older = handbook.collection(OLD).collection
+    assert f"Point {point_id} in {older} has no 'title' in its payload" in result.output
+
+
+def test_an_update_from_an_older_point_that_is_not_a_whole_chunk_stops_before_writing(
+    handbook: Handbook,
+) -> None:
+    indexed_at_the_older_commit(handbook)
+    point_id = broken_older_point(handbook)
+
+    result = runner.invoke(app, ["index", "--reuse-from", OLD])
+
+    assert result.exit_code == 1
+    older = handbook.collection(OLD).collection
+    assert f"Point {point_id} in {older} has no 'title' in its payload" in result.output
+    assert handbook.collections() == [older]
+
+
+def test_check_reuse_that_reused_nothing_fails_and_says_so(handbook: Handbook) -> None:
+    handbook.use(NEW)
+    handbook.collection(OLD).ensure_collection(FakeEmbedder.dimension)
+
+    result = runner.invoke(app, slice_command(handbook.root))
+
+    assert result.exit_code == 1
+    assert "reused      0 chunks' vectors" in result.output
+    assert "no vector was reused, so nothing about reuse was checked" in result.output
+    assert "Reuse check passed" not in result.output
+
+
+def test_check_reuse_reads_only_the_pages_of_the_slice_from_the_older_collection(
+    handbook: Handbook,
+) -> None:
+    indexed_at_the_older_commit(handbook)
+    command = slice_command(handbook.root, evidence=["legal/retired.md", "people/leave.md"])
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 0, result.output
+    assert "2 chunks of the same pages" in result.output
+    assert "pages       0 added, 0 changed, 1 removed, 1 unchanged" in result.output
+
+
+@pytest.mark.parametrize("tolerance", ["nan", "inf", "-0.1"])
+@pytest.mark.parametrize(
+    "command",
+    [["compare-collections", "first", "second"], ["check-reuse", "--reuse-from", OLD]],
+    ids=["compare-collections", "check-reuse"],
+)
+def test_a_tolerance_that_would_make_the_comparison_meaningless_is_refused(
+    handbook: Handbook, command: list[str], tolerance: str
+) -> None:
+    result = runner.invoke(app, [*command, "--tolerance", tolerance])
+
+    assert result.exit_code == 2
+    assert "must be a finite number of at least 0" in result.output
+    assert handbook.embedder.embedded == []
+
+
+def test_compare_collections_applies_the_tolerance_it_is_given(handbook: Handbook) -> None:
+    indexed_at_the_older_commit(handbook)
+    runner.invoke(app, ["index"])
+    old_name, new_name = handbook.collection(OLD).collection, handbook.collection(NEW).collection
+
+    strict = runner.invoke(app, ["compare-collections", old_name, new_name])
+    lenient = runner.invoke(app, ["compare-collections", old_name, new_name, "--tolerance", "2"])
+
+    assert "vectors     2 differ by more than 0.0001" in strict.output
+    assert "vectors     0 differ by more than 2" in lenient.output
+
+
+def test_without_reuse_the_rate_counts_the_whole_run(
+    handbook: Handbook, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    timed = IndexReport(
+        total=60, embedded=20, already_indexed=40, removed=0, seconds=10.0, embed_seconds=2.0
+    )
+    monkeypatch.setattr("handbook_rag.cli.index_chunks", lambda *_args, **_kwargs: timed)
+
+    result = runner.invoke(app, ["index"])
+
+    assert result.exit_code == 0, result.output
+    assert "embedded    20 new (2 per second)" in result.output

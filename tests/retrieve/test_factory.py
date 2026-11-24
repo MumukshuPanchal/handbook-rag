@@ -138,8 +138,8 @@ def test_two_memory_stores_do_not_share_their_contents() -> None:
     index_chunks([chunk], embedder=embedder, sparse_encoder=sparse_encoder, store=first)
     second.ensure_collection(embedder.dimension)
 
-    assert first.existing_ids([chunk.chunk_id]) == {chunk.chunk_id}
-    assert second.existing_ids([chunk.chunk_id]) == set()
+    assert set(first.point_ids()) == {chunk.chunk_id}
+    assert set(second.point_ids()) == set()
 
 
 def test_a_service_can_have_its_store_without_asking_whether_it_is_there() -> None:

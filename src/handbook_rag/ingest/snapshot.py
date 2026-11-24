@@ -78,6 +78,11 @@ def download_snapshot(
     _prepare_clone(repo_dir, repo_url, content_path)
     if _current_commit(repo_dir) != commit:
         _git(repo_dir, "fetch", "--quiet", "--depth", "1", "--filter=blob:none", "origin", commit)
+    # The manifest describes the files. From here on they may change, so it goes, and a
+    # run that fails before writing the new one leaves no manifest naming the old commit
+    # beside files of the new one.
+    manifest_path = dest / "manifest.json"
+    manifest_path.unlink(missing_ok=True)
     _git(repo_dir, "checkout", "--quiet", "--force", "--detach", commit)
     _git(repo_dir, "clean", "--quiet", "-fdx")
 
@@ -93,18 +98,38 @@ def download_snapshot(
         content_path=content_path,
         licence=licence,
     )
-    manifest_path = dest / "manifest.json"
     manifest_path.write_text(manifest.to_json(), encoding="utf-8")
     return Snapshot(content_dir=content_dir, manifest_path=manifest_path, manifest=manifest)
 
 
 def snapshot_commit(dest: Path) -> str | None:
-    """The commit of the snapshot already in ``dest``, or ``None`` when there is none."""
+    """The commit of the snapshot already in ``dest``, or ``None`` when there is none.
+
+    The manifest says it. When there is no manifest, or it names no commit, the files
+    may still be there, for example after a run that failed halfway, so the clone is
+    asked which commit it has checked out.
+    """
     manifest_path = dest / "manifest.json"
-    if not manifest_path.is_file():
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise SnapshotError(f"{manifest_path} cannot be read: {error}") from error
+        if not isinstance(manifest, dict):
+            raise SnapshotError(f"{manifest_path} cannot be read: it is not a JSON object.")
+        commit = manifest.get("commit")
+        if isinstance(commit, str):
+            return commit
+        if commit is not None:
+            raise SnapshotError(
+                f"{manifest_path} cannot be read: its commit is {commit!r}, not a hash."
+            )
+    repo_dir = dest / "repo"
+    # Only a clone of its own is asked. A folder without one could lie inside another
+    # repository, whose commit git would report instead.
+    if not (repo_dir / ".git").is_dir():
         return None
-    commit: str = json.loads(manifest_path.read_text(encoding="utf-8"))["commit"]
-    return commit
+    return _current_commit(repo_dir)
 
 
 def _prepare_clone(repo_dir: Path, repo_url: str, content_path: str) -> None:

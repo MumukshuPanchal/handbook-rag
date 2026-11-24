@@ -1,4 +1,5 @@
 import dataclasses
+import re
 from typing import Any, cast
 
 import httpx
@@ -8,6 +9,7 @@ from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedR
 
 from handbook_rag.index.sparse import SparseVector
 from handbook_rag.index.store import CollectionMissingError, QdrantVectorStore, VectorStoreError
+from handbook_rag.ingest.models import Chunk
 from tests.support import make_chunk
 
 NORTH = [1.0, 0.0, 0.0]
@@ -74,13 +76,6 @@ def test_upserting_the_same_id_replaces_the_chunk(store: QdrantVectorStore) -> N
     assert store.search(EAST, limit=1)[0].score == pytest.approx(1.0)
 
 
-def test_existing_ids_reports_only_stored_chunks(store: QdrantVectorStore) -> None:
-    stored, missing = make_chunk("stored"), make_chunk("missing")
-    store.upsert([stored], [NORTH], [NO_WORDS])
-
-    assert store.existing_ids([stored.chunk_id, missing.chunk_id]) == {stored.chunk_id}
-
-
 def test_delete_except_removes_everything_not_listed(store: QdrantVectorStore) -> None:
     keep, drop = make_chunk("keep"), make_chunk("drop")
     store.upsert([keep, drop], [NORTH, EAST], [NO_WORDS] * 2)
@@ -88,7 +83,7 @@ def test_delete_except_removes_everything_not_listed(store: QdrantVectorStore) -
     removed = store.delete_except({keep.chunk_id})
 
     assert removed == 1
-    assert store.existing_ids([keep.chunk_id, drop.chunk_id]) == {keep.chunk_id}
+    assert set(store.point_ids()) == {keep.chunk_id}
 
 
 def test_ensure_collection_is_safe_to_repeat(store: QdrantVectorStore) -> None:
@@ -398,3 +393,36 @@ def test_reading_the_chunks_of_no_page_asks_the_store_nothing(
     monkeypatch.setattr(client, "scroll", no_call)
 
     assert list(store.scroll_chunks(set())) == []
+
+
+def stored_without_its_title(store: QdrantVectorStore, client: QdrantClient) -> Chunk:
+    """A chunk stored, then its payload stripped of the title, as no indexing leaves it."""
+    chunk = make_chunk("Take 25 days.")
+    store.upsert([chunk], [NORTH], [LEAVE])
+    client.delete_payload(store.collection, keys=["title"], points=[chunk.chunk_id])
+    return chunk
+
+
+def test_a_point_that_is_not_a_whole_chunk_is_named_with_its_collection_and_field(
+    store: QdrantVectorStore, client: QdrantClient
+) -> None:
+    chunk = stored_without_its_title(store, client)
+    named = re.escape(f"Point {chunk.chunk_id} in test-collection has no 'title' in its payload")
+
+    with pytest.raises(VectorStoreError, match=named):
+        store.stored_chunks([chunk.chunk_id])
+    with pytest.raises(VectorStoreError, match=named):
+        list(store.scroll_chunks())
+    with pytest.raises(VectorStoreError, match=named):
+        _ = store.points([chunk.chunk_id])[chunk.chunk_id].chunk
+
+
+def test_a_search_that_meets_a_broken_point_does_not_call_it_an_unavailable_store(
+    store: QdrantVectorStore, client: QdrantClient
+) -> None:
+    # The API answers every error of the store with "unavailable"; a broken point is a
+    # fault in this service, not an outage.
+    stored_without_its_title(store, client)
+
+    with pytest.raises(KeyError, match="title"):
+        store.search(NORTH, limit=1)

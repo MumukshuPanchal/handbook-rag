@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from handbook_rag.index.embedder import Embedder
-from handbook_rag.index.sparse import SparseEncoder
+from handbook_rag.index.sparse import SparseEncoder, SparseVector
 from handbook_rag.index.store import ReadableStore, StoredPoint, VectorStore
 from handbook_rag.ingest.models import Chunk
 
@@ -87,7 +87,9 @@ def index_chunks(
     reuse_started = time.perf_counter()
     missing, reused = pending, 0
     if reuse is not None:
-        missing, reused = _store_reused(pending, reuse, store, batch_size, on_reuse_progress)
+        missing, reused = _store_reused(
+            pending, reuse, store, sparse_encoder, batch_size, on_reuse_progress
+        )
     reuse_seconds = time.perf_counter() - reuse_started
 
     # Embedding is fastest when texts in a batch have similar lengths, because a batch
@@ -123,6 +125,7 @@ def _store_reused(
     chunks: Sequence[Chunk],
     reuse: Reuse,
     store: VectorStore,
+    sparse_encoder: SparseEncoder,
     batch_size: int,
     on_progress: Progress | None,
 ) -> tuple[list[Chunk], int]:
@@ -155,9 +158,32 @@ def _store_reused(
             store.upsert(
                 [chunk for chunk, _ in usable],
                 [point.dense for _, point in usable],
-                [point.sparse for _, point in usable],
+                _keyword_vectors(usable, sparse_encoder),
             )
         stored += len(usable)
         if on_progress is not None:
             on_progress(start + len(batch), len(lendable))
     return missing, stored
+
+
+def _keyword_vectors(
+    usable: Sequence[tuple[Chunk, StoredPoint]], sparse_encoder: SparseEncoder
+) -> list[SparseVector]:
+    """The lent keyword vectors, with any empty one computed again from its text.
+
+    An older point can come back without a keyword vector: a store may leave an empty
+    one out of its answer, and a point stored by other means may never have had one.
+    Lending that would store a chunk that keyword search cannot find. Computing it
+    again is cheap, and gives the same empty vector when the text has no word worth
+    keeping.
+    """
+    vectors = [point.sparse for _, point in usable]
+    empty = [place for place, vector in enumerate(vectors) if not vector.indices]
+    if not empty:
+        return vectors
+    computed = sparse_encoder.encode_documents(
+        [usable[place][0].text_for_embedding for place in empty]
+    )
+    for place, vector in zip(empty, computed, strict=True):
+        vectors[place] = vector
+    return vectors

@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+import math
 import os
 import statistics
 import sys
@@ -143,20 +144,19 @@ def snapshot(
     """Download the handbook at the pinned commit into the data directory."""
     settings = get_settings()
     dest = settings.data_dir / "handbook"
-    # Downloading a newer commit beside the pinned one is how the index is updated
-    # (ADR 0019). Forgetting to point the data directory elsewhere would replace the
-    # pinned snapshot, which the test questions are checked against, so that takes a flag.
-    on_disk = snapshot_commit(dest)
-    if on_disk is not None and on_disk != settings.handbook_commit and not replace:
-        typer.echo(
-            f"error: {dest} holds the snapshot of commit {on_disk[:12]}. Downloading commit "
-            f"{settings.handbook_commit[:12]} there would replace it. To keep both, set "
-            "HANDBOOK_RAG_DATA_DIR to another directory. To replace it, run again with "
-            "--replace.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
     try:
+        # Downloading a newer commit beside the pinned one is how the index is updated
+        # (ADR 0019). Forgetting to point the data directory elsewhere would replace the
+        # pinned snapshot, which the test questions are checked against, so that takes
+        # a flag.
+        on_disk = snapshot_commit(dest)
+        if on_disk is not None and on_disk != settings.handbook_commit and not replace:
+            raise SnapshotError(
+                f"{dest} holds the snapshot of commit {on_disk[:12]}. Downloading commit "
+                f"{settings.handbook_commit[:12]} there would replace it. To keep both, set "
+                "HANDBOOK_RAG_DATA_DIR to another directory. To replace it, run again with "
+                "--replace."
+            )
         result = download_snapshot(
             repo_url=settings.handbook_repo_url,
             commit=settings.handbook_commit,
@@ -338,6 +338,18 @@ def _echo_page_changes(changes: PageChanges) -> None:
     )
 
 
+def _usable_tolerance(tolerance: float) -> float:
+    """Refuse a tolerance that would make the comparison meaningless, before any work.
+
+    A tolerance that is not a number, or infinite, would let every difference through,
+    and a negative one would fail two identical collections. ``check-reuse`` embeds for
+    minutes before it compares, so it is checked when the command line is read.
+    """
+    if not (math.isfinite(tolerance) and tolerance >= 0):
+        raise typer.BadParameter(f"must be a finite number of at least 0, not {tolerance}.")
+    return tolerance
+
+
 @app.command(name="check-reuse")
 def check_reuse(
     reuse_from: Annotated[
@@ -353,7 +365,8 @@ def check_reuse(
     tolerance: Annotated[
         float,
         typer.Option(
-            help="How far an entry of one vector may be from the same entry of the other."
+            help="How far an entry of one vector may be from the same entry of the other.",
+            callback=_usable_tolerance,
         ),
     ] = DEFAULT_VECTOR_TOLERANCE,
 ) -> None:
@@ -417,6 +430,15 @@ def check_reuse(
     if not comparison.equal:
         typer.echo("Reuse check failed: the two indexes differ.", err=True)
         raise typer.Exit(code=1)
+    if reused_report.reused == 0:
+        # Both indexes were then embedded in full, so their being the same says nothing
+        # about reuse.
+        typer.echo(
+            "Reuse check failed: no vector was reused, so nothing about reuse was checked. "
+            f"Does {source.collection} hold the pages of the slice?",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     typer.echo("Reuse check passed: the two indexes are the same.")
 
 
@@ -427,7 +449,8 @@ def compare_collections_command(
     tolerance: Annotated[
         float,
         typer.Option(
-            help="How far an entry of one vector may be from the same entry of the other."
+            help="How far an entry of one vector may be from the same entry of the other.",
+            callback=_usable_tolerance,
         ),
     ] = DEFAULT_VECTOR_TOLERANCE,
 ) -> None:

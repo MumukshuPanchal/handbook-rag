@@ -26,6 +26,9 @@ from handbook_rag.index.store import QdrantVectorStore, ReadableStore
 from handbook_rag.ingest.models import Chunk
 
 _FULL_COMMIT_HASH = re.compile(r"[0-9a-f]{40}")
+_NAMED_OTHERWISE = "which is named otherwise, so what it was made with cannot be read from its name"
+# The end of a collection's name in the form ChunkingConfig.version gives it.
+_SETTINGS_NAME = re.compile(r"(?P<models>.+)-(?P<chunking>v\d+-max\d+-min\d+-overlap\d+)")
 
 
 class ReuseError(ValueError):
@@ -67,27 +70,34 @@ def find_reuse_source(
     prefix = f"handbook-{commit[:8]}-"
     others = [other for other in store.collection_names() if other.startswith(prefix)]
     for other in others:
-        differences = _differences(other.removeprefix(prefix), settings)
-        reason += f" The store holds {other}, made with another {' and '.join(differences)}."
+        reason += f" The store holds {other}, {_described(other.removeprefix(prefix), settings)}."
     if not others:
         reason += " The store holds no collection of that commit."
     raise ReuseError(reason)
 
 
-def _differences(described: str, settings: Settings) -> list[str]:
-    """What a collection of the same commit was made with that these settings are not.
+def _described(rest: str, settings: Settings) -> str:
+    """What the name of a collection of the same commit shows it was made with.
 
-    ``described`` is the rest of its name after the commit: the embedding model, the
-    keyword model and the chunking, in that order, joined by dashes.
+    ``rest`` is its name after the commit. A name these settings' form would give is the
+    embedding model and the keyword model, then the chunking version, joined by dashes.
+    Only what such a name shows is said. A name of another form, such as one with a
+    word added at the end, says nothing certain about the models or the chunking.
     """
+    named = _SETTINGS_NAME.fullmatch(rest)
+    if named is None:
+        return _NAMED_OTHERWISE
+    models, chunking = named.group("models"), named.group("chunking")
     differences: list[str] = []
-    if not described.startswith(f"{collection_slug(settings.embedding_model)}-"):
+    if not models.startswith(f"{collection_slug(settings.embedding_model)}-"):
         differences.append(f"embedding model (these settings use {settings.embedding_model})")
-    if f"-{collection_slug(settings.sparse_model)}-" not in described:
+    if not models.endswith(f"-{collection_slug(settings.sparse_model)}"):
         differences.append(f"keyword model (these settings use {settings.sparse_model})")
-    if not described.endswith(f"-{settings.chunking.version}"):
+    if chunking != settings.chunking.version:
         differences.append(f"chunking (these settings use {settings.chunking.version})")
-    return differences or ["set of settings"]
+    if not differences:
+        return _NAMED_OTHERWISE
+    return f"made with another {' and '.join(differences)}"
 
 
 @dataclass(frozen=True, slots=True)

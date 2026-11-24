@@ -2,13 +2,14 @@
 
 Made to check an updated index against a full one. Ids and payloads must be equal. A
 vector cannot be expected to be equal to the last bit: a model that embeds the same text
-in another batch can give a slightly different vector, and the store rounds a vector
-again each time it is stored. So vectors are compared within a tolerance, and the
-largest difference found is reported whatever the tolerance, to show how close they are.
+in another batch can give a slightly different vector, and the store held in memory
+rounds a vector again when it stores it. So vectors are compared within a tolerance, and
+the largest difference found is reported whatever the tolerance, to show how close they
+are.
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 
 from handbook_rag.index.sparse import SparseVector
@@ -18,8 +19,8 @@ DEFAULT_VECTOR_TOLERANCE = 1e-4
 """How far apart two entries of a dense vector may be and still count as the same.
 
 A dense vector of the embedding model has 384 entries and a length of 1, so an entry is
-about 0.05 on average. Embedding the same text in another batch was expected to move an
-entry by far less than this; the reuse check prints the largest difference it finds.
+about 0.05 on average. Over the whole handbook, the largest difference between an updated
+index and a full one was 5e-09 (ADR 0019); the reuse check prints the largest it finds.
 """
 
 
@@ -71,13 +72,17 @@ def compare_collections(
 ) -> CollectionComparison:
     """Compare ``candidate`` with ``reference``. Both are only read.
 
-    Two vectors differ when an entry of one is further than ``tolerance`` from the same
-    entry of the other. For a keyword vector, a word that only one of them holds counts
-    as a weight of zero in the other, so it differs by its whole weight, which is far
-    larger than any tolerance worth using.
+    Two vectors are the same when no entry of one is further than ``tolerance`` from the
+    same entry of the other. An entry that is not a number is never the same as
+    anything, and it makes the largest difference reported not a number either, so it
+    cannot pass unseen. For a keyword vector, a word that only one of them holds counts
+    as a weight of zero in the other, so it differs by its whole weight; that is caught
+    by any tolerance smaller than the smallest weight.
 
     Points are read a batch at a time, so two whole collections are never held at once.
     """
+    if not (math.isfinite(tolerance) and tolerance >= 0):
+        raise ValueError(f"The tolerance must be a finite number of at least 0, not {tolerance}.")
     ours, theirs = set(reference.point_ids()), set(candidate.point_ids())
     shared = sorted(ours & theirs)
     payloads: list[tuple[str, str]] = []
@@ -92,12 +97,13 @@ def compare_collections(
             payloads.extend((point_id, field) for field in _payload_differences(first, second))
             dense = _dense_difference(first.dense, second.dense)
             sparse = _sparse_difference(first.sparse, second.sparse)
-            largest_dense = max(largest_dense, dense)
-            largest_sparse = max(largest_sparse, sparse)
-            smallest_cosine = min(smallest_cosine, _cosine(first.dense, second.dense))
-            if dense > tolerance:
+            largest_dense = _worst(largest_dense, dense, max)
+            largest_sparse = _worst(largest_sparse, sparse, max)
+            smallest_cosine = _worst(smallest_cosine, _cosine(first.dense, second.dense), min)
+            # Asked this way round, a difference that is not a number is reported.
+            if not dense <= tolerance:
                 vectors.append((point_id, "dense", dense))
-            if sparse > tolerance:
+            if not sparse <= tolerance:
                 vectors.append((point_id, "sparse", sparse))
     return CollectionComparison(
         reference=reference.collection,
@@ -128,14 +134,35 @@ def _payload_differences(first: StoredPoint, second: StoredPoint) -> list[str]:
 def _dense_difference(first: Sequence[float], second: Sequence[float]) -> float:
     if len(first) != len(second):
         return math.inf
-    return max((abs(a - b) for a, b in zip(first, second, strict=True)), default=0.0)
+    return _largest(abs(a - b) for a, b in zip(first, second, strict=True))
 
 
 def _sparse_difference(first: SparseVector, second: SparseVector) -> float:
     ours = dict(zip(first.indices, first.values, strict=True))
     theirs = dict(zip(second.indices, second.values, strict=True))
     words = set(ours) | set(theirs)
-    return max((abs(ours.get(word, 0.0) - theirs.get(word, 0.0)) for word in words), default=0.0)
+    return _largest(abs(ours.get(word, 0.0) - theirs.get(word, 0.0)) for word in words)
+
+
+def _largest(differences: Iterable[float]) -> float:
+    """The largest difference, or not a number if one of them is not.
+
+    ``max`` alone would keep or drop a value that is not a number depending on where it
+    stands, because every comparison with one is false.
+    """
+    largest = 0.0
+    for difference in differences:
+        if math.isnan(difference):
+            return math.nan
+        largest = max(largest, difference)
+    return largest
+
+
+def _worst(current: float, value: float, choose: Callable[[float, float], float]) -> float:
+    """What ``choose`` makes of the two, except that a value that is not a number wins."""
+    if math.isnan(current) or math.isnan(value):
+        return math.nan
+    return choose(current, value)
 
 
 def _cosine(first: Sequence[float], second: Sequence[float]) -> float:

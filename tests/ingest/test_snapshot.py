@@ -163,3 +163,56 @@ def test_the_commit_of_a_snapshot_on_disk_can_be_read(upstream: Upstream, tmp_pa
     download(upstream, tmp_path / "data", commit=upstream.second_commit)
 
     assert snapshot_commit(tmp_path / "data") == upstream.second_commit
+
+
+@pytest.mark.parametrize("manifest", [None, '{"commit": null}'], ids=["no manifest", "null"])
+def test_a_snapshot_whose_manifest_names_no_commit_is_known_by_its_clone(
+    upstream: Upstream, tmp_path: Path, manifest: str | None
+) -> None:
+    download(upstream, tmp_path / "data")
+    manifest_path = tmp_path / "data" / "manifest.json"
+    if manifest is None:
+        manifest_path.unlink()
+    else:
+        manifest_path.write_text(manifest)
+
+    assert snapshot_commit(tmp_path / "data") == upstream.first_commit
+
+
+@pytest.mark.parametrize("text", ["not json", "[]", '{"commit": 5}'])
+def test_a_manifest_that_cannot_be_read_is_reported_as_such(tmp_path: Path, text: str) -> None:
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "manifest.json").write_text(text)
+
+    with pytest.raises(SnapshotError, match=r"manifest\.json cannot be read"):
+        snapshot_commit(tmp_path / "data")
+
+
+def test_a_folder_without_a_clone_of_its_own_has_no_commit_even_inside_a_repository(
+    tmp_path: Path,
+) -> None:
+    # git asked inside such a folder would answer with the surrounding repository's commit.
+    git(tmp_path, "init", "--quiet")
+    git(tmp_path, "commit", "--quiet", "--allow-empty", "--message", "outer")
+    (tmp_path / "data" / "repo").mkdir(parents=True)
+
+    assert snapshot_commit(tmp_path / "data") is None
+
+
+def test_a_replacement_that_fails_leaves_no_manifest_of_the_old_commit(
+    upstream: Upstream, tmp_path: Path
+) -> None:
+    dest = tmp_path / "data"
+    download(upstream, dest)
+
+    with pytest.raises(SnapshotError, match="does not exist"):
+        download_snapshot(
+            repo_url=upstream.url,
+            commit=upstream.second_commit,
+            content_path="content/missing",
+            licence="CC-BY-SA-4.0",
+            dest=dest,
+        )
+
+    assert not (dest / "manifest.json").exists()
+    assert snapshot_commit(dest) == upstream.second_commit

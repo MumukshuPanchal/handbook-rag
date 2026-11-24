@@ -43,14 +43,19 @@ class StoredPoint:
     """One point as the store holds it: its payload and both of its vectors."""
 
     point_id: str
+    collection: str
     payload: dict[str, Any]
     dense: list[float]
     sparse: SparseVector
 
     @property
     def chunk(self) -> Chunk:
-        """The chunk the payload describes, which says what the vectors were made from."""
-        return _from_payload(self.point_id, self.payload)
+        """The chunk the payload describes, which says what the vectors were made from.
+
+        Read only when asked for: comparing two collections compares payloads of any
+        shape, while taking vectors from a point needs a whole chunk.
+        """
+        return _whole_chunk(self.point_id, self.payload, self.collection)
 
 
 class ReadableStore(Protocol):
@@ -74,8 +79,6 @@ class VectorStore(Protocol):
     """What the rest of the pipeline needs from a vector store."""
 
     def ensure_collection(self, dimension: int) -> None: ...
-
-    def existing_ids(self, chunk_ids: Sequence[str]) -> set[str]: ...
 
     def stored_chunks(self, chunk_ids: Sequence[str]) -> dict[str, Chunk]: ...
 
@@ -150,16 +153,6 @@ class QdrantVectorStore:
                 self._collection, field_name=field, field_schema=models.PayloadSchemaType.KEYWORD
             )
 
-    def existing_ids(self, chunk_ids: Sequence[str]) -> set[str]:
-        """Which of these chunk ids are already stored."""
-        found: set[str] = set()
-        for batch in _batches(list(chunk_ids), _BATCH):
-            records = self._client.retrieve(
-                self._collection, ids=batch, with_payload=False, with_vectors=False
-            )
-            found.update(str(record.id) for record in records)
-        return found
-
     def stored_chunks(self, chunk_ids: Sequence[str]) -> dict[str, Chunk]:
         """The chunks stored under these ids, as their payloads describe them."""
         found: dict[str, Chunk] = {}
@@ -168,7 +161,9 @@ class QdrantVectorStore:
                 self._collection, ids=batch, with_payload=True, with_vectors=False
             )
             for record in records:
-                found[str(record.id)] = _from_payload(str(record.id), record.payload or {})
+                found[str(record.id)] = _whole_chunk(
+                    str(record.id), record.payload or {}, self._collection
+                )
         return found
 
     def point_ids(self) -> Iterator[str]:
@@ -211,7 +206,7 @@ class QdrantVectorStore:
                 with_vectors=False,
             )
             for record in records:
-                yield _from_payload(str(record.id), record.payload or {})
+                yield _whole_chunk(str(record.id), record.payload or {}, self._collection)
             if offset is None:
                 break
 
@@ -240,6 +235,7 @@ class QdrantVectorStore:
             sparse = models.SparseVector(indices=[], values=[])
         return StoredPoint(
             point_id=str(record.id),
+            collection=self._collection,
             payload=record.payload or {},
             dense=[float(value) for value in cast(list[float], dense)],
             sparse=SparseVector(list(sparse.indices), list(sparse.values)),
@@ -403,6 +399,22 @@ def _from_payload(chunk_id: str, payload: dict[str, Any]) -> Chunk:
         text=payload["text"],
         token_count=payload["token_count"],
     )
+
+
+def _whole_chunk(chunk_id: str, payload: dict[str, Any], collection: str) -> Chunk:
+    """The chunk a stored point describes, for indexing, which stops on a broken one.
+
+    A bare KeyError would name the missing field and not the point or the collection to
+    look at. A search keeps the bare error: there a broken point is a fault in this
+    service, and the API reports every error of the store as the store being unavailable.
+    """
+    try:
+        return _from_payload(chunk_id, payload)
+    except KeyError as error:
+        raise VectorStoreError(
+            f"Point {chunk_id} in {collection} has no {error.args[0]!r} in its payload, "
+            "so it does not describe a whole chunk."
+        ) from error
 
 
 def _batches[T](items: Sequence[T], size: int) -> Iterator[Sequence[T]]:

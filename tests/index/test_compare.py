@@ -47,6 +47,7 @@ def point(
 ) -> StoredPoint:
     return StoredPoint(
         point_id=point_id,
+        collection="test-collection",
         payload={"title": "Leave", "text": "Take 25 days.", **payload},
         dense=list(dense),
         sparse=sparse or SparseVector([1, 2], [1.0, 0.5]),
@@ -99,8 +100,12 @@ def test_a_payload_field_that_differs_is_named() -> None:
     assert comparison.differences() == ["payload  p1: title differs"]
 
 
-def test_a_payload_field_only_one_point_has_is_named() -> None:
-    comparison = compare([point("p1")], [point("p1", fingerprint="abc")])
+@pytest.mark.parametrize("holder", ["candidate", "reference"])
+def test_a_payload_field_only_one_point_has_is_named(holder: str) -> None:
+    with_field, without = [point("p1", fingerprint="abc")], [point("p1")]
+    reference, candidate = (without, with_field) if holder == "candidate" else (with_field, without)
+
+    comparison = compare(reference, candidate)
 
     assert comparison.payloads == [("p1", "fingerprint")]
 
@@ -137,13 +142,24 @@ def test_a_keyword_weight_outside_the_tolerance_is_named() -> None:
     assert comparison.differences() == ["sparse   p1: differs by up to 0.25"]
 
 
-def test_a_word_only_one_keyword_vector_holds_differs_by_its_whole_weight() -> None:
-    reference = [point("p1", sparse=SparseVector([1, 2], [1.0, 0.5]))]
-    candidate = [point("p1", sparse=SparseVector([1, 2, 3], [1.0, 0.5, 0.3]))]
+@pytest.mark.parametrize("holder", ["candidate", "reference"])
+def test_a_word_only_one_keyword_vector_holds_differs_by_its_whole_weight(holder: str) -> None:
+    # A reused vector short of a word is the reference holding one the candidate lacks.
+    two = [point("p1", sparse=SparseVector([1, 2], [1.0, 0.5]))]
+    three = [point("p1", sparse=SparseVector([1, 2, 3], [1.0, 0.5, 0.3]))]
+    reference, candidate = (two, three) if holder == "candidate" else (three, two)
 
     comparison = compare(reference, candidate)
 
     assert comparison.vectors == [("p1", "sparse", pytest.approx(0.3))]
+
+
+def test_the_tolerance_applies_to_keyword_weights_too() -> None:
+    reference = [point("p1", sparse=SparseVector([1], [1.0]))]
+    candidate = [point("p1", sparse=SparseVector([1], [1.05]))]
+
+    assert compare(reference, candidate, tolerance=0.1).equal
+    assert not compare(reference, candidate, tolerance=0.01).equal
 
 
 def test_dense_vectors_of_different_sizes_always_differ() -> None:
@@ -169,15 +185,60 @@ def test_two_keyword_vectors_without_words_are_the_same() -> None:
     assert comparison.largest_sparse_difference == 0.0
 
 
-def test_the_smallest_cosine_and_the_largest_difference_come_from_the_worst_pair() -> None:
+def test_the_smallest_cosine_and_the_largest_differences_come_from_the_worst_pairs() -> None:
     reference = [point("a"), point("b"), point("c")]
-    candidate = [point("a", dense=(0.8, 0.6)), point("b"), point("c", dense=(0.6, 0.8))]
+    candidate = [
+        point("a", dense=(0.8, 0.6), sparse=SparseVector([1, 2], [1.0, 0.75])),
+        point("b"),
+        point("c", dense=(0.6, 0.8)),
+    ]
 
     comparison = compare(reference, candidate, tolerance=1.0)
 
     assert comparison.equal
     assert comparison.smallest_cosine == pytest.approx(0.6)
     assert comparison.largest_dense_difference == pytest.approx(0.8)
+    assert comparison.largest_sparse_difference == 0.25
+
+
+def test_the_cosine_does_not_depend_on_how_long_the_vectors_are() -> None:
+    comparison = compare([point("p1", dense=(3.0, 0.0))], [point("p1", dense=(1.2, 1.6))], 10.0)
+
+    assert comparison.smallest_cosine == pytest.approx(0.6)
+
+
+@pytest.mark.parametrize(
+    ("ours", "theirs"),
+    [
+        pytest.param({"dense": (math.nan, 0.0)}, {}, id="first dense entry"),
+        pytest.param({"dense": (1.0, math.nan)}, {}, id="second dense entry"),
+        pytest.param({"sparse": SparseVector([1, 2], [1.0, math.nan])}, {}, id="keyword weight"),
+    ],
+)
+def test_a_value_that_is_not_a_number_is_a_difference_that_cannot_pass_unseen(
+    ours: dict[str, Any], theirs: dict[str, Any]
+) -> None:
+    comparison = compare([point("p1", **theirs)], [point("p1", **ours)], tolerance=1.0)
+
+    assert not comparison.equal
+    ((point_id, vector, size),) = comparison.vectors
+    assert point_id == "p1"
+    assert math.isnan(size)
+    largest = {
+        "dense": comparison.largest_dense_difference,
+        "sparse": comparison.largest_sparse_difference,
+    }
+    assert math.isnan(largest[vector])
+    if vector == "dense":
+        assert math.isnan(comparison.smallest_cosine)
+
+
+@pytest.mark.parametrize("tolerance", [math.nan, math.inf, -1e-9])
+def test_a_tolerance_that_would_make_the_comparison_meaningless_is_refused(
+    tolerance: float,
+) -> None:
+    with pytest.raises(ValueError, match="finite number of at least 0"):
+        compare([point("p1")], [point("p1")], tolerance)
 
 
 def test_points_are_read_a_batch_at_a_time_from_both_collections() -> None:

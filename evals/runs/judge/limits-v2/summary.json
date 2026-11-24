@@ -1,0 +1,113 @@
+{
+  "description": "gemini-3.5-flash-lite (version 2) judging the labelled answers in evals/judge/limits/cases.jsonl.",
+  "criterion": "support",
+  "config": {
+    "judge_model": "gemini-3.5-flash-lite",
+    "judge_max_tokens": 2000,
+    "judge_instructions": "df21bed5111c82e1",
+    "judge_request": "9e159c93b6115867",
+    "judge_version": 2
+  },
+  "answers_labelled": 120,
+  "answers_judged": 120,
+  "answers_failed": 0,
+  "attempts": 236,
+  "left_out_as_unclear": 1,
+  "agreement": {
+    "statements": 196,
+    "same_decision": {
+      "mean": 0.9642857142857143,
+      "low": 0.9281276863973897,
+      "high": 0.9825942479741279,
+      "count": 196
+    },
+    "recall": {
+      "mean": 0.8461538461538461,
+      "low": 0.702705362196273,
+      "high": 0.927525276653139,
+      "count": 39
+    },
+    "precision": {
+      "mean": 0.9705882352941176,
+      "low": 0.850844265661214,
+      "high": 0.9947890937814032,
+      "count": 34
+    },
+    "kappa": 0.8823,
+    "caught": {
+      "how_much": [
+        4,
+        6
+      ],
+      "only_if": [
+        6,
+        7
+      ],
+      "unless": [
+        4,
+        6
+      ],
+      "what": [
+        3,
+        4
+      ],
+      "when": [
+        4,
+        4
+      ],
+      "where": [
+        7,
+        7
+      ],
+      "who": [
+        5,
+        5
+      ]
+    },
+    "matrix": {
+      "supported": {
+        "supported": 156,
+        "unsupported": 1,
+        "no_claim": 0
+      },
+      "unsupported": {
+        "supported": 6,
+        "unsupported": 33,
+        "no_claim": 0
+      },
+      "no_claim": {
+        "supported": 0,
+        "unsupported": 0,
+        "no_claim": 0
+      }
+    },
+    "answers": 120,
+    "same_answer": {
+      "mean": 0.9416666666666667,
+      "low": 0.8844740790888672,
+      "high": 0.97145899015576,
+      "count": 120
+    },
+    "answer_recall": {
+      "mean": 0.8461538461538461,
+      "low": 0.702705362196273,
+      "high": 0.927525276653139,
+      "count": 39
+    },
+    "answer_precision": {
+      "mean": 0.9705882352941176,
+      "low": 0.850844265661214,
+      "high": 0.9947890937814032,
+      "count": 34
+    },
+    "same_verdict": {
+      "mean": 0.9642857142857143,
+      "low": 0.9281276863973897,
+      "high": 0.9825942479741279,
+      "count": 196
+    }
+  },
+  "input_tokens": 349879,
+  "output_tokens": 15119,
+  "median_seconds": 1.9505
+}

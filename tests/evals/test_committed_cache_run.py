@@ -1372,6 +1372,24 @@ def test_what_the_card_says_was_measured_is_what_the_run_holds() -> None:
     assert "cannot be checked from the repository" in whole_card
 
 
+def test_the_words_that_say_which_way_a_finding_points_are_in_the_documents() -> None:
+    # A changed number is caught by the tests above. These are the words between the
+    # numbers, where "none" for "one" or "choosing" for "reporting" would turn a finding
+    # round without changing a figure.
+    text = guide()
+    assert "on the reporting half, 68 of the 201" in text
+    assert "all three are on the choosing half" in text
+    assert "nothing wrong was served in any of the 103" in text
+    assert "something wrong was served in all 97" in text
+    assert "On the choosing half it sets the threshold, or for the cosine leaves none." in text
+    card = CARD.read_text(encoding="utf-8")
+    assert (
+        "The highest score at which a `different` pair of the reporting half would be served is"
+        in card
+    )
+    assert "are all on the choosing half" in card
+
+
 def test_the_roadmap_and_the_changelog_quote_the_run() -> None:
     summary = saved()
     cache = summary["cache_view"]

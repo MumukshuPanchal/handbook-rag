@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from handbook_rag import cli
 from handbook_rag.cache.verify import VerifierError
 from handbook_rag.cli import app
 from handbook_rag.config import Settings
@@ -21,6 +22,18 @@ from tests.evals.test_cache_pairs import a_small_world
 from tests.support import FakeEmbedder
 
 runner = CliRunner()
+
+
+class StoppedClock:
+    """The datetime module as the command sees it, with a clock that stands on one day."""
+
+    class date(datetime.date):
+        @classmethod
+        def today(cls) -> "StoppedClock.date":
+            return cls(2031, 2, 3)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(datetime, name)
 
 
 @pytest.fixture
@@ -57,9 +70,9 @@ def files(tmp_path: Path) -> list[str]:
 
 
 def test_eval_cache_measures_the_pairs_and_saves_a_scratch_run(
-    models: dict[str, Any], files: list[str]
+    models: dict[str, Any], files: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    before = datetime.date.today()
+    monkeypatch.setattr(cli, "datetime", StoppedClock())
     result = runner.invoke(app, ["eval-cache", *files])
 
     assert result.exit_code == 0, result.output
@@ -87,8 +100,8 @@ def test_eval_cache_measures_the_pairs_and_saves_a_scratch_run(
         "split_seed": cache_pairs.SPLIT_SEED,
         "other_splits": cache_pairs.OTHER_SPLITS,
     }
-    # The day of the run, by the clock of the machine that made it.
-    assert summary["measured_on"] in {before.isoformat(), datetime.date.today().isoformat()}
+    # The day of the run, by the clock of the machine that made it, which stands still here.
+    assert summary["measured_on"] == "2031-02-03"
     assert summary["rows"] == cache_pairs.rows_fingerprints(run)
     assert (
         f"Cache measurement of {summary['measured_on']}: 24 agreed pairs (12 same, 12 different)"

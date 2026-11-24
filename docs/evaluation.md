@@ -552,7 +552,7 @@ On the choosing half each of the two ways to read the second check served 10 of 
 
 For the cosine, the 183 splits with nothing wrong served are those in which it had no threshold and served nothing at all. In each of the 17 in which it had one, something wrong was served.
 
-**The same splits, apart by where one pair fell.** For each score, the pair is the one whose wrong serve scores highest with every pair in view. On the choosing half it sets the threshold. On the reporting half it is the hardest test a threshold meets.
+**The same splits, apart by where one pair fell.** For each score, the pair is the one whose wrong serve scores highest with every pair in view. On the choosing half it sets the threshold, or for the cosine leaves none. On the reporting half it is the hardest test a threshold meets.
 
 | Decided by | The pair | It is on | Splits | Rewordings served right: lowest | Median | Highest | Splits with nothing wrong served |
 |---|---|---|---|---|---|---|---|

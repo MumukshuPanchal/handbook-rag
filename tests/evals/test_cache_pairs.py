@@ -56,7 +56,8 @@ from handbook_rag.evals.metrics import share_with_interval
 from tests.cache.support import FakeVerifier
 from tests.support import FakeEmbedder
 
-DAY = datetime.date(2026, 11, 24)
+# Not the day of the committed run: a day written into the code instead of passed on would show.
+DAY = datetime.date(2031, 2, 3)
 """The day the runs of these tests say they were made on."""
 
 
@@ -1081,7 +1082,7 @@ def test_a_saved_run_gives_its_figures_again_from_its_rows(tmp_path: Path) -> No
     ]
     assert summary == json.loads((tmp_path / "run" / "summary.json").read_text(encoding="utf-8"))
     assert summary["description"] == "A run for a test."
-    assert summary["measured_on"] == "2026-11-24"
+    assert summary["measured_on"] == DAY.isoformat()
     assert set(summary) == {"description", "measured_on", "config", "rows", "timing", *figures}
     # What the figures were computed with is recorded by the writer itself.
     assert summary["config"] == {
@@ -1202,7 +1203,9 @@ def test_the_report_calls_a_description_a_description(tmp_path: Path) -> None:
 
     report = "\n".join(report_lines(summary))
 
-    assert "Cache measurement of 2026-11-24: 24 agreed pairs (12 same, 12 different)" in report
+    assert (
+        f"Cache measurement of {DAY.isoformat()}: 24 agreed pairs (12 same, 12 different)" in report
+    )
     assert "Disputed and listed apart: s090, s091" in report
     assert "A description of the scores, not a held-out result." in report
     assert "A description: these thresholds are scored on the pairs they are read from." in report

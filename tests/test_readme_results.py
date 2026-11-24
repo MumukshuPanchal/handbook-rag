@@ -508,6 +508,9 @@ def test_the_cache_measurement_is_the_committed_run() -> None:
     assert sum(there[how]["right"] for how in other_shapes) == 0
     assert sum(chose[how]["right"] for how in other_shapes) == 1
     assert "was served, and on the choosing half one of 27 was." in said(start)
+    assert f"None of its {sum(there[how]['pairs'] for how in other_shapes)} questions" in said(
+        start
+    )
 
     hard = cache["near_misses_above"]
     fell = others["policies"]["entails_min"]["by_where_the_hardest_pair_fell"]
@@ -522,6 +525,9 @@ def test_the_cache_measurement_is_the_committed_run() -> None:
         str(others["chosen_policy"]["splits_with_something_wrong"]),
     ]
     assert highest["score"] < weaker["threshold"]
+    # What 0.143 is: the highest score at which a near-miss would be served, not a pair's score.
+    assert f"would be served above {three(highest['score'])} by the weaker direction" in said(start)
+    assert "are all on the choosing half" in said(start)
     assert {pair["half"] for pair in hard["policies"]["entails_min"]["pairs"]} == {"choosing"}
     # "those are exactly the splits that put one pair, `d067`, on the reporting half"
     assert f"`{fell['pair']}`" in said(start)

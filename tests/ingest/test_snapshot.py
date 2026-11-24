@@ -165,7 +165,10 @@ def test_the_commit_of_a_snapshot_on_disk_can_be_read(upstream: Upstream, tmp_pa
     assert snapshot_commit(tmp_path / "data") == upstream.second_commit
 
 
-@pytest.mark.parametrize("manifest", [None, '{"commit": null}'], ids=["no manifest", "null"])
+NAMES_NO_COMMIT = [None, '{"commit": null}', "not json", "[]", '{"commit": 5}', '{"commit": ""}']
+
+
+@pytest.mark.parametrize("manifest", NAMES_NO_COMMIT)
 def test_a_snapshot_whose_manifest_names_no_commit_is_known_by_its_clone(
     upstream: Upstream, tmp_path: Path, manifest: str | None
 ) -> None:
@@ -179,13 +182,37 @@ def test_a_snapshot_whose_manifest_names_no_commit_is_known_by_its_clone(
     assert snapshot_commit(tmp_path / "data") == upstream.first_commit
 
 
-@pytest.mark.parametrize("text", ["not json", "[]", '{"commit": 5}'])
-def test_a_manifest_that_cannot_be_read_is_reported_as_such(tmp_path: Path, text: str) -> None:
+@pytest.mark.parametrize("text", ["not json", "[]", '{"commit": 5}', '{"commit": ""}'])
+def test_a_manifest_that_cannot_be_read_names_no_commit_and_is_no_error(
+    tmp_path: Path, text: str
+) -> None:
+    # With no clone beside it there is no snapshot to protect, and the next download
+    # writes the manifest again. An error here would stop every download for good.
     (tmp_path / "data").mkdir()
     (tmp_path / "data" / "manifest.json").write_text(text)
 
-    with pytest.raises(SnapshotError, match=r"manifest\.json cannot be read"):
-        snapshot_commit(tmp_path / "data")
+    assert snapshot_commit(tmp_path / "data") is None
+
+
+def test_a_replacement_whose_download_fails_keeps_the_manifest(
+    upstream: Upstream, tmp_path: Path
+) -> None:
+    # The manifest goes only when the files are about to change, not before the download,
+    # which a network can fail.
+    dest = tmp_path / "data"
+    download(upstream, dest)
+    manifest = (dest / "manifest.json").read_text()
+
+    with pytest.raises(SnapshotError, match="git fetch failed"):
+        download_snapshot(
+            repo_url=str(tmp_path / "nowhere"),
+            commit=upstream.second_commit,
+            content_path="content/handbook",
+            licence="CC-BY-SA-4.0",
+            dest=dest,
+        )
+
+    assert (dest / "manifest.json").read_text() == manifest
 
 
 def test_a_folder_without_a_clone_of_its_own_has_no_commit_even_inside_a_repository(

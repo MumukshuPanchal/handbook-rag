@@ -476,7 +476,9 @@ def test_after_a_reuse_the_rate_counts_only_the_time_spent_embedding(
 # What the review of these commands found.
 
 
-@pytest.mark.parametrize("manifest", [None, '{"commit": null}'], ids=["no manifest", "null"])
+@pytest.mark.parametrize(
+    "manifest", [None, '{"commit": null}', "not json"], ids=["no manifest", "null", "not json"]
+)
 def test_snapshot_refuses_to_replace_another_commit_whose_manifest_names_none(
     monkeypatch: pytest.MonkeyPatch, upstream: Upstream, tmp_path: Path, manifest: str | None
 ) -> None:
@@ -496,19 +498,22 @@ def test_snapshot_refuses_to_replace_another_commit_whose_manifest_names_none(
     assert "25 days" in leave_page(data_dir)
 
 
-def test_snapshot_explains_a_manifest_it_cannot_read(
-    monkeypatch: pytest.MonkeyPatch, upstream: Upstream, tmp_path: Path
+@pytest.mark.parametrize("arguments", [["snapshot"], ["snapshot", "--replace"]])
+def test_a_manifest_that_cannot_be_read_does_not_stop_the_same_commit_or_a_replacement(
+    monkeypatch: pytest.MonkeyPatch, upstream: Upstream, tmp_path: Path, arguments: list[str]
 ) -> None:
+    # Refusing here would be a dead end: no run of the command could write the manifest again.
     data_dir = tmp_path / "data"
-    snapshot_at(monkeypatch, upstream, data_dir, upstream.first_commit)
-    (data_dir / "handbook" / "manifest.json").write_text("not json")
+    assert snapshot_at(monkeypatch, upstream, data_dir, upstream.first_commit).exit_code == 0
+    manifest_path = data_dir / "handbook" / "manifest.json"
+    manifest = manifest_path.read_text()
+    manifest_path.write_text("not json")
 
-    refused = snapshot_at(monkeypatch, upstream, data_dir, upstream.second_commit)
+    again = runner.invoke(app, arguments)
 
-    assert refused.exit_code == 1
-    assert isinstance(refused.exception, SystemExit)
-    assert "manifest.json cannot be read" in refused.output
-    assert "25 days" in leave_page(data_dir)
+    assert again.exit_code == 0, again.output
+    assert json.loads(manifest_path.read_text())["commit"] == upstream.first_commit
+    assert json.loads(manifest_path.read_text()) == json.loads(manifest)
 
 
 def broken_older_point(handbook: Handbook) -> str:
@@ -584,6 +589,17 @@ def test_a_tolerance_that_would_make_the_comparison_meaningless_is_refused(
     assert result.exit_code == 2
     assert "must be a finite number of at least 0" in result.output
     assert handbook.embedder.embedded == []
+
+
+def test_a_tolerance_of_zero_is_accepted_by_the_command(handbook: Handbook) -> None:
+    # Zero is what the comparison of two indexes of the tests is held to.
+    assert runner.invoke(app, ["index"]).exit_code == 0
+    name = handbook.collection(OLD).collection
+
+    result = runner.invoke(app, ["compare-collections", name, name, "--tolerance", "0"])
+
+    assert result.exit_code == 0, result.output
+    assert "vectors     0 differ by more than 0;" in result.output
 
 
 def test_compare_collections_applies_the_tolerance_it_is_given(handbook: Handbook) -> None:

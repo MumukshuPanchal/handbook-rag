@@ -706,3 +706,48 @@ def test_a_collection_of_that_commit_named_otherwise_is_not_said_to_have_other_s
         "read from its name." in message
     )
     assert "made with another" not in message
+
+
+# What the second round of the review found.
+
+
+def test_each_lent_point_without_a_keyword_vector_gets_the_one_of_its_own_text() -> None:
+    # One chunk alone could not tell the right text from the first one, or the right
+    # place from the first or the last.
+    client = QdrantClient(":memory:")
+    old_store, full, updated = (QdrantVectorStore(client, n) for n in ("old", "full", "updated"))
+    chunks = [
+        make_chunk(text)
+        for text in (
+            "Take 25 days.",
+            "Carry over five days.",
+            "Tell your manager first.",
+            "the of a",
+        )
+    ]
+    texts = [chunk.text_for_embedding for chunk in chunks]
+    keyword = FakeSparseEncoder().encode_documents(texts)
+    keyword[1] = keyword[2] = SparseVector([], [])  # stored without their keyword vectors
+    old_store.ensure_collection(ExactEmbedder.dimension)
+    old_store.upsert(chunks, ExactEmbedder().embed_documents(texts), keyword)
+    newer = [dataclasses.replace(chunk, source_commit=NEW_COMMIT) for chunk in chunks]
+    build(full, newer)
+
+    done = update(old_store, updated, newer)
+
+    assert (done.report.reused, done.report.embedded) == (4, 0)
+    assert compare_collections(full, updated, tolerance=0.0).differences() == []
+
+
+def test_a_collection_named_with_the_embedding_model_only_is_not_said_to_have_another() -> None:
+    # The form the names had before keyword vectors: the same embedding model, no keyword model.
+    settings = Settings(handbook_commit=NEW_COMMIT)
+    store = QdrantVectorStore(QdrantClient(":memory:"), settings.collection_name)
+    older = settings.collection_for(OLD_COMMIT).replace("-qdrant-bm25", "")
+    store.with_collection(older).ensure_collection(dimension=8)
+
+    with pytest.raises(ReuseError) as refused:
+        find_reuse_source(store, settings, OLD_COMMIT)
+
+    assert "another embedding model" not in str(refused.value)
+    assert "made with another keyword model" in str(refused.value)

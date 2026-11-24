@@ -89,7 +89,9 @@ def _described(rest: str, settings: Settings) -> str:
         return _NAMED_OTHERWISE
     models, chunking = named.group("models"), named.group("chunking")
     differences: list[str] = []
-    if not models.startswith(f"{collection_slug(settings.embedding_model)}-"):
+    embedding = collection_slug(settings.embedding_model)
+    # The embedding model alone is the form the names had before keyword vectors.
+    if models != embedding and not models.startswith(f"{embedding}-"):
         differences.append(f"embedding model (these settings use {settings.embedding_model})")
     if not models.endswith(f"-{collection_slug(settings.sparse_model)}"):
         differences.append(f"keyword model (these settings use {settings.sparse_model})")

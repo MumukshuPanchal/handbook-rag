@@ -105,31 +105,30 @@ def download_snapshot(
 def snapshot_commit(dest: Path) -> str | None:
     """The commit of the snapshot already in ``dest``, or ``None`` when there is none.
 
-    The manifest says it. When there is no manifest, or it names no commit, the files
-    may still be there, for example after a run that failed halfway, so the clone is
-    asked which commit it has checked out.
+    The manifest says it. When there is no manifest, or it cannot be read, or it names
+    no commit, the files may still be there, for example after a run that failed
+    halfway, so the clone is asked which commit it has checked out. A manifest that
+    cannot be read is no reason to refuse a download: the download writes it again.
     """
-    manifest_path = dest / "manifest.json"
-    if manifest_path.is_file():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise SnapshotError(f"{manifest_path} cannot be read: {error}") from error
-        if not isinstance(manifest, dict):
-            raise SnapshotError(f"{manifest_path} cannot be read: it is not a JSON object.")
-        commit = manifest.get("commit")
-        if isinstance(commit, str):
-            return commit
-        if commit is not None:
-            raise SnapshotError(
-                f"{manifest_path} cannot be read: its commit is {commit!r}, not a hash."
-            )
+    commit = _manifest_commit(dest / "manifest.json")
+    if commit is not None:
+        return commit
     repo_dir = dest / "repo"
     # Only a clone of its own is asked. A folder without one could lie inside another
     # repository, whose commit git would report instead.
     if not (repo_dir / ".git").is_dir():
         return None
     return _current_commit(repo_dir)
+
+
+def _manifest_commit(manifest_path: Path) -> str | None:
+    """The commit a manifest names, or ``None``: no manifest, not readable, or no commit in it."""
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    commit = manifest.get("commit") if isinstance(manifest, dict) else None
+    return commit if isinstance(commit, str) and commit else None
 
 
 def _prepare_clone(repo_dir: Path, repo_url: str, content_path: str) -> None:

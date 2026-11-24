@@ -17,7 +17,7 @@ What each version of this project contains. The format follows [Keep a Changelog
 
 ### Changed
 
-- `snapshot` refuses to replace a snapshot of another commit in the data directory unless it is given `--replace`, so that a newer commit is downloaded beside the pinned one and not over it. When the manifest names no commit, the clone is asked which one is there ([ADR 0019]).
+- `snapshot` refuses to replace a snapshot of another commit in the data directory unless it is given `--replace`, so that a newer commit is downloaded beside the pinned one and not over it. When the manifest is missing, cannot be read or names no commit, the clone is asked which one is there ([ADR 0019]).
 - The repository is named `handbook-rag`, like the Python package and the command. It was `production-rag-pipeline`. GitHub redirects the old address, and the links in the documents use the new one ([#70]).
 - A request that the model's provider refuses as it was sent is reported as a problem of configuration and never sent again. It was reported as an unavailable model. A refusal in the 400s is sent again only when the provider's own SDK would send it again by default: 408 for Gemini, 408 and 409 for Claude. A 429 is a rate limit or a used-up allowance, as before. So 409 for Gemini, 499 for both, and every other refusal in the 400s count as configuration ([ADR 0018]).
 - The Claude SDK's own trace span is switched off for answers: each request already has the project's span, and the SDK's would count its tokens a second time ([ADR 0018]).

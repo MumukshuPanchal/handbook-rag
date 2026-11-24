@@ -623,10 +623,15 @@ def test_the_answer_cache_section_is_the_third_committed_cache_run() -> None:
         near_miss["question_id"] in held["kept_from_the_second_tier"]["says_something_is_missing"]
     )
     start_of_line = "- **One near-miss is kept out by the second guard alone.**"
+    # Then what the guard finds of the replies it was not written from: 1 of 5, which
+    # tests/evals/test_committed_cache_run_as_built.py works out from their file.
     assert says(start_of_line) == [
-        three(min(near_miss["entails_forward"], near_miss["entails_backward"]))
+        three(min(near_miss["entails_forward"], near_miss["entails_backward"])),
+        "5",
+        "1",
     ]
     assert "`d067`" in line_starting(section, start_of_line)
+    assert "so this is no test of it" in line_starting(section, start_of_line)
     # What the second guard is, said with both of its faults.
     assert (
         "It errs towards keeping an answer out, and a reply that words the gap another way "
@@ -640,7 +645,12 @@ def test_the_answer_cache_section_is_the_third_committed_cache_run() -> None:
     # than the defaults.
     year, month, day = run["measured_on"].split("-")
     assert f"on {int(day)} {MONTHS.split()[int(month) - 1]} {year}, by hand" in section
-    assert "The check was made with the defaults of that day" in section
+    assert "That check was made with the defaults of that day" in section
+    # The second check, after the fixes, is given as another session's account.
+    assert (
+        "it was made again, cold and with the defaults of today, by the session that "
+        "coordinated this change: 4 questions, of which 2 cost a request"
+    ) in section
 
 
 def test_every_link_to_a_file_or_a_heading_leads_to_one() -> None:

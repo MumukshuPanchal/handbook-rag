@@ -643,6 +643,8 @@ The run above takes a label's word for what a cache holds. A cache holds what th
 So the cache got a second guard, and the measurement a way to apply the cache's own rule:
 
 - **A guard for a gap that is said in the model's own words.** An answer that says in plain words that something is not in the handbook is served to the very same question only. The instructions fix no words for that, so the guard is a list of phrases, such as "not provided", "does not cover" and "do not specify" (`MISSING_PHRASES` in `src/handbook_rag/cache/rules.py`). **It errs towards keeping an answer out**: "dental care is not covered" is a plain answer, and it matches. **And a reply can get past it**: a gap worded in a way the list does not hold is not recognised, and that answer stays a candidate.
+- **The list is fitted to four replies.** It was written after the replies of the answer run had been read. Of its 1,093 phrases, 4 are in a reply the model wrote, and they are named below. The others are their relatives, and no answer of the saved answer run or of the adversarial run holds one of them. It reads English only.
+- **On replies it was not written from, it finds 1 of 5.** The [labelled answers of the second judge](../evals/judge/README.md) hold 5 replies that a model session wrote to give none of what was asked. The guard finds the one that says "does not specify". It misses "there is no single answer", "I don't know", "I'm not sure" and "I wasn't able to find". A test works this out again from that file.
 - **A simulated cache that is filled with replies.** `eval-cache --replies` fills the simulated cache with the replies of a saved answer run. The code of the cache itself then decides which reply is kept, and which may be served to a question worded differently (`src/handbook_rag/evals/cache_replies.py`). No label is used for either.
 
 ```bash
@@ -670,7 +672,7 @@ uv run handbook-rag eval-cache --variant as-built --replies evals/runs/answers/b
 On the choosing half each of the two ways to read the second check served 18 of 49 rewordings right, so the rule takes the weaker direction once more.
 
 - **The rule gives the threshold of the second run: 0.8669.** The near-miss that sets it is again `d004`, at 0.8206, and the next score seen on the choosing half is 0.9132.
-- **`d067` is not served.** The reply stored for `u004` is one of the 4, so it is no candidate. Without the second guard it would be the nearest candidate, at a cosine of 0.962, with 0.989 from the second check. That is above every threshold of this section, and the rule would have had to stay above it, as it did in the first run.
+- **`d067` is not served.** The reply stored for `u004` is one of the 4, so it is no candidate. Without the second guard it would be the nearest candidate, at a cosine of 0.962, with 0.989 from the second check. That is above every threshold of this section, and the rule would have had to stay above it, as it did in the first run. This is the reply the list was fitted to, so it shows that the fit holds. It is no test of the guard.
 - **The reply that is kept from `d067` names the quarters it asks about.** The pair is labelled `different` because its two questions need different answers, and the rule counts by labels. The reply to `u004` happens to hold the other answer too. The guard does not know that. It keeps the reply out because a reply that says something is missing may lack the very thing the next question asks.
 - **It served 16 of 49 rewordings on the reporting half, and nothing wrong.** None of the 50 near-misses was served, and no rewording was served another stored question's answer. By how the question was reworded, it served 4 of 5 put in other words, 7 of 13 with everyday words for the key terms, 1 of 9 typed as into a search box, 2 of 10 with a personal lead-in and 2 of 12 from another angle. Each count is the second run's.
 - **On the choosing half it served 18 rewordings, where the second run served 20.** `s027` and `s061` reword questions that the handbook answers and the model declined, `q037` and `q088`. A stored decline is no candidate, so nothing is served for them by meaning. For 7 of the 98 rewordings the reply stored for their own question is one that the cache keeps from the second tier. The other 5 were not served in the second run either.
@@ -680,7 +682,7 @@ On the choosing half each of the two ways to read the second check served 18 of 
 - **With every pair in view the rule gives 0.8836** and serves 34 of the 98 rewordings and nothing wrong. A description: that threshold is scored on the pairs it is read from.
 - **What it cost.** The verifier read 633 pairs, each in both directions, in 11.7 seconds: 18.5 ms a pair, in batches. Embedding the 352 questions one at a time took 6.2 seconds.
 
-How far this goes: everything [said of the first run](#a-semantic-cache-measured-before-it-is-built) holds here too. The pairs are the same, written and labelled by model sessions and read by no person. The set is hard on purpose, so each rate is per rewording asked or per near-miss asked, and none is a rate of real questions. The cache simulated holds the 165 replies of one answer run. Another run of the same model would give other replies: other questions declined, and other words for what is missing. The list of phrases was written after these replies had been read. That it finds all 4 of them says nothing of how many it would find among others.
+How far this goes: everything [said of the first run](#a-semantic-cache-measured-before-it-is-built) holds here too. The pairs are the same, written and labelled by model sessions and read by no person. The set is hard on purpose, so each rate is per rewording asked or per near-miss asked, and none is a rate of real questions. The cache simulated holds the 165 replies of one answer run. Another run of the same model would give other replies: other questions declined, and other words for what is missing. The list of phrases was written after these replies had been read. That it finds all 4 of them says nothing of how many it would find among others: of the 5 it was not written from, it finds 1.
 
 ### The defaults of the cache
 
@@ -701,7 +703,7 @@ How far this goes: everything [said of the first run](#a-semantic-cache-measured
 
 These defaults are fitted on these pairs. The reporting half and the other splits above are the only evidence of how the threshold behaves, and there is no evidence about real questions. Tests hold each default to the runs: the threshold to the range, the floor to the serves it leaves as they were, and the cache's own code to what the simulation served.
 
-### Checked once with the real service
+### Checked with the real service
 
 On 24 November 2026 the service was started on the development laptop with the default settings of that day, a threshold of 0.8669 and a floor of 0.5, on the real index of 38,881 chunks and with the real key, and asked 13 times. This is one check by hand, and not a saved run that a test can work out again. It shows that the parts work together. It gives no rate.
 
@@ -730,8 +732,19 @@ On 24 November 2026 the service was started on the development laptop with the d
 - **The command line** printed the first answer from the cache as an exact match, and the fourth as matched by meaning with a similarity of 0.929 and 0.998 by the second check. Neither cost a request. The whole command took 18.7 and 22.8 seconds, nearly all of it loading Python and the models.
 - **No question reached a trace.** The service ran with tracing on and content off. Its 187 spans held scores, counts and the names of pages, and none of the questions asked.
 - **Afterwards** `handbook-rag cache-status` counted 7 stored answers, 2 of them declines, and `handbook-rag cache-clear` removed them.
-- **It was made before the third run, and it was not made again.** The cache has changed since: the second guard, the defaults of 0.91 and 0.7, a time limit for a lookup, and a collection that is made before the first question. By the scores in the table, each of the 13 questions would be served or turned down under today's defaults as it was that day. The one match by meaning scored 0.998, and its answer holds none of the second guard's phrases. Of the questions turned down none scored above 0.042 by the weaker direction.
-- **What this check missed.** It asked its questions seconds apart. A second check by hand asked a question, the same question at once and a rewording at once. The repeat was not served, and the third lookup failed. The first answer to be stored was still making the cache's collection, in the background, and on a busy laptop that took seconds. The collection is now made before the first question is looked up, and emptying the cache keeps it ([ADR 0020](adr/0020-an-answer-cache-that-matches-by-meaning.md#where-it-is-kept-and-why-entries-have-no-time-limit)). `tests/cache/test_real_server.py` holds that against a real store. It is one of the slow tests, which do not run in CI.
+- **It was made before the third run.** The cache has changed since: the second guard, the defaults of 0.91 and 0.7, a time limit for a lookup, and a collection that is made before the first question. By the scores in the table, each of the 13 questions would be served or turned down under today's defaults as it was that day. The one match by meaning scored 0.998, and its answer holds none of the second guard's phrases. Of the questions turned down none scored above 0.042 by the weaker direction.
+- **What this check missed.** It asked its questions seconds apart. A check by hand during the review asked a question, the same question at once and a rewording at once. The repeat was not served, and the third lookup failed. The first answer to be stored was still making the cache's collection, in the background, and on a busy laptop that took seconds. The collection is now made before the first question is looked up, and emptying the cache keeps it ([ADR 0020](adr/0020-an-answer-cache-that-matches-by-meaning.md#where-it-is-kept-and-why-entries-have-no-time-limit)). `tests/cache/test_real_server.py` holds that against a real store. It is one of the slow tests, which do not run in CI.
+
+**Checked again after the fixes**, on 24 November 2026, with the defaults of today, a threshold of 0.91 and a floor of 0.7. It is the account of the session that coordinated this change, of a single run on one laptop, and no file of it is in the repository. The service was started cold, with no cache collection in the store, and asked at once. The collection existed as soon as `/health` answered.
+
+| Asked | What happened | Requests | Wait | Cosine, and the verifier's weaker direction |
+|---|---|---|---|---|
+| How do I request a new laptop when mine is damaged? | the model answered | 1 | 1.9 s | |
+| the same in other case, without its question mark | served by the exact tier | 0 | 12.9 ms | |
+| My laptop is damaged. How do I request a new one? | served by meaning, the first answer | 0 | 152 ms | 0.966; 0.9945 |
+| How do I request a new monitor when mine is damaged? | not served; the model declined | 1 | 11.7 s | |
+
+The log of the service held no line that the cache could not be searched, and the check cost 2 requests. It gives no rate either.
 
 ## What a run writes
 

@@ -811,8 +811,43 @@ def test_warming_up_loads_the_verifier_and_asks_it_once() -> None:
     assert lazy.loaded is True
     assert len(verifier.calls) == 1
     assert len(verifier.calls[0]) == 1
-    # The exact tier has nothing to warm up.
-    cache_over(memory_answers(), {}).warm_up()
+    assert lazy.asked is True
+
+
+def test_warming_up_runs_both_models_once_and_neither_without_the_second_tier() -> None:
+    embedder, verifier = Vectors({}), TableVerifier()
+    semantic = AnswerCache(
+        memory_answers(), embedder=embedder, verifier=verifier, threshold=THRESHOLD
+    )
+
+    semantic.warm_up()
+
+    # The pair the verifier reads, and the first of its two questions for the embedding.
+    assert verifier.calls == [[cache_answers._WARM_UP]]
+    assert embedder.queries == [cache_answers._WARM_UP[0]]
+    # With the exact tier only, a lookup runs no model, so there is nothing to run first.
+    alone = Vectors({})
+    AnswerCache(memory_answers(), embedder=alone, threshold=THRESHOLD).warm_up()
+    assert alone.queries == []
+
+
+def test_an_embedding_model_that_fails_at_the_warm_up_is_logged_and_the_verifier_is_still_run(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class Broken(Vectors):
+        def embed_query(self, text: str) -> list[float]:
+            raise RuntimeError("out of memory")
+
+    verifier = TableVerifier()
+    cache = AnswerCache(
+        memory_answers(), embedder=Broken({}), verifier=verifier, threshold=THRESHOLD
+    )
+
+    with caplog.at_level(logging.WARNING):
+        cache.warm_up()
+
+    assert "the answer cache could not be warmed up: builtins.RuntimeError" in caplog.text
+    assert len(verifier.calls) == 1
 
 
 def test_a_verifier_is_loaded_once_however_many_ask_it_at_the_same_time() -> None:
@@ -1123,8 +1158,10 @@ class Hangs:
         self.at = at
         self.release = threading.Event()
         self.entries = [(stored_entry(STORED), 0.99)]
+        self.asked: list[str] = []
 
     def _wait(self, call: str) -> None:
+        self.asked.append(call)
         if call == self.at:
             assert self.release.wait(10.0), "the test never let the store go on"
 
@@ -1221,6 +1258,179 @@ def test_loading_the_verifier_is_not_counted_in_the_time_a_lookup_may_take() -> 
     assert loaded.is_set()
     assert found.answer is not None
     assert found.failure is None
+
+
+class SlowAtTimes(Vectors):
+    """A stand-in embedding model whose calls take as long as the test says, one by one."""
+
+    def __init__(self, seconds: Sequence[float]) -> None:
+        super().__init__({})
+        self._seconds = list(seconds)
+
+    def embed_query(self, text: str) -> list[float]:
+        if self._seconds:
+            time.sleep(self._seconds.pop(0))
+        return super().embed_query(text)
+
+
+class ReadsSlowlyAtTimes(TableVerifier):
+    """A stand-in verifier whose readings take as long as the test says, one by one."""
+
+    def __init__(self, seconds: Sequence[float]) -> None:
+        super().__init__({(STORED, REWORDED): (1.0, 1.0)})
+        self._seconds = list(seconds)
+
+    def score(self, pairs: Sequence[tuple[str, str]]) -> list[Verification]:
+        if self._seconds:
+            time.sleep(self._seconds.pop(0))
+        return super().score(pairs)
+
+
+def test_the_first_embedding_of_a_process_is_not_counted_and_a_later_one_is() -> None:
+    # The first time a process runs a model is slow, as loading it is. A command is a new
+    # process for each question, so its one lookup would pay for that inside its limit.
+    store = Hangs("nothing")
+    cache = AnswerCache(
+        store,
+        embedder=SlowAtTimes([0.3, 0.3]),
+        verifier=TableVerifier({(STORED, REWORDED): (1.0, 1.0)}),
+        threshold=THRESHOLD,
+        lookup_seconds=0.1,
+    )
+
+    first = cache.lookup(REWORDED)
+
+    assert (first.tier, first.failure) == ("semantic", None), "three times the limit, and served"
+    assert store.asked == ["get", "nearest"]
+    # The next embedding takes as long, and is counted like everything else from now on.
+    second = cache.lookup(REWORDED)
+    assert (second.answer, second.failure) == (None, "timeout")
+    # The step was still embedding when its caller left. It ends that, and does not go
+    # on to ask the store.
+    time.sleep(0.4)
+    assert store.asked == ["get", "nearest", "get"]
+
+
+def test_the_first_reading_of_a_verifier_just_loaded_is_not_counted_and_a_later_one_is() -> None:
+    lazy = LazyVerifier(lambda: ReadsSlowlyAtTimes([0.3, 0.3]), name="slow the first time")
+    cache = AnswerCache(
+        Hangs("nothing"),
+        embedder=Vectors({}),
+        verifier=lazy,
+        threshold=THRESHOLD,
+        lookup_seconds=0.1,
+    )
+    assert (lazy.loaded, lazy.asked) == (False, False)
+
+    first = cache.lookup(REWORDED)
+
+    assert (first.tier, first.failure) == ("semantic", None), "three times the limit, and served"
+    assert (lazy.loaded, lazy.asked) == (True, True)
+    # The second reading takes as long, and is counted.
+    second = cache.lookup(REWORDED)
+    assert (second.answer, second.failure) == (None, "timeout")
+
+
+@pytest.mark.parametrize("slow", ["the embedding", "the reading"])
+def test_a_cache_that_was_warmed_up_counts_everything_from_its_first_question(slow: str) -> None:
+    # A service runs both models once when it starts. After that nothing is slow for the
+    # first time, and a slow embedding or a slow reading is given up like any other.
+    embedder = SlowAtTimes([0.0, 0.3] if slow == "the embedding" else [])
+    lazy = LazyVerifier(
+        lambda: ReadsSlowlyAtTimes([0.0, 0.3] if slow == "the reading" else []), name="lazy"
+    )
+    cache = AnswerCache(
+        Hangs("nothing"), embedder=embedder, verifier=lazy, threshold=THRESHOLD, lookup_seconds=0.1
+    )
+
+    cache.warm_up()
+    found = cache.lookup(REWORDED)
+
+    assert lazy.asked is True
+    assert (found.answer, found.failure) == (None, "timeout")
+
+
+def lookups_at_work(before: Sequence[threading.Thread] = ()) -> list[threading.Thread]:
+    """The threads in which steps of lookups are running now, but for those named."""
+    return [
+        thread
+        for thread in threading.enumerate()
+        if thread.name == "handbook-rag-cache-lookup" and thread not in before
+    ]
+
+
+def test_a_lookup_that_was_given_up_does_not_take_a_turn_at_the_verifier() -> None:
+    # The verifier reads for one lookup at a time. Three questions arrive one after
+    # another while the first reading is still going on, and each is given up.
+    before = lookups_at_work()
+    verifier = SlowVerifier()
+    cache = AnswerCache(
+        Hangs("nothing"),
+        embedder=Vectors({}),
+        verifier=verifier,
+        threshold=THRESHOLD,
+        lookup_seconds=0.1,
+    )
+
+    given_up = [cache.lookup(REWORDED) for _ in range(3)]
+
+    assert [found.failure for found in given_up] == ["timeout"] * 3
+    # The two that waited for their turn stopped waiting when their callers did. Only
+    # the one that is reading is still at work.
+    patience = time.monotonic() + 2.0
+    while len(lookups_at_work(before)) > 1 and time.monotonic() < patience:
+        time.sleep(0.01)
+    assert len(lookups_at_work(before)) == 1
+    # And only that one reading was ever started: nothing reads for a caller who has left.
+    verifier.release.set()
+    patience = time.monotonic() + 2.0
+    while lookups_at_work(before) and time.monotonic() < patience:
+        time.sleep(0.01)
+    assert len(verifier.calls) == 1
+    # So the next question finds the verifier free, and is served within its time.
+    served = cache.lookup(REWORDED)
+    assert (served.tier, served.failure) == ("semantic", None)
+    assert len(verifier.calls) == 2
+
+
+def test_a_reading_whose_caller_has_left_is_not_started_when_its_turn_comes() -> None:
+    # The turn can come in the moment the caller leaves. This is that moment by itself:
+    # a lookup whose time is up, and a verifier that is free.
+    verifier = TableVerifier({(STORED, REWORDED): (1.0, 1.0)})
+    cache = AnswerCache(
+        Hangs("nothing"), embedder=Vectors({}), verifier=verifier, threshold=THRESHOLD
+    )
+    near = cache_answers._Near(((stored_entry(STORED), 0.99),), (0.0, 0.0, 1.0))
+    wait = cache_answers._Wait(0.05)
+    with pytest.raises(cache_answers._TookTooLong):
+        wait.run(time.sleep, 0.3)
+    assert wait.over is True
+    # Time enough to take the turn, were it only a matter of time.
+    wait.not_counted(5.0)
+
+    with pytest.raises(cache_answers._TookTooLong):
+        cache._verify(REWORDED, None, comparable(REWORDED), near, wait)
+
+    assert verifier.calls == []
+    # The turn was given back: the next lookup is served.
+    assert cache.lookup(REWORDED).tier == "semantic"
+    # A lookup that still has its caller, and time, reads as always.
+    in_time = cache_answers._Wait(5.0)
+    assert in_time.over is False
+    assert cache._verify(REWORDED, None, comparable(REWORDED), near, in_time).answer is not None
+
+
+def test_a_step_is_not_started_once_the_time_of_its_lookup_is_up() -> None:
+    wait = cache_answers._Wait(0.01)
+    time.sleep(0.05)
+    started: list[str] = []
+
+    with pytest.raises(cache_answers._TookTooLong):
+        wait.run(started.append, "a step")
+
+    assert started == []
+    assert wait.over is True
+    assert wait.left < 0
 
 
 def test_a_verifier_that_cannot_be_loaded_at_the_first_question_is_a_miss(

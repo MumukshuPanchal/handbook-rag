@@ -169,8 +169,10 @@ class Settings(BaseSettings):
             "threshold from there to 0.9131 serves that run exactly the same. The "
             "default is the top of that range, to two places: it costs nothing on the "
             "run, and it stands further above the highest score at which the run holds "
-            "a wrong serve, 0.854. That run's other half and its other splits are the "
-            "only evidence of how it behaves, and there is none about real questions."
+            "a wrong serve, 0.854. Where in the range it stands was chosen with every "
+            "pair in view, so nothing tests that choice. That run's other half and its "
+            "other splits are the only evidence of how the rule's threshold behaves, "
+            "and there is none about real questions."
         ),
     )
     cache_candidates: int = Field(
@@ -194,8 +196,9 @@ class Settings(BaseSettings):
             "read from the labelled pairs with every pair in view: in the three saved "
             "runs no candidate under a cosine of 0.76 scored above 0.13, and with a "
             "floor of 0.7 every question is served what it is served with the "
-            "measurement's own 0.5. The wrong serve that scores highest in the runs is "
-            "at a cosine of 0.789, above it."
+            "measurement's own 0.5. The wrong serve that scores highest is at a cosine "
+            "of 0.789 in the last two runs and of 0.962 in the first: above it each "
+            "time."
         ),
     )
     cache_verifier_model: str = Field(

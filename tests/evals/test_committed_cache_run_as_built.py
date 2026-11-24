@@ -89,12 +89,14 @@ RUN = RUNS / "as-built"
 SECOND = RUNS / "no-decline-candidates"
 FIRST = RUNS / "baseline"
 ANSWERS = ROOT / "evals" / "runs" / "answers" / "baseline"
+# The labelled answers of the second judge: text the second guard was not written from.
+JUDGED = ROOT / "evals" / "judge" / "correct" / "cases.jsonl"
 GUIDE = ROOT / "docs" / "evaluation.md"
 CARD = ROOT / "evals" / "cache" / "README.md"
 RECORD = ROOT / "docs" / "adr" / "0020-an-answer-cache-that-matches-by-meaning.md"
 HEADING = "The answer cache, measured as it is built"
 SECOND_HEADING = "The measurement again, with stored declines left out"
-REAL_CHECK = "### Checked once with the real service"
+REAL_CHECK = "### Checked with the real service"
 DEFAULTS = "### The defaults of the cache"
 # The two ends of the thresholds that serve a run what the rule's threshold serves it, to
 # four places. The tests below work them out from the runs. The documents quote them.
@@ -312,6 +314,70 @@ def test_the_relatives_of_the_four_phrases_find_nothing_more_in_the_saved_replie
         assert phrases_in(text) == [], reply["question_id"]
 
 
+def written_to_give_no_answer() -> dict[str, str]:
+    """The replies a model session wrote, for the second judge's labelled answers, to give
+    none of what was asked: "the handbook does not say", "it depends", a referral."""
+    cases = [json.loads(line) for line in JUDGED.read_text(encoding="utf-8").splitlines() if line]
+    return {case["case"]: case["answer"] for case in cases if case["kind"] == "no_answer"}
+
+
+def test_the_second_guard_finds_one_of_five_replies_it_was_not_written_from() -> None:
+    """The list was written from four replies of one answer run, and finds all four.
+
+    That says nothing of other replies. These five were written by another session for
+    another purpose, before the guard existed. Each gives none of what was asked, which
+    is more than the gap in part that the guard is for, and it finds one of them.
+    """
+    replies = written_to_give_no_answer()
+
+    found = {case: phrases_in(answer) for case, answer in replies.items()}
+
+    assert len(replies) == 5
+    assert {case: phrases for case, phrases in found.items() if phrases} == {
+        "q006-v1": ["does not specify"]
+    }
+    missed = [answer for case, answer in replies.items() if not found[case]]
+    assert len(missed) == 4
+    # Each of the four says it in words the list does not hold, as the guide quotes them.
+    line = said(found_by_the_run(), "On replies it was not written from, it finds 1 of 5.")
+    quoted = re.findall(r'"([^"]+)"', line)
+    assert quoted == [
+        "does not specify",
+        "there is no single answer",
+        "I don't know",
+        "I'm not sure",
+        "I wasn't able to find",
+    ]
+    assert quoted[0] in rules.MISSING_PHRASES
+    for words in quoted[1:]:
+        assert sum(words in answer for answer in missed) == 1, words
+    assert numbers(line) == ["1", str(len(replies)), str(len(replies))]
+    # What the list is fitted to: four phrases of its 1,093 are in a reply the model wrote.
+    line = said(found_by_the_run(), "The list is fitted to four replies.")
+    assert numbers(line) == [f"{len(rules.MISSING_PHRASES):,}", "4"]
+    assert len(kept_out()[rules.SAYS_SOMETHING_IS_MISSING]) == 4
+    assert "It reads English only." in line
+    # The record and the README give the same figure, and the same warning about d067.
+    line = said(record(), "An answer in which one of two guards finds that part of the question")
+    assert numbers(line) == [str(len(replies)), "1"]
+    assert "**The list is fitted to four replies of one answer run**, and it reads English" in line
+    assert (
+        "That `d067` is not served in the third run is that fit, and no test of the guard."
+        in record()
+    )
+    assert (
+        "This is the reply the list was fitted to, so it shows that the fit holds. It is no "
+        "test of the guard."
+    ) in said(found_by_the_run(), "`d067` is not served.")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert (
+        "The list was fitted to that reply and three others, so this is no test of it: of 5 "
+        "replies it was not written from, it finds 1"
+    ) in readme
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "Of 5 replies it was not written from, it finds 1." in changelog
+
+
 def test_no_candidate_of_the_third_run_holds_a_reply_the_cache_keeps_from_the_second_tier() -> None:
     left_out = {question_id for ids in kept_out().values() for question_id in ids}
     now, before = rows(RUN, "questions.jsonl"), rows(SECOND, "questions.jsonl")
@@ -519,6 +585,21 @@ def test_the_default_floor_changes_nothing_that_any_of_the_three_runs_served() -
         ]
         assert three(candidate.scores.cosine) == "0.789"
         assert candidate.scores.cosine >= floor
+    # In the first run it is another serve, of a stored decline, and that one is nearer.
+    first = highest_wrong_serve(agreed(FIRST), DECIDED_BY)
+    assert first is not None
+    assert (first.pair, first.served) == ("d067", "u004")
+    (stored_decline,) = [
+        candidate
+        for question in agreed(FIRST)
+        if question.pair.pair == first.pair
+        for candidate in question.candidates
+        if candidate.question_id == first.served
+    ]
+    assert three(stored_decline.scores.cosine) == "0.962"
+    assert stored_decline.scores.cosine >= floor
+    described = Settings.model_fields["cache_floor"].description or ""
+    assert "of 0.789 in the last two runs and of 0.962 in the first" in described
 
 
 def test_the_caches_other_settings_are_those_of_the_run() -> None:
@@ -939,7 +1020,12 @@ def test_what_the_guide_says_the_third_run_found_is_what_the_run_holds() -> None
     ]
     # How far it goes: one answer run, and a list written after its replies were read.
     line = line_starting(text, "How far this goes:")
-    assert numbers(line) == [str(held()["kept"]), "4"]
+    assert numbers(line) == [
+        str(held()["kept"]),
+        "4",
+        str(len(written_to_give_no_answer())),
+        "1",
+    ]
     assert "The list of phrases was written after these replies had been read." in line
 
 
@@ -1018,6 +1104,7 @@ def test_every_number_the_guide_gives_of_the_third_run_is_a_number_of_a_run() ->
     allowed |= {
         "2026",
         "0.00000001",  # held above to the largest difference between the runs
+        f"{len(rules.MISSING_PHRASES):,}",  # the phrases of the second guard
         # What the cache holds, counted from the run's own lists of replies, above.
         str(held()["kept"] - held()["candidates"]),
         *(str(len(ids)) for ids in kept_out().values()),
@@ -1132,7 +1219,7 @@ def test_the_roadmap_and_the_changelog_quote_the_third_run() -> None:
     )
 
     # The issue, the record, the default, the reporting half, the other splits with the
-    # rule's own threshold, and the requests of the check by hand, which no run holds.
+    # rule's own threshold, and the requests of the two checks by hand, which no run holds.
     assert numbers(roadmap) == [
         "24",
         "0020",
@@ -1142,7 +1229,9 @@ def test_the_roadmap_and_the_changelog_quote_the_third_run() -> None:
         f"{figures['threshold']:.4f}",
         str(over["splits_with_something_wrong"]),
         "7",
+        "2",
     ]
+    assert "It was checked with the real service twice" in roadmap
     assert numbers(changelog) == [
         *served_right,
         f"{figures['threshold']:.4f}",
@@ -1306,6 +1395,22 @@ def test_the_decision_record_gives_the_figures_of_the_runs() -> None:
     line = said(text, "A label for what the second guard keeps from `d067`.")
     assert named(line) == ["d067", "u004", "d067"]
     assert "The pair's label says `different`, and the rule counts by labels." in line
+    # What the time limit of a lookup does not count, and what a lookup that was given
+    # up leaves alone. The tests of the cache hold both.
+    assert "**What is slow only the first time in a process is not counted**" in text
+    assert "**A lookup that was given up starts nothing more.**" in text
+    # What `index` cannot reach.
+    assert (
+        "An answer that a running service is still writing when `index` empties the caches is "
+        "stored afterwards, and stays."
+    ) in text
+    # The second check with the real service is given as what it is.
+    whose = (
+        "It is the account of the session that coordinated this change, of a single run on "
+        "one laptop, and no file of it is in the repository."
+    )
+    assert whose in text
+    assert whose in GUIDE.read_text(encoding="utf-8")
     # What it never says of the cache.
     for word in ("safe", "guarantee", "proves", "proven"):
         assert word not in text.lower(), word
@@ -1333,6 +1438,10 @@ def test_the_sentences_that_said_more_than_is_known_are_gone() -> None:
             "is one of the 33, so the wrong serve",
             "the loosest threshold from which upwards",
             "the threshold is the loosest one",
+            # The check with the real service was made a second time.
+            "was not made again",
+            "Checked once with the real service",
+            "checked once with the real service",
         ):
             assert gone not in text, (name, gone)
     # Only the third run is called the cache as it is built.
@@ -1400,6 +1509,7 @@ def test_the_settings_name_the_run_their_defaults_come_from() -> None:
         assert "real questions" in text, "what the default says nothing about"
         assert "0.8669" in text, "the rule's own threshold, beside the default"
         assert "0.9131" in text
+        assert "chosen with every pair in view, so nothing tests that choice" in text
     for text in (floor, example):
         assert "does nothing for correctness" in text
     assert "with every pair in view" in floor

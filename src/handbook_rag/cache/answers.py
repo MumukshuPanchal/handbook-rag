@@ -33,9 +33,10 @@ does not end it:
 Not every reply is kept (``rules.storable``). And the cache stands before an answer for
 a bounded time only: a lookup that has not ended after :data:`LOOKUP_SECONDS` is given
 up, a store that is down or a verifier that fails is a miss, and a reply that cannot be
-stored still goes out. Each of these is logged. One wait is not bounded: a command
-loads the verifier the first time a stored question is near its own, as it loads its
-other models when it starts.
+stored still goes out. Each of these is logged. What a process does only once is not
+bounded: loading the verifier, its first reading, and the first embedding. A service
+does all three when it starts. A command does them the first time a question needs
+them, as it loads its other models when it starts.
 
 The rules themselves are in ``cache/rules.py``, which needs no store and no model. An
 evaluation may apply them, and may not build what is in this module (``measuring.py``).
@@ -95,10 +96,16 @@ and the question is answered as if there were no cache.
 
 Without it, what stands before every answer is the store's own time limit, 10 seconds in
 the service and 60 on the command line, and the wait for the verifier, which reads for
-one question at a time. In the check with the real service the slowest lookup took 1.2
-seconds, on a machine that had paged the models out, and the others under 0.3. Loading
-the verifier is not counted: a command loads it once, when the first question needs it,
-as it loads its other models when it starts."""
+one question at a time. In the first check with the real service the slowest lookup took
+1.2 seconds, on a machine that had paged the models out, and the others under 0.3.
+
+What is slow only the first time in a process is not counted: loading the verifier, its
+first reading, and the first embedding. A command is a new process for each question,
+so its one lookup would pay for all three inside the limit. In three fresh processes on
+the development laptop the first embedding took 138 to 176 ms and the verifier's first
+reading 218 to 670 ms, where the second took 24 to 122 ms and 61 to 166 ms. A service
+runs both models once when it starts (:meth:`AnswerCache.warm_up`), and from then on
+everything is counted."""
 
 TIMED_OUT: Final = "timeout"
 """What a lookup records as its failure when it was given up for taking too long."""
@@ -107,7 +114,8 @@ PENDING_WRITES = 64
 """How many answers may wait to be stored. One more is dropped, and logged: a store too
 slow to keep up must not hold answers in memory without end."""
 
-# The verifier is asked once when a service starts, so that no question waits for it.
+# Both models are run once when a service starts, so that no question waits for the
+# first use of either: the first question is embedded, and the pair is verified.
 _WARM_UP = ("How many days of leave do I get?", "How much leave am I given?")
 
 logger = logging.getLogger(__name__)
@@ -214,6 +222,13 @@ class AnswerCache:
         self._lookup_seconds = lookup_seconds
         self._writer = _Writer() if background else None
         self._now = now if now is not None else _utc_now
+        # The first time a process runs a model is slow, as loading it is, and is not
+        # counted in the time a lookup may take. This says whether the embedding model
+        # has run for a lookup of this cache, or for its warm-up. The lazy verifier says
+        # of itself whether it has read.
+        self._embedder_is_warm = False
+        # The verifier reads for one lookup at a time, each in its turn (see _verify).
+        self._one_check_at_a_time = threading.Lock()
 
     @property
     def mode(self) -> Mode:
@@ -235,13 +250,28 @@ class AnswerCache:
         return True
 
     def warm_up(self) -> None:
-        """Load the verifier and run it once, so that no question waits for either.
+        """Run both models once, so that no question waits for the first use of either.
 
-        A failure leaves this method: a service that cannot load a model it is set to
-        use should say so when it starts, not at the first question that needs it.
+        The first time a process runs a model takes several times as long as any later
+        time. A service pays that here, when it starts, and every lookup after it is
+        counted in full. With the exact tier only, a lookup runs no model, and there is
+        nothing to do.
+
+        A verifier that cannot be loaded or asked leaves this method: a service that
+        cannot load a model it is set to use should say so when it starts, not at the
+        first question that needs it.
         """
-        if self._verifier is not None:
-            self._verifier.score([_WARM_UP])
+        verifier = self._verifier
+        if verifier is None:
+            return
+        try:
+            self._embed(_WARM_UP[0])
+        except Exception as error:
+            # A service finds out about its embedding model when its search is run for
+            # the first time. Here a failure costs the first lookup its time and no more.
+            _failed("warmed up", error)
+        with self._one_check_at_a_time:
+            verifier.score([_WARM_UP])
 
     def lookup(self, question: str, *, section: str | None = None, read: bool = True) -> Lookup:
         """Look for a stored answer to ``question``. Never raises.
@@ -250,35 +280,43 @@ class AnswerCache:
         what comes back is a miss that :meth:`store` can still keep the new answer for.
         A tier that cannot be asked, because the store is down or the verifier failed,
         is a miss too, and so is a lookup that has not ended after the cache's time
-        limit. Each is logged. The limit covers the store and the verifier's reading.
-        It does not cover loading the verifier, which a command does here the first
-        time it needs it, and which is a download the first time ever.
+        limit. Each is logged.
 
-        The work is done in a thread of its own, which is what lets the caller stop
-        waiting. A lookup that was given up goes on there to its end, and what it finds
-        is thrown away.
+        The limit covers the store, the embedding and the verifier's reading. It does
+        not cover what is slow only the first time in a process: loading the verifier,
+        which is a download the first time ever, its first reading, and the first
+        embedding. A service has done those when it started. A command waits for them
+        here, as it waits for its other models when it starts.
+
+        Each step that is counted runs in a thread of its own, which is what lets the
+        caller stop waiting. A step whose caller has left ends what it is doing and
+        starts nothing more: it does not ask the store, and it does not take a turn at
+        the verifier.
         """
         key = comparable(question)
         if not key or not read:
             return Lookup(question, section, key, read=read)
-        deadline = time.monotonic() + self._lookup_seconds
+        wait = _Wait(self._lookup_seconds)
         try:
-            found = _within(deadline, self._find, question, section, key)
-            if isinstance(found, _Near):
-                loading = time.monotonic()
-                failure = self._load_the_verifier()
-                if failure is not None:
-                    return Lookup(
-                        question,
-                        section,
-                        key,
-                        checked=_unverified(found),
-                        vector=found.vector,
-                        failure=failure,
-                    )
-                # Loading a model is not part of looking a question up.
-                deadline += time.monotonic() - loading
-                found = _within(deadline, self._verify, question, section, key, found)
+            found = wait.run(self._exact, question, section, key)
+            if found is not None:
+                return found
+            vector: tuple[float, ...] | None = None
+            if not self._embedder_is_warm:
+                # The first embedding of this process: not counted, so not given up.
+                began = time.monotonic()
+                try:
+                    vector = self._embed(question)
+                except Exception as error:
+                    return Lookup(question, section, key, failure=_failed("searched", error))
+                wait.not_counted(time.monotonic() - began)
+            near = wait.run(self._nearest, question, section, key, vector, wait)
+            if not isinstance(near, _Near):
+                return near
+            if self._verifier_is_cold():
+                # The model is loaded here and reads for the first time: not counted.
+                return self._verify_for_the_first_time(question, section, key, near)
+            return wait.run(self._verify, question, section, key, near, wait)
         except _TookTooLong:
             logger.warning(
                 "the answer cache was given up after %.1f s, and the question is answered "
@@ -286,10 +324,9 @@ class AnswerCache:
                 self._lookup_seconds,
             )
             return Lookup(question, section, key, failure=TIMED_OUT)
-        return found
 
-    def _find(self, question: str, section: str | None, key: str) -> Lookup | _Near:
-        """The exact tier, and for the second tier the stored questions near enough."""
+    def _exact(self, question: str, section: str | None, key: str) -> Lookup | None:
+        """The exact tier. ``None`` when it holds nothing and the second tier is to be asked."""
         scope = scope_of(section)
         try:
             entry = self._store.get(entry_id(key, scope))
@@ -301,12 +338,39 @@ class AnswerCache:
             return Lookup(question, section, key, answer=_served(entry, question, hit))
         if self._verifier is None:
             return Lookup(question, section, key)
+        return None
+
+    def _embed(self, question: str) -> tuple[float, ...]:
+        """The question's embedding, made as the search makes it."""
+        with stage("embed.query", model=self._embedder.name):
+            vector = tuple(self._embedder.embed_query(question))
+        self._embedder_is_warm = True
+        return vector
+
+    def _nearest(
+        self,
+        question: str,
+        section: str | None,
+        key: str,
+        vector: tuple[float, ...] | None,
+        wait: "_Wait",
+    ) -> Lookup | _Near:
+        """The stored questions near enough for the verifier to read, if there are any.
+
+        ``vector`` is the question's embedding when the caller has made it already.
+        """
+        scope = scope_of(section)
         try:
-            with stage("embed.query", model=self._embedder.name):
-                vector = tuple(self._embedder.embed_query(question))
+            if vector is None:
+                vector = self._embed(question)
+                if wait.over:
+                    # The embedding took what time was left. The store is not asked.
+                    raise _TookTooLong
             found = self._store.nearest(
                 vector, scope=scope, limit=self._candidates, floor=self._floor
             )
+        except _TookTooLong:
+            raise
         except Exception as error:
             return Lookup(question, section, key, failure=_failed("searched", error))
         # The store filters, and what it returns is checked once more here: an entry that
@@ -322,13 +386,34 @@ class AnswerCache:
             return Lookup(question, section, key, vector=vector)
         return _Near(near, vector)
 
-    def _load_the_verifier(self) -> str | None:
-        """Load the verifier if this process has not yet. The kind of failure, or ``None``.
+    def _verifier_is_cold(self) -> bool:
+        """Whether the verifier has still to be loaded, or to read for the first time."""
+        verifier = self._verifier
+        return isinstance(verifier, LazyVerifier) and not verifier.asked
 
-        A service has loaded it when it started. A command loads it here, the first time
-        a stored question is near the one asked, and waits for it as it waits for its
-        other models: the first time ever, that is a download.
+    def _verify_for_the_first_time(
+        self, question: str, section: str | None, key: str, near: _Near
+    ) -> Lookup:
+        """Load the verifier and let it read, with no limit on either.
+
+        A service has done both when it started. A command does them here, the first
+        time a stored question is near the one asked, and waits for them as it waits for
+        its other models: the first time ever, loading is a download.
         """
+        failure = self._load_the_verifier()
+        if failure is not None:
+            return Lookup(
+                question,
+                section,
+                key,
+                checked=_unverified(near),
+                vector=near.vector,
+                failure=failure,
+            )
+        return self._verify(question, section, key, near, None)
+
+    def _load_the_verifier(self) -> str | None:
+        """Load the verifier if this process has not yet. The kind of failure, or ``None``."""
         verifier = self._verifier
         if not isinstance(verifier, LazyVerifier) or verifier.loaded:
             return None
@@ -339,11 +424,27 @@ class AnswerCache:
             return _failed("verified", error)
         return None
 
-    def _verify(self, question: str, section: str | None, key: str, near: _Near) -> Lookup:
-        """The second tier: each candidate read by the verifier, nearest first."""
+    def _verify(
+        self, question: str, section: str | None, key: str, near: _Near, wait: "_Wait | None"
+    ) -> Lookup:
+        """The second tier: each candidate read by the verifier, nearest first.
+
+        The verifier reads for one lookup at a time, and each waits its turn. ``wait``
+        is the time this lookup has, or ``None`` when the reading is not counted. A
+        lookup whose time runs out while it waits gives its turn up, and one whose
+        caller has left when its turn comes does not start reading: a check that nobody
+        will read would only keep the next question waiting.
+        """
         verifier = self._verifier
         assert verifier is not None  # candidates are looked for only when there is one
+        in_turn = self._one_check_at_a_time.acquire(
+            timeout=-1 if wait is None else max(wait.left, 0.0)
+        )
+        if not in_turn:
+            raise _TookTooLong
         try:
+            if wait is not None and wait.over:
+                raise _TookTooLong
             with stage("cache.verify", model=verifier.name, pairs=len(near.entries)):
                 # The stored question first and the new one second, as they were measured.
                 verified = verifier.score([(entry.question, question) for entry, _ in near.entries])
@@ -352,6 +453,8 @@ class AnswerCache:
                     f"The verifier scored {len(verified)} pairs when asked about "
                     f"{len(near.entries)}."
                 )
+        except _TookTooLong:
+            raise
         except Exception as error:
             return Lookup(
                 question,
@@ -361,6 +464,8 @@ class AnswerCache:
                 vector=near.vector,
                 failure=_failed("verified", error),
             )
+        finally:
+            self._one_check_at_a_time.release()
         checked = tuple(
             Checked(entry.question, similarity, entails)
             for (entry, similarity), entails in zip(near.entries, verified, strict=True)
@@ -457,31 +562,57 @@ class AnswerCache:
         return done
 
 
-def _within[T](deadline: float, step: Callable[..., T], *arguments: object) -> T:
-    """Run one step of a lookup in a thread of its own, and stop waiting at ``deadline``.
+class _Wait:
+    """How long one lookup may still take, and whether its caller has stopped waiting."""
 
-    The thread starts with a copy of the caller's context, so the spans the step opens
-    belong to the caller's trace. It is a daemon: a step that hangs on a store cannot
-    keep a command from ending.
-    """
-    left = deadline - time.monotonic()
-    if left <= 0:
-        raise _TookTooLong
-    results: list[T] = []
-    ended = threading.Event()
-    context = contextvars.copy_context()
+    def __init__(self, seconds: float) -> None:
+        self._deadline = time.monotonic() + seconds
+        self._over = threading.Event()
 
-    def run() -> None:
-        try:
-            results.append(context.run(step, *arguments))
-        finally:
-            ended.set()
+    @property
+    def left(self) -> float:
+        """The seconds the lookup may still take. Not above 0 once its time is up."""
+        return self._deadline - time.monotonic()
 
-    threading.Thread(target=run, name="handbook-rag-cache-lookup", daemon=True).start()
-    if not ended.wait(left) or not results:
-        # Not in time, or ended without a result, which no step does by itself.
-        raise _TookTooLong
-    return results[0]
+    @property
+    def over(self) -> bool:
+        """Whether the caller has stopped waiting. A step that sees this starts nothing more."""
+        return self._over.is_set()
+
+    def not_counted(self, seconds: float) -> None:
+        """Give back the time that went into what a process does only once."""
+        self._deadline += seconds
+
+    def run[T](self, step: Callable[..., T], *arguments: object) -> T:
+        """Run one step of the lookup in a thread of its own, and wait for it in time.
+
+        The thread starts with a copy of the caller's context, so the spans the step
+        opens belong to the caller's trace. It is a daemon: a step that hangs on a store
+        cannot keep a command from ending. When the time is up the caller is told so,
+        and the step can see that it is no longer waited for (:attr:`over`).
+        """
+        left = self.left
+        if left <= 0:
+            self._over.set()
+            raise _TookTooLong
+        results: list[T] = []
+        ended = threading.Event()
+        context = contextvars.copy_context()
+
+        def run() -> None:
+            try:
+                results.append(context.run(step, *arguments))
+            except _TookTooLong:
+                pass  # the step saw that its time was up, and started nothing more
+            finally:
+                ended.set()
+
+        threading.Thread(target=run, name="handbook-rag-cache-lookup", daemon=True).start()
+        if not ended.wait(left) or not results:
+            # Not in time, or ended without a result because its time was up.
+            self._over.set()
+            raise _TookTooLong
+        return results[0]
 
 
 def _unverified(near: _Near) -> tuple[Checked, ...]:
@@ -503,9 +634,9 @@ def _served(entry: Entry, question: str, hit: CacheHit) -> Answer:
 
 
 def _failed(what: str, error: Exception) -> str:
-    """Log that the cache could not be prepared, read, searched, verified or stored, and
-    name the kind of error. The message goes to the log only: it can name internal
-    addresses."""
+    """Log that the cache could not be prepared, warmed up, read, searched, verified or
+    stored, and name the kind of error. The message goes to the log only: it can name
+    internal addresses."""
     kind = f"{type(error).__module__}.{type(error).__qualname__}"
     logger.warning("the answer cache could not be %s: %s: %s", what, kind, error)
     return kind

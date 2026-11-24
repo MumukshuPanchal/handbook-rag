@@ -84,6 +84,7 @@ class LazyVerifier:
         self._load = load
         self._name = name
         self._verifier: Verifier | None = None
+        self._asked = False
         self._one_at_a_time = threading.Lock()
 
     @property
@@ -93,6 +94,16 @@ class LazyVerifier:
     @property
     def loaded(self) -> bool:
         return self._verifier is not None
+
+    @property
+    def asked(self) -> bool:
+        """Whether the model has read at least once in this process.
+
+        The first reading of a model that was just loaded takes several times as long as
+        any later one. The answer cache counts neither the loading nor that first
+        reading in the time a question may wait for a check.
+        """
+        return self._asked
 
     def load(self) -> None:
         """Load the model now, if it is not loaded yet.
@@ -108,7 +119,9 @@ class LazyVerifier:
         with self._one_at_a_time:
             if self._verifier is None:
                 self._verifier = self._load()
-            return self._verifier.score(pairs)
+            scored = self._verifier.score(pairs)
+            self._asked = True
+            return scored
 
 
 class _PairClassifier(Protocol):

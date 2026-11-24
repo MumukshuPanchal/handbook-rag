@@ -7,7 +7,8 @@ model's reply is read into statements and citations, how passages are found, and
 cache's own rules. For those there is ``ANSWER_CACHE_VERSION``, a number that a person
 raises, and a person can forget.
 
-This test fails whenever one of those modules changes. That is the moment to ask, and
+This test fails whenever one of those modules changes, or one of the functions that
+build a retriever and an answer model from the settings. That is the moment to ask, and
 what to do then:
 
 1. Ask whether an answer stored by the old code could now be wrong, or could now be
@@ -23,7 +24,10 @@ reworded explanation does not ask it.
 
 import ast
 import hashlib
+from collections.abc import Iterable
 from pathlib import Path
+
+import pytest
 
 from handbook_rag.cache.rules import ANSWER_CACHE_VERSION
 
@@ -52,6 +56,22 @@ PINNED = {
     "retrieve/hybrid.py": "88568557c1520ab8",
     "retrieve/rerank.py": "82d23821dd25f851",
     "retrieve/sparse.py": "8da43720d6b1ac7d",
+}
+# How the settings become what finds passages and what writes an answer. Of wiring.py
+# only these functions are pinned, each by itself. The rest of that module connects to
+# the store, builds the judges and the cache, and names what a run records: it changes
+# with nearly every feature, and a change there changes no answer, or changes the name of
+# the cache's collection, which starts an empty cache where everyone can see it.
+PINNED_FUNCTIONS = {
+    "wiring.py": {
+        "make_embedder": "339a3818501b98e2",
+        "make_sparse_encoder": "d5a50d71900c780a",
+        "make_reranker": "218b8bc4eb480919",
+        "make_retriever": "b9087122c1135f59",
+        "make_generator": "e6b04c84df123dd4",
+        "_model_generator": "c9dfe91f30cf9a08",
+        "_make_claude_generator": "89a6b7e2538f22ac",
+    },
 }
 
 
@@ -84,9 +104,26 @@ def shape(node: object) -> object:
     return repr(node)
 
 
-def code_hash(source: str) -> str:
-    code = _WithoutWordsForPeople().visit(ast.parse(source))
+def tree_hash(code: ast.AST) -> str:
+    """A short hash of a piece of parsed code, without the words that are there for people."""
+    code = _WithoutWordsForPeople().visit(code)
     return hashlib.sha256(repr(shape(code)).encode("utf-8")).hexdigest()[:16]
+
+
+def code_hash(source: str) -> str:
+    return tree_hash(ast.parse(source))
+
+
+def function_hashes(source: str, names: Iterable[str]) -> dict[str, str]:
+    """The hash of each named function of a module, taken by itself."""
+    functions = {
+        node.name: node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    missing = sorted(set(names) - set(functions))
+    assert not missing, f"pinned, and no longer a function of the module: {missing}"
+    return {name: tree_hash(functions[name]) for name in names}
 
 
 def test_the_modules_that_decide_an_answer_are_the_ones_the_version_was_set_for() -> None:
@@ -101,6 +138,36 @@ def test_the_modules_that_decide_an_answer_are_the_ones_the_version_was_set_for(
     assert ANSWER_CACHE_VERSION == PINNED_VERSION, (
         "The version was raised: pin it here too, with the hashes of the code it is for."
     )
+
+
+def test_the_functions_that_build_a_retriever_and_an_answer_model_are_pinned_too() -> None:
+    for module, pinned in PINNED_FUNCTIONS.items():
+        now = function_hashes((SOURCE / module).read_text(encoding="utf-8"), pinned)
+        changed = sorted(name for name in pinned if now[name] != pinned[name])
+
+        assert not changed, (
+            f"Code that decides an answer has changed in {module}: {', '.join(changed)}. Read "
+            "the top of this file. If answers stored before could now be wrong, raise "
+            "ANSWER_CACHE_VERSION in cache/rules.py. Then pin: "
+            f"{ {name: now[name] for name in changed} }"
+        )
+    # The one that puts the search together from the settings is among them.
+    assert "make_retriever" in PINNED_FUNCTIONS["wiring.py"]
+    assert "wiring.py" not in PINNED, "the module as a whole is not pinned, and the file says why"
+
+
+def test_a_function_is_pinned_by_itself_and_a_missing_one_is_named() -> None:
+    module = "LIMIT = 3\n\ndef kept(x):\n    return x + LIMIT\n\ndef other(x):\n    return x\n"
+
+    pinned = function_hashes(module, ["kept"])
+
+    # A change beside the function does not ask the question, and a change in it does.
+    assert function_hashes(module.replace("return x\n", "return -x\n"), ["kept"]) == pinned
+    assert function_hashes(module.replace("LIMIT = 3", "LIMIT = 4"), ["kept"]) == pinned
+    assert function_hashes(module.replace("x + LIMIT", "x - LIMIT"), ["kept"]) != pinned
+    assert function_hashes(module.replace("def kept(x)", "def kept(x, y=1)"), ["kept"]) != pinned
+    with pytest.raises(AssertionError, match="no longer a function of the module"):
+        function_hashes(module, ["renamed"])
 
 
 def test_every_module_of_the_search_and_of_reading_a_reply_is_pinned() -> None:

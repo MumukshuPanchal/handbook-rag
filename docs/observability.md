@@ -106,7 +106,7 @@ The `ask` command and `/ask` count tokens read from the cache apart from the oth
 
 The command line and the API hand `answer_question` the answer cache ([ADR 0020](adr/0020-an-answer-cache-that-matches-by-meaning.md)). Its lookup is the first span under `answer`, `cache.lookup`. When the cache holds an answer, the trace ends there: no search and no request to the model follow, and the `answer` span records 0 requests.
 
-Three real lookups, from the check of the cache with the real service on 24 November 2026 ([the evaluation guide](evaluation.md#checked-once-with-the-real-service)). The spans of the web framework around them are left out, and so are the search's own spans.
+Three real lookups, from the first check of the cache with the real service on 24 November 2026 ([the evaluation guide](evaluation.md#checked-with-the-real-service)). The spans of the web framework around them are left out, and so are the search's own spans.
 
 The same question asked a second time, served by the exact tier:
 
@@ -156,7 +156,7 @@ For the near-miss above the three lists held one entry each: a cosine of 0.89554
 
 **The stored questions are questions that people asked**, so they are recorded only when content is on: `handbook_rag.cache.questions` then lists the stored question of each candidate. In the check, with content off, none of the questions asked was in any span.
 
-The answer is stored after the `answer` span has closed, by a thread of its own, and leaves no span: a failure to store is logged, and so is an answer that was still waiting to be stored when the process ended. When the service starts, loading the second model and asking it once is the span `cache.warm_up`, which took 1,106.0 ms in the check. A command loads the second model only when a stored question is near the one asked. That is the span `cache.load_verifier` under `cache.lookup`, and its time does not count towards the lookup's 2 seconds. The check was made before that span existed, and before a lookup had a time limit.
+The answer is stored after the `answer` span has closed, by a thread of its own, and leaves no span: a failure to store is logged, and so is an answer that was still waiting to be stored when the process ended. When the service starts, it runs both of the cache's models once: it embeds one question, and it loads the second model and lets it read one pair. That is the span `cache.warm_up`. In the first check, where it did not yet embed there, it took 1,106.0 ms. A command loads the second model only when a stored question is near the one asked. That is the span `cache.load_verifier` under `cache.lookup`, and its time does not count towards the lookup's 2 seconds. Neither does the model's first reading after it, nor the first embedding of a process. The first check was made before that span existed, and before a lookup had a time limit.
 
 ## Through the HTTP API
 

@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from handbook_rag import wiring
 from handbook_rag.api import CacheStartError, create_app
+from handbook_rag.cache import answers as cache_answers
 from handbook_rag.cache.answers import AnswerCache
 from handbook_rag.cache.verify import Verification
 from handbook_rag.config import Settings
@@ -213,7 +214,7 @@ class Models:
     def __init__(self, monkeypatch: pytest.MonkeyPatch, *, verifier_error: Exception | None = None):
         self.events: list[str] = []
         self.verifier = TableVerifier(error=None)
-        embedder = FakeEmbedder()
+        self.embedder = embedder = FakeEmbedder()
 
         def make_embedder(_settings: Settings) -> FakeEmbedder:
             self.events.append("embedder built")
@@ -249,7 +250,10 @@ def test_by_default_the_service_has_both_tiers_and_loads_the_verifier_before_any
         assert cache.mode == "semantic"
         # Loaded and asked once when the service started: no question waits for it.
         assert models.events == ["embedder built", "verifier built"]
-        assert len(models.verifier.calls) == 1
+        assert models.verifier.calls == [[cache_answers._WARM_UP]]
+        # The embedding model was run for the cache too. The first run of a model in a
+        # process is slow, and after this a lookup counts every embedding in its time.
+        assert cache_answers._WARM_UP[0] in models.embedder.queries
         first = client.post("/ask", json={"query": QUESTION}).json()
         assert cache.close() is True, "the answer is stored by a thread of its own"
         second = client.post("/ask", json={"query": f"{QUESTION}?"}).json()

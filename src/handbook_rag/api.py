@@ -547,10 +547,11 @@ def _answer_model(settings: Settings) -> Generator | None:
 
 
 def _warm_up(cache: AnswerCache, settings: Settings) -> None:
-    """Load the cache's second model and ask it once, or say which settings to change.
+    """Run the cache's models once, or say which settings to change.
 
-    A service that cannot load a model it is set to use does not start. The error names
-    the settings, because the model's own error names none of them.
+    Only the second model can fail this: a failure of the embedding model here is logged
+    by the cache and no more. A service that cannot load a model it is set to use does
+    not start. The error names the settings, because the model's own error names none.
     """
     try:
         cache.warm_up()
@@ -639,8 +640,9 @@ def create_app(
             # are already being looked up. A store that is not there is logged, and the
             # service starts without it, as it does for its index.
             app.state.cache.prepare()
-            # In the mode `semantic` this loads the verifier and asks it once. The first
-            # question that has a stored one near it then waits for neither.
+            # In the mode `semantic` this runs both of the cache's models once: it embeds a
+            # question, and it loads the verifier and asks it. The first time a process
+            # runs a model is slow, and no question waits for that.
             with stage("cache.warm_up", mode=app.state.cache.mode):
                 _warm_up(app.state.cache, settings)
         app.state.answer_slots = Slots(settings.api_max_answers_in_flight)

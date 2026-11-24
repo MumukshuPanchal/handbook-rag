@@ -1,6 +1,7 @@
 """Command-line interface. Run ``handbook-rag --help`` to list the commands."""
 
 import dataclasses
+import datetime
 import json
 import math
 import os
@@ -1992,6 +1993,7 @@ def eval_cache(
                 **verifier.describe(),
                 **cache_pairs.data_fingerprints(loaded, questions),
             },
+            measured_on=datetime.date.today(),
         )
     except (DatasetError, VerifierError) as error:
         typer.echo(f"error: {error}", err=True)

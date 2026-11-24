@@ -4,10 +4,13 @@ No model is loaded. An embedding model and a verifier that read from tables stan
 the real ones, so each test can say exactly how near two questions are.
 """
 
+import datetime
 import itertools
 import json
 import math
 import random
+import re
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -48,10 +51,13 @@ from handbook_rag.evals.cache_pairs import (
     write_cache_run,
 )
 from handbook_rag.evals.cache_report import report_lines
-from handbook_rag.evals.dataset import DatasetError, GoldenQuestion
+from handbook_rag.evals.dataset import DatasetError, Evidence, GoldenQuestion
 from handbook_rag.evals.metrics import share_with_interval
 from tests.cache.support import FakeVerifier
 from tests.support import FakeEmbedder
+
+DAY = datetime.date(2026, 11, 24)
+"""The day the runs of these tests say they were made on."""
 
 
 def golden_question(question_id: str, text: str) -> GoldenQuestion:
@@ -415,9 +421,45 @@ def test_the_threshold_sits_halfway_above_the_highest_wrong_serve() -> None:
 
     assert chosen.value == pytest.approx(0.85)
     assert chosen.decided_by == cache_pairs.WrongServe("d001", "q1", 0.80)
+    # Halfway to the next score seen, which the threshold keeps too.
+    assert chosen.halfway_to == 0.90
     counted = tally(asked, COSINE, chosen.value)
     # The rewording at 0.70 is the price of the near-miss at 0.80.
     assert (counted.right, counted.missed, counted.wrong) == (1, 1, 0)
+
+
+def test_of_two_wrong_serves_with_the_same_score_the_first_is_named() -> None:
+    asked = [
+        ask(different_row("d001"), ("q1", scores(0.80))),
+        ask(different_row("d002"), ("q2", scores(0.80))),
+        ask(same_row("s001"), ("q1", scores(0.90))),
+    ]
+
+    assert choose_threshold(asked, COSINE).decided_by == cache_pairs.WrongServe("d001", "q1", 0.80)
+    assert cache_pairs.highest_wrong_serve(reversed(asked), COSINE) == cache_pairs.WrongServe(
+        "d002", "q2", 0.80
+    )
+
+
+def test_a_question_names_each_wrong_answer_it_could_be_served_with_its_highest_threshold() -> None:
+    # Nearest first: a wrong one at 0.3, the right one at 0.6, a wrong one at 0.5 that the
+    # right one outscores, and a wrong one at 0.9 that is served once the others fail.
+    question = ask(
+        same_row(),
+        ("q2", scores(0.9, 0.3)),
+        ("q1", scores(0.8, 0.6)),
+        ("q3", scores(0.7, 0.5)),
+        ("q4", scores(0.6, 0.9)),
+    )
+
+    found = list(cache_pairs.wrong_serves(question, ENTAILS_MIN))
+
+    assert found == [
+        cache_pairs.WrongServe("s001", "q2", 0.3),
+        cache_pairs.WrongServe("s001", "q4", 0.9),
+    ]
+    assert cache_pairs.highest_wrong_serve([question], ENTAILS_MIN) == found[1]
+    assert cache_pairs.highest_wrong_serve([ask(same_row(), ("q1", scores(0.9)))], COSINE) is None
 
 
 def test_no_threshold_is_chosen_when_the_highest_score_of_all_is_a_wrong_serve() -> None:
@@ -671,6 +713,91 @@ def test_stored_questions_at_the_same_distance_keep_the_order_of_their_ids() -> 
     assert [candidate.question_id for candidate in question.candidates] == ["q1", "q2", "q3"]
 
 
+def test_each_candidate_carries_the_verification_of_its_own_stored_question() -> None:
+    # The question shares other words with each stored question, so a mix-up shows.
+    row = same_row(other="How many weeks of parental leave does GitHub give its staff in the US?")
+    embedder = TableEmbedder(
+        {
+            row["other"]: [1.0, 0.0, 0.0],
+            TEXT["q1"]: towards(0.8),
+            TEXT["q2"]: towards(0.9),
+            TEXT["q3"]: towards(0.7),
+            TEXT["q4"]: towards(0.4),
+        }
+    )
+
+    (question,) = measure([as_pair(row)], GOLDEN, embedder=embedder, verifier=FakeVerifier()).asked
+
+    assert [candidate.question_id for candidate in question.candidates] == ["q2", "q1", "q3"]
+    for candidate in question.candidates:
+        (expected,) = FakeVerifier().score([(TEXT[candidate.question_id], row["other"])])
+        assert candidate.scores.entails == expected, candidate.question_id
+    assert len({candidate.scores.entails for candidate in question.candidates}) == 3
+    assert question.own.entails == question.candidates[1].scores.entails
+
+
+def test_the_cosine_does_not_depend_on_the_length_of_the_vectors() -> None:
+    row = same_row(other="new question")
+    embedder = TableEmbedder(
+        {
+            "new question": [2.0, 0.0, 0.0],
+            TEXT["q1"]: [3 * value for value in towards(0.8)],
+            TEXT["q2"]: [0.5 * value for value in towards(0.9)],
+            TEXT["q3"]: towards(0.4),
+            TEXT["q4"]: [7 * value for value in towards(0.7)],
+        }
+    )
+
+    (question,) = measure([as_pair(row)], GOLDEN, embedder=embedder, verifier=FakeVerifier()).asked
+
+    assert [candidate.question_id for candidate in question.candidates] == ["q2", "q1", "q4"]
+    assert [c.scores.cosine for c in question.candidates] == pytest.approx([0.9, 0.8, 0.7])
+
+
+def test_a_stored_question_exactly_at_the_floor_is_a_candidate() -> None:
+    # At right angles to the question: a cosine of exactly 0, which is the floor here.
+    row = same_row(other="new question")
+    embedder = TableEmbedder(
+        {
+            "new question": [1.0, 0.0, 0.0],
+            TEXT["q1"]: [0.0, 1.0, 0.0],
+            TEXT["q2"]: [-1.0, 0.0, 0.0],
+            TEXT["q3"]: [0.0, 0.0, 2.0],
+            TEXT["q4"]: [-1.0, 1.0, 0.0],
+        }
+    )
+
+    (question,) = measure(
+        [as_pair(row)], GOLDEN, embedder=embedder, verifier=FakeVerifier(), floor=0.0
+    ).asked
+
+    assert [(c.question_id, c.scores.cosine) for c in question.candidates] == [
+        ("q1", 0.0),
+        ("q3", 0.0),
+    ]
+    assert question.above_floor == 2
+
+
+def test_the_stored_questions_the_handbook_does_not_answer_are_kept_with_the_scores() -> None:
+    answered = GoldenQuestion(
+        id="q5",
+        question="How many days of leave do I get?",
+        type="answerable",
+        origin="hand-written",
+        reference_answer="25 days.",
+        evidence=(Evidence(doc_id="people/leave.md", quote="25 days"),),
+    )
+    row = same_row(other="new question")
+
+    measured = measure(
+        [as_pair(row)], [*GOLDEN, answered], embedder=FakeEmbedder(), verifier=FakeVerifier()
+    )
+
+    assert measured.stored == 5
+    assert measured.unanswered == {"q1", "q2", "q3", "q4"}
+    assert cache_pairs.unanswered_questions([answered]) == frozenset()
+
+
 def test_a_pair_whose_golden_question_is_not_stored_cannot_be_asked() -> None:
     row = same_row() | {"question_id": "q9", "question": "A question nobody stored?"}
 
@@ -723,6 +850,7 @@ def figures_of_the_small_world() -> tuple[cache_pairs.Measured, dict[str, Any]]:
         stored=measured.stored,
         candidates=measured.candidates,
         floor=measured.floor,
+        unanswered=measured.unanswered,
         other_splits=5,
     )
     return measured, figures
@@ -735,6 +863,7 @@ def test_disputed_pairs_are_in_no_figure_and_are_listed_with_their_scores() -> N
         stored=measured.stored,
         candidates=measured.candidates,
         floor=measured.floor,
+        unanswered=measured.unanswered,
         other_splits=5,
     )
 
@@ -745,6 +874,7 @@ def test_disputed_pairs_are_in_no_figure_and_are_listed_with_their_scores() -> N
         DIFFERENT: 12,
         "disputed": ["s090", "s091"],
         "other_is_a_stored_question": 0,
+        "different_by_source": {"golden": 0, "written": 12},
     }
     # Every figure is the same with the disputed pairs taken out of the file.
     for part in ("pair_view", "cache_view"):
@@ -775,20 +905,29 @@ def test_the_halves_are_counted_apart_and_only_the_reporting_half_has_intervals(
         assert same[RIGHT] + same[WRONG] + same[MISSED] == same["pairs"]
         assert different[WRONG] + different[NOT_SERVED] == different["pairs"]
         assert different[WRONG] == different["wrong_own"] + different["wrong_other"]
-        for name in (RIGHT, WRONG, MISSED):
-            wilson = share_with_interval(same[name], same["pairs"])
-            assert same[f"{name}_share"] == {
-                "mean": wilson.mean,
-                "low": wilson.low,
-                "high": wilson.high,
-                "count": same["pairs"],
-            }
-        assert different["wrong_share"]["mean"] == different[WRONG] / different["pairs"]
+        if cache["policies"][policy]["threshold"] is None:
+            # A cache that serves nothing by rule has no rate to estimate.
+            assert not [name for name in (*same, *different) if name.endswith("_share")]
+            assert same[RIGHT] == different[WRONG] == 0
+        else:
+            for name in (RIGHT, WRONG, MISSED):
+                wilson = share_with_interval(same[name], same["pairs"])
+                assert same[f"{name}_share"] == {
+                    "mean": wilson.mean,
+                    "low": wilson.low,
+                    "high": wilson.high,
+                    "count": same["pairs"],
+                }
+            assert different["wrong_share"]["mean"] == different[WRONG] / different["pairs"]
         assert len(cache["policies"][policy]["wrong_on_reporting"]) == (
             same[WRONG] + different[WRONG]
         )
-        by_how = cache["policies"][policy]["reporting_by_how"]
-        assert sum(row["pairs"] for row in by_how.values()) == same["pairs"]
+        for half, counted in ((CHOOSING, chose), (REPORTING, reported)):
+            by_how = cache["policies"][policy][f"{half}_by_how"]
+            by_what = cache["policies"][policy][f"{half}_by_what_differs"]
+            assert sum(row["pairs"] for row in by_how.values()) == counted[SAME]["pairs"]
+            assert sum(row[RIGHT] for row in by_how.values()) == counted[SAME][RIGHT]
+            assert sum(row[WRONG] for row in by_what.values()) == counted[DIFFERENT][WRONG]
 
 
 def test_what_a_clean_half_cannot_show_is_the_top_of_the_interval_of_none_wrong() -> None:
@@ -850,15 +989,62 @@ def test_when_no_score_is_safe_nothing_is_chosen_and_an_empty_half_has_no_shares
     for policy in POLICIES:
         assert cache["policies"][policy]["threshold"] is None
         assert cache["policies"][policy]["decided_by"]["pair"] == "d001"
-        assert cache["policies"][policy][REPORTING][SAME]["right_share"] is None
-        assert cache["policies"][policy][REPORTING][DIFFERENT]["wrong_share"] is None
+        assert cache["policies"][policy]["halfway_to"] is None
+        assert "right_share" not in cache["policies"][policy][REPORTING][SAME]
+        assert "wrong_share" not in cache["policies"][policy][REPORTING][DIFFERENT]
     assert cache["zero_wrong_allows"] == {"near_misses": 0, "up_to": None}
     assert cache["other_splits"]["chosen_policy"]["splits_without_a_choice"] == 3
     assert cache["other_splits"]["chosen_policy"]["right_share"] is None
     # With every pair in view it is the same: the near-miss is on top.
     assert cache["whole_set"]["chosen_on_all_pairs"][COSINE]["threshold"] is None
-    summary = {
+    report = "\n".join(report_lines(as_a_summary(figures)))
+    assert "the rule takes: none, so a cache would serve nothing" in report
+    assert "cosine at none: it serves nothing by the rule, so no rate is estimated" in report
+    assert "    same: served right              0 of 0" in report
+    assert "(0.000 to" not in report
+
+
+def test_a_half_without_pairs_has_counts_and_no_shares() -> None:
+    # One group again, whole on the choosing half, and this time a threshold is safe:
+    # the rewording scores above the near-miss. The reporting half holds nothing.
+    asked = [
+        ask(same_row("s001"), ("q1", scores(0.9)), own=scores(0.9)),
+        ask(different_row("d001"), ("q1", scores(0.2)), own=scores(0.2)),
+    ]
+
+    figures = summarise(asked, stored=4, candidates=3, floor=0.5, other_splits=3)
+    policy = figures["cache_view"]["policies"][COSINE]
+
+    assert policy["threshold"] == pytest.approx(0.55)
+    assert policy["halfway_to"] == 0.9
+    assert policy[CHOOSING][SAME][RIGHT] == 1
+    assert policy[REPORTING][SAME] == {
+        "pairs": 0,
+        RIGHT: 0,
+        WRONG: 0,
+        MISSED: 0,
+        "right_share": None,
+        "wrong_share": None,
+        "missed_share": None,
+    }
+    assert figures["cache_view"]["chosen_policy"] == COSINE
+    assert "no pairs" in "\n".join(report_lines(as_a_summary(figures)))
+
+
+def test_the_measurement_needs_agreed_pairs_of_both_kinds() -> None:
+    golden, pairs = a_small_world()
+    only_same = [pair for pair in pairs if pair.kind == SAME]
+    measured = measure(only_same, golden, embedder=FakeEmbedder(), verifier=FakeVerifier())
+
+    with pytest.raises(DatasetError, match="both kinds"):
+        summarise(measured.asked, stored=12, candidates=3, floor=0.5)
+
+
+def as_a_summary(figures: dict[str, Any]) -> dict[str, Any]:
+    """Figures with what a saved run adds to them, for printing them as a report."""
+    return {
         **figures,
+        "measured_on": DAY.isoformat(),
         "config": {
             "embedding_model": "fake-embedder",
             "embedding_device": "cpu",
@@ -873,18 +1059,6 @@ def test_when_no_score_is_safe_nothing_is_chosen_and_an_empty_half_has_no_shares
             "verifying_seconds": 0.0,
         },
     }
-    report = "\n".join(report_lines(summary))
-    assert "the rule takes: none, so a cache would serve nothing" in report
-    assert "no pairs" in report
-
-
-def test_the_measurement_needs_agreed_pairs_of_both_kinds() -> None:
-    golden, pairs = a_small_world()
-    only_same = [pair for pair in pairs if pair.kind == SAME]
-    measured = measure(only_same, golden, embedder=FakeEmbedder(), verifier=FakeVerifier())
-
-    with pytest.raises(DatasetError, match="both kinds"):
-        summarise(measured.asked, stored=12, candidates=3, floor=0.5)
 
 
 def test_a_saved_run_gives_its_figures_again_from_its_rows(tmp_path: Path) -> None:
@@ -896,6 +1070,7 @@ def test_a_saved_run_gives_its_figures_again_from_its_rows(tmp_path: Path) -> No
         tmp_path / "run",
         description="A run for a test.",
         config={"embedding_model": "fake-embedder"},
+        measured_on=DAY,
         other_splits=5,
     )
 
@@ -906,6 +1081,8 @@ def test_a_saved_run_gives_its_figures_again_from_its_rows(tmp_path: Path) -> No
     ]
     assert summary == json.loads((tmp_path / "run" / "summary.json").read_text(encoding="utf-8"))
     assert summary["description"] == "A run for a test."
+    assert summary["measured_on"] == "2026-11-24"
+    assert set(summary) == {"description", "measured_on", "config", "rows", "timing", *figures}
     # What the figures were computed with is recorded by the writer itself.
     assert summary["config"] == {
         "embedding_model": "fake-embedder",
@@ -917,12 +1094,40 @@ def test_a_saved_run_gives_its_figures_again_from_its_rows(tmp_path: Path) -> No
     assert {name: summary[name] for name in figures} == figures
     again = load_cache_run(tmp_path / "run", pairs)
     assert again == measured.asked
-    assert summarise(again, stored=12, candidates=3, floor=0.5, other_splits=5) == figures
+    assert (
+        summarise(
+            again,
+            stored=12,
+            candidates=3,
+            floor=0.5,
+            unanswered=measured.unanswered,
+            other_splits=5,
+        )
+        == figures
+    )
+
+
+def test_a_saved_run_names_its_rows_by_a_hash_of_each_file(tmp_path: Path) -> None:
+    measured, _ = figures_of_the_small_world()
+    summary = write_cache_run(
+        measured, tmp_path, description="", config={}, measured_on=DAY, other_splits=5
+    )
+    rows = tmp_path / "questions.jsonl"
+
+    assert summary["rows"] == cache_pairs.rows_fingerprints(tmp_path)
+    assert set(summary["rows"]) == {"pairs.jsonl", "questions.jsonl"}
+    assert len(set(summary["rows"].values())) == 2
+    # One digit changed in one row is another file, also where no figure depends on it.
+    text = rows.read_text(encoding="utf-8")
+    rows.write_text(text.replace('"stored_above_floor": ', '"stored_above_floor": 1', 1))
+    changed = cache_pairs.rows_fingerprints(tmp_path)
+    assert changed["questions.jsonl"] != summary["rows"]["questions.jsonl"]
+    assert changed["pairs.jsonl"] == summary["rows"]["pairs.jsonl"]
 
 
 def test_the_rows_of_a_run_say_what_was_served_at_each_chosen_threshold(tmp_path: Path) -> None:
     measured, figures = figures_of_the_small_world()
-    write_cache_run(measured, tmp_path, description="", config={}, other_splits=5)
+    write_cache_run(measured, tmp_path, description="", config={}, measured_on=DAY, other_splits=5)
     lines = (tmp_path / "questions.jsonl").read_text(encoding="utf-8").splitlines()
     rows = {row["pair"]: row for row in map(json.loads, lines)}
     own = (tmp_path / "pairs.jsonl").read_text(encoding="utf-8").splitlines()
@@ -954,12 +1159,28 @@ def test_the_rows_of_a_run_say_what_was_served_at_each_chosen_threshold(tmp_path
 def test_a_run_of_other_pairs_is_refused(tmp_path: Path) -> None:
     _, pairs = a_small_world()
     measured, _ = figures_of_the_small_world()
-    write_cache_run(measured, tmp_path, description="", config={}, other_splits=5)
+    write_cache_run(measured, tmp_path, description="", config={}, measured_on=DAY, other_splits=5)
 
     with pytest.raises(DatasetError, match="was not made from the pairs given"):
         load_cache_run(tmp_path, pairs[:-1])
     with pytest.raises(DatasetError, match="not found"):
         load_cache_run(tmp_path / "none", pairs)
+
+
+@pytest.mark.parametrize("name", ["pairs.jsonl", "questions.jsonl"])
+def test_a_run_is_refused_when_either_of_its_files_is_of_other_pairs(
+    name: str, tmp_path: Path
+) -> None:
+    _, pairs = a_small_world()
+    measured, _ = figures_of_the_small_world()
+    write_cache_run(measured, tmp_path, description="", config={}, measured_on=DAY, other_splits=5)
+    assert load_cache_run(tmp_path, pairs) == measured.asked
+    # One file loses its last row. The other still names every pair.
+    lines = (tmp_path / name).read_text(encoding="utf-8").splitlines()
+    (tmp_path / name).write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+
+    with pytest.raises(DatasetError, match="was not made from the pairs given"):
+        load_cache_run(tmp_path, pairs)
 
 
 def test_the_report_calls_a_description_a_description(tmp_path: Path) -> None:
@@ -975,12 +1196,13 @@ def test_the_report_calls_a_description_a_description(tmp_path: Path) -> None:
             "verifier_device": "cpu",
             **FakeVerifier().describe(),
         },
+        measured_on=DAY,
         other_splits=5,
     )
 
     report = "\n".join(report_lines(summary))
 
-    assert "24 agreed pairs (12 same, 12 different)" in report
+    assert "Cache measurement of 2026-11-24: 24 agreed pairs (12 same, 12 different)" in report
     assert "Disputed and listed apart: s090, s091" in report
     assert "A description of the scores, not a held-out result." in report
     assert "A description: these thresholds are scored on the pairs they are read from." in report
@@ -988,3 +1210,540 @@ def test_the_report_calls_a_description_a_description(tmp_path: Path) -> None:
     assert "none to any model API" in report
     assert "entailment is output 1 of contradiction, entailment, neutral" in report
     assert "Disputed s090 (maker: same, second: different), in no figure" in report
+
+
+# --- what the figures say of each half, and of the split --------------------------------
+
+
+def two_groups() -> tuple[list[dict[str, Any]], list[CachePair], cache_pairs.Split]:
+    """Two golden questions, each with a rewording and a near-miss: one group on each half."""
+    rows = [
+        same_row("s001", "q1"),
+        different_row("d001", "q1"),
+        same_row("s002", "q4"),
+        different_row("d002", "q4"),
+    ]
+    pairs = [as_pair(row) for row in rows]
+    split = split_pairs(pairs)
+    assert sorted(len(half) for half in (split.choosing, split.reporting)) == [2, 2]
+    return rows, pairs, split
+
+
+def test_a_near_miss_served_another_stored_question_is_counted_and_named_on_its_half() -> None:
+    rows, _, split = two_groups()
+    asked = []
+    for row in rows:
+        own = row["question_id"]
+        if row["pair"] in split.choosing:
+            # A rewording at 0.9 and a near-miss at 0.2: the threshold lands between them.
+            asked.append(ask(row, (own, scores(0.9 if row["kind"] == SAME else 0.2))))
+        elif row["kind"] == SAME:
+            asked.append(ask(row, (own, scores(0.95))))
+        else:
+            asked.append(ask(row, ("q3", scores(0.8))))  # another stored question passes
+
+    figures = summarise(asked, stored=4, candidates=3, floor=0.5, other_splits=0)
+    policy = figures["cache_view"]["policies"][COSINE]
+
+    assert policy["threshold"] == pytest.approx(0.55)
+    different = policy[REPORTING][DIFFERENT]
+    assert (different[WRONG], different["wrong_own"], different["wrong_other"]) == (1, 0, 1)
+    # The share counts it, though no label is about that stored question.
+    assert different["wrong_share"]["mean"] == 1.0
+    (wrong,) = policy["wrong_on_reporting"]
+    assert wrong["pair"] in split.reporting
+    assert wrong == {
+        "pair": wrong["pair"],
+        "kind": DIFFERENT,
+        "group": "region",
+        "served": "q3",
+        "own": False,
+        "stored_unanswered": False,
+        "score": 0.8,
+    }
+    report = "\n".join(report_lines(as_a_summary(figures)))
+    assert f"wrong: {wrong['pair']} (region) at 0.8000, another stored question q3" in report
+
+
+def test_a_split_that_serves_only_a_rewording_another_answer_is_a_split_with_something_wrong() -> (
+    None
+):
+    rows, pairs, _ = two_groups()
+    asked = [
+        ask(rows[0], ("q1", scores(0.5))),  # a rewording served right from 0.5 down
+        ask(rows[1]),  # near-misses with no candidate: never served
+        ask(rows[2], ("q3", scores(0.8))),  # a rewording that can only be served another answer
+        ask(rows[3]),
+    ]
+    count = 20
+
+    figures = summarise(asked, stored=4, candidates=3, floor=0.5, other_splits=count)
+    others = figures["cache_view"]["other_splits"]["policies"][COSINE]
+
+    # Something wrong is served where s001 chooses the threshold and s002 is reported on.
+    expected = sum(
+        "s001" in split_pairs(pairs, seed=f"{cache_pairs.SPLIT_SEED}/other-{n}").choosing
+        for n in range(1, count + 1)
+    )
+    assert 0 < expected < count
+    assert others["splits_with_something_wrong"] == expected
+    assert others["splits_with_nothing_wrong"] == count - expected
+    # No near-miss is ever served, so the share of them says nothing of it.
+    assert others["wrong_share_of_different"]["max"] == 0.0
+
+
+def test_what_each_half_holds_to_test_a_threshold_with_is_named_by_kind() -> None:
+    rows, _, split = two_groups()
+    asked = [
+        ask(rows[0], ("q1", scores(0.9, 0.9))),
+        ask(rows[1], ("q1", scores(0.9, 0.3))),
+        # Its own question fails the verifier at 0.5, and a farther one passes up to 0.7.
+        ask(rows[2], ("q4", scores(0.9, 0.5)), ("q3", scores(0.8, 0.7))),
+        ask(rows[3], ("q4", scores(0.9, 0.6))),
+    ]
+
+    figures = summarise(asked, stored=4, candidates=3, floor=0.5, unanswered={"q4"}, other_splits=0)
+    highest = figures["cache_view"]["policies"][ENTAILS_MIN]["highest_wrong"]
+
+    with_q1, with_q4 = (CHOOSING, REPORTING) if "s001" in split.choosing else (REPORTING, CHOOSING)
+    assert highest[with_q1] == {
+        SAME: None,
+        DIFFERENT: {
+            "pair": "d001",
+            "kind": DIFFERENT,
+            "group": "region",
+            "served": "q1",
+            "own": True,
+            "stored_unanswered": False,
+            "score": 0.3,
+        },
+    }
+    assert highest[with_q4][SAME] == {
+        "pair": "s002",
+        "kind": SAME,
+        "group": "reworded",
+        "served": "q3",
+        "own": False,
+        "stored_unanswered": False,
+        "score": 0.7,
+    }
+    # What a cache holds for a question the handbook does not answer is a decline.
+    assert highest[with_q4][DIFFERENT] == {
+        "pair": "d002",
+        "kind": DIFFERENT,
+        "group": "region",
+        "served": "q4",
+        "own": True,
+        "stored_unanswered": True,
+        "score": 0.6,
+    }
+    assert figures["cache_view"]["stored_unanswered"] == 1
+    report = "\n".join(report_lines(as_a_summary(figures)))
+    assert f"entails_min, {with_q1}, a rewording served another answer: none" in report
+    assert (
+        f"entails_min, {with_q4}, a near-miss: d002 (region) at 0.6000, its own golden "
+        "question q4, a stored decline"
+    ) in report
+
+
+def test_a_question_served_right_only_because_of_the_halfway_is_named() -> None:
+    rows, _, split = two_groups()
+    asked = []
+    for row in rows:
+        own = row["question_id"]
+        if row["pair"] in split.choosing:
+            # Wrong up to 0.2, and the next score seen is 0.9: the threshold is 0.55.
+            asked.append(ask(row, (own, scores(0.9 if row["kind"] == SAME else 0.2))))
+        else:
+            # Between the threshold and that next score, so served only by the halfway.
+            asked.append(ask(row, (own, scores(0.7 if row["kind"] == SAME else 0.1))))
+
+    figures = summarise(asked, stored=4, candidates=3, floor=0.5, other_splits=0)
+    policy = figures["cache_view"]["policies"][COSINE]
+
+    assert (policy["threshold"], policy["halfway_to"]) == (pytest.approx(0.55), 0.9)
+    (by_margin,) = policy["right_only_by_the_margin"]
+    assert by_margin == {"pair": by_margin["pair"], "group": "reworded", "score": 0.7}
+    assert by_margin["pair"] in split.reporting
+    assert policy[REPORTING][SAME][RIGHT] == 1
+    report = "\n".join(report_lines(as_a_summary(figures)))
+    assert "halfway to the next score, 0.9000" in report
+    assert (
+        "right only because the threshold is halfway to the next score: "
+        f"{by_margin['pair']} (reworded) at 0.7000"
+    ) in report
+
+
+def test_a_question_well_above_the_next_score_is_not_served_by_the_halfway() -> None:
+    rows, _, split = two_groups()
+    asked = [
+        ask(
+            row,
+            (
+                row["question_id"],
+                scores(
+                    {SAME: 0.9, DIFFERENT: 0.2}[row["kind"]]
+                    if row["pair"] in split.choosing
+                    else {SAME: 0.95, DIFFERENT: 0.1}[row["kind"]]
+                ),
+            ),
+        )
+        for row in rows
+    ]
+
+    figures = summarise(asked, stored=4, candidates=3, floor=0.5, other_splits=0)
+
+    assert figures["cache_view"]["policies"][COSINE]["right_only_by_the_margin"] == []
+
+
+def test_each_half_says_how_many_groups_its_pairs_come_from_and_what_its_candidates_name() -> None:
+    # The group of q1 has two near-misses. A golden pair ties q2 and q3 into one group.
+    rows = [
+        same_row("s001", "q1"),
+        different_row("d001", "q1"),
+        different_row("d003", "q1"),
+        golden_row("d002", "q2", "q3"),
+        same_row("s002", "q4"),
+        different_row("d004", "q4"),
+    ]
+    pairs = [as_pair(row) for row in rows]
+    split = split_pairs(pairs)
+    # Every question meets its own golden question and q1, q2 and q4: three of the four
+    # groups' questions, so each half meets some that the other half names.
+    asked = [
+        ask(
+            row,
+            *(
+                (question_id, scores(0.9 - place / 10))
+                for place, question_id in enumerate(
+                    dict.fromkeys([row["question_id"], "q1", "q2", "q4"])
+                )
+                if question_id != row["other_id"]
+            ),
+        )
+        for row in rows
+    ]
+
+    figures = summarise(asked, stored=4, candidates=4, floor=0.5, other_splits=0)
+    halves = figures["cache_view"]["split"]
+
+    assert figures["pairs"]["different_by_source"] == {"golden": 1, "written": 3}
+    total = {"not_own": 0, "named_by_the_other_half": 0}
+    for half, other in ((CHOOSING, REPORTING), (REPORTING, CHOOSING)):
+        mine = [pair for pair in pairs if split.half_of(pair.pair) == half]
+        theirs = [pair for pair in pairs if split.half_of(pair.pair) == other]
+        for kind in (SAME, DIFFERENT):
+            sizes = Counter(split.groups[pair.pair] for pair in mine if pair.kind == kind)
+            assert halves[half]["groups_of"][kind] == {
+                "groups": len(sizes),
+                "largest": max(sizes.values(), default=0),
+            }
+        assert halves[half]["different_by_source"] == {
+            "golden": sum(pair.source == "golden" for pair in mine),
+            "written": sum(pair.source == "written" for pair in mine),
+        }
+        named = golden_ids(theirs)
+        met = [
+            candidate.question_id
+            for question in asked
+            if question.pair in mine
+            for candidate in question.candidates
+            if candidate.question_id != question.pair.question_id
+        ]
+        assert halves[half]["candidates"] == {
+            "not_own": len(met),
+            "named_by_the_other_half": sum(question_id in named for question_id in met),
+        }
+        for name in total:
+            total[name] += halves[half]["candidates"][name]
+    # 6 questions with 3 candidates each, less the 6 that are their own.
+    assert total["not_own"] == 12
+    assert 0 < total["named_by_the_other_half"] < 12
+    # The group of q1 is the only one with two near-misses, wherever it fell.
+    assert {halves[half]["groups_of"][DIFFERENT]["largest"] for half in (CHOOSING, REPORTING)} == {
+        1,
+        2,
+    }
+
+
+def test_the_other_splits_are_given_apart_by_where_the_hardest_pair_fell() -> None:
+    rows, pairs, _ = two_groups()
+    # With every pair in view the wrong serve that scores highest is d001, at 0.8. Where
+    # it chooses, the threshold is 0.85 and nothing wrong is served. Where it is reported
+    # on, the other near-miss sets a threshold of 0.54, and d001 is served.
+    asked = [
+        ask(rows[0], ("q1", scores(0.9))),
+        ask(rows[1], ("q1", scores(0.8))),
+        ask(rows[2], ("q4", scores(0.88))),
+        ask(rows[3], ("q4", scores(0.2))),
+    ]
+    count = 20
+
+    figures = summarise(asked, stored=4, candidates=3, floor=0.5, other_splits=count)
+    fell = figures["cache_view"]["other_splits"]["policies"][COSINE][
+        "by_where_the_hardest_pair_fell"
+    ]
+
+    on_choosing = sum(
+        "d001" in split_pairs(pairs, seed=f"{cache_pairs.SPLIT_SEED}/other-{n}").choosing
+        for n in range(1, count + 1)
+    )
+    assert 0 < on_choosing < count
+    assert (fell["pair"], fell["score"]) == ("d001", 0.8)
+    assert fell[CHOOSING] == {
+        "splits": on_choosing,
+        "right_share": {"min": 1.0, "median": 1.0, "max": 1.0},
+        "wrong_share_of_different": {"min": 0.0, "median": 0.0, "max": 0.0},
+        "splits_with_nothing_wrong": on_choosing,
+        "splits_with_something_wrong": 0,
+    }
+    assert fell[REPORTING] == {
+        "splits": count - on_choosing,
+        "right_share": {"min": 1.0, "median": 1.0, "max": 1.0},
+        "wrong_share_of_different": {"min": 1.0, "median": 1.0, "max": 1.0},
+        "splits_with_nothing_wrong": 0,
+        "splits_with_something_wrong": count - on_choosing,
+    }
+    assert figures["cache_view"]["whole_set"]["chosen_on_all_pairs"][COSINE]["decided_by"][
+        "pair"
+    ] == ("d001")
+    report = "\n".join(report_lines(as_a_summary(figures)))
+    assert re.search(rf"cosine, d001 on the choosing half +{on_choosing} splits +1\.000", report)
+    assert re.search(
+        rf"cosine, d001 on the reporting half +{count - on_choosing} splits +1\.000", report
+    )
+
+
+def test_where_nothing_wrong_can_be_served_no_pair_is_the_hardest() -> None:
+    rows, _, _ = two_groups()
+    asked = [
+        ask(row, *([(row["question_id"], scores(0.9))] if row["kind"] == SAME else []))
+        for row in rows
+    ]
+
+    figures = summarise(asked, stored=4, candidates=3, floor=0.5, other_splits=4)
+    others = figures["cache_view"]["other_splits"]["policies"][COSINE]
+
+    assert others["by_where_the_hardest_pair_fell"] is None
+    assert others["splits_with_nothing_wrong"] == 4
+    lines = report_lines(as_a_summary(figures))
+    assert "  The same, apart by where one pair fell" in "\n".join(lines)
+    assert not [line for line in lines if " half " in line and line.rstrip().endswith("4")]
+    assert not [line for line in lines if "on the reporting half" in line]
+
+
+def test_the_near_misses_the_verifier_would_serve_are_named_hardest_first_with_their_half() -> None:
+    # Both hard near-misses are of q1, so they are on the choosing half together or not at all.
+    rows = [
+        same_row("s001", "q1"),
+        different_row("d001", "q1"),
+        different_row("d003", "q1"),
+        same_row("s002", "q4"),
+        different_row("d002", "q4"),
+    ]
+    pairs = [as_pair(row) for row in rows]
+    entailed = {"s001": 0.99, "d001": 0.85, "d003": 0.95, "s002": 0.99, "d002": 0.79}
+    asked = [
+        ask(row, (row["question_id"], scores(0.9, entailed[row["pair"]], 0.97))) for row in rows
+    ]
+    count = 20
+
+    for seed, half in zip(seeds_for_each_side(pairs, "d001"), (CHOOSING, REPORTING), strict=True):
+        figures = summarise(asked, stored=4, candidates=3, floor=0.5, seed=seed, other_splits=count)
+        above = figures["cache_view"]["near_misses_above"]
+
+        assert above["score"] == cache_pairs.HARD_NEAR_MISS == 0.8
+        assert list(above["policies"]) == [ENTAILS_MIN, ENTAILS_MEAN]
+        by_weaker = above["policies"][ENTAILS_MIN]
+        # Each is named with the half it is on in this split, whichever that is.
+        assert [(pair["pair"], pair["score"], pair["half"]) for pair in by_weaker["pairs"]] == [
+            ("d003", 0.95, half),
+            ("d001", 0.85, half),
+        ]
+        # By the mean, 0.79 and 0.97 make 0.88: the third near-miss is served at 0.8 too,
+        # and it is on the other half.
+        other = REPORTING if half == CHOOSING else CHOOSING
+        assert [
+            (pair["pair"], pair["half"]) for pair in above["policies"][ENTAILS_MEAN]["pairs"]
+        ] == [("d003", half), ("d001", half), ("d002", other)]
+        together = sum(
+            "d001" in split_pairs(pairs, seed=f"{seed}/other-{n}").choosing
+            for n in range(1, count + 1)
+        )
+        assert 0 < together < count
+        assert by_weaker["other_splits_with_all_on_the_choosing_half"] == together
+        # The three by the mean are of both groups, which are never on one half together.
+        assert above["policies"][ENTAILS_MEAN]["other_splits_with_all_on_the_choosing_half"] == 0
+        report = "\n".join(report_lines(as_a_summary(figures)))
+        assert (
+            f"entails_min, near-misses it would serve at 0.8: d003 at 0.9500 ({half}), d001 at "
+            f"0.8500 ({half}). All of them are on the choosing half in {together} of the {count} "
+            "other splits"
+        ) in report
+
+
+def test_where_the_verifier_would_serve_no_near_miss_none_is_named_and_none_counted() -> None:
+    rows, _, _ = two_groups()
+    asked = [
+        ask(row, (row["question_id"], scores(0.9, 0.95 if row["kind"] == SAME else 0.3)))
+        for row in rows
+    ]
+
+    figures = summarise(asked, stored=4, candidates=3, floor=0.5, other_splits=6)
+    above = figures["cache_view"]["near_misses_above"]["policies"]
+
+    assert above == {
+        policy: {"pairs": [], "other_splits_with_all_on_the_choosing_half": None}
+        for policy in (ENTAILS_MIN, ENTAILS_MEAN)
+    }
+    lines = report_lines(as_a_summary(figures))
+    assert "  entails_min, near-misses it would serve at 0.8: none" in lines
+    assert not [line for line in lines if "All of them are on the choosing half" in line]
+
+
+def test_the_pair_view_tells_two_golden_questions_from_a_written_near_miss() -> None:
+    asked = [
+        ask(same_row("s001", "q1"), own=scores(0.95)),
+        ask(different_row("d001", "q1"), own=scores(0.90)),
+        ask(different_row("d003", "q4"), own=scores(0.80)),
+        ask(golden_row("d002", "q2", "q3"), own=scores(0.60)),
+    ]
+
+    figures = summarise(asked, stored=4, candidates=3, floor=0.5, other_splits=0)
+    by_source = figures["pair_view"]["scores"][COSINE]["by_source"]
+
+    assert by_source == {
+        "golden": {"pairs": 1, "min": 0.6, "median": 0.6, "max": 0.6},
+        "written": {"pairs": 2, "min": 0.8, "median": pytest.approx(0.85), "max": 0.9},
+    }
+    report = "\n".join(report_lines(as_a_summary(figures)))
+    assert "  different, golden       1         0.600" in report
+    assert "  different, written      2         0.850" in report
+
+
+def test_a_pair_exactly_at_a_threshold_is_at_or_above_it() -> None:
+    asked = [
+        ask(same_row("s001", "q1"), own=scores(0.9)),
+        ask(different_row("d001", "q1"), own=scores(0.925)),
+    ]
+
+    figures = summarise(asked, stored=4, candidates=3, floor=0.5, other_splits=0)
+    at_or_above = {
+        row["threshold"]: (row[SAME], row[DIFFERENT])
+        for row in figures["pair_view"]["scores"][COSINE]["at_or_above"]
+    }
+
+    assert at_or_above[0.9] == (1, 1)
+    assert at_or_above[0.925] == (0, 1)
+    assert at_or_above[0.95] == (0, 0)
+
+
+def seeds_for_each_side(pairs: Sequence[CachePair], pair_id: str) -> tuple[str, str]:
+    """A seed that puts a pair on the choosing half, and one that puts it on the other."""
+    choosing = next(
+        str(seed) for seed in range(50) if pair_id in split_pairs(pairs, seed=str(seed)).choosing
+    )
+    reporting = next(
+        str(seed) for seed in range(50) if pair_id in split_pairs(pairs, seed=str(seed)).reporting
+    )
+    return choosing, reporting
+
+
+def a_world_whose_threshold_tells_the_split() -> tuple[list[CachePair], list[Asked]]:
+    """Where q1 chooses, a threshold of 0.55 is safe. Where q4 chooses, none is."""
+    rows, pairs, _ = two_groups()
+    asked = [
+        ask(rows[0], ("q1", scores(0.9))),
+        ask(rows[1], ("q1", scores(0.2))),
+        ask(rows[2], ("q4", scores(0.6))),
+        ask(rows[3], ("q4", scores(0.7))),
+    ]
+    return pairs, asked
+
+
+def test_the_seed_decides_which_half_chooses_the_threshold() -> None:
+    pairs, asked = a_world_whose_threshold_tells_the_split()
+    q1_chooses, q4_chooses = seeds_for_each_side(pairs, "s001")
+
+    first = summarise(asked, stored=4, candidates=3, floor=0.5, seed=q1_chooses, other_splits=0)
+    second = summarise(asked, stored=4, candidates=3, floor=0.5, seed=q4_chooses, other_splits=0)
+
+    assert first["cache_view"]["split"]["seed"] == q1_chooses
+    assert first["cache_view"]["policies"][COSINE]["threshold"] == pytest.approx(0.55)
+    assert first["cache_view"]["policies"][COSINE]["decided_by"]["pair"] == "d001"
+    assert second["cache_view"]["split"]["seed"] == q4_chooses
+    assert second["cache_view"]["policies"][COSINE]["threshold"] is None
+    assert second["cache_view"]["policies"][COSINE]["decided_by"]["pair"] == "d002"
+
+
+def a_run_of(asked: list[Asked]) -> cache_pairs.Measured:
+    return cache_pairs.Measured(
+        asked=asked,
+        stored=4,
+        unanswered=frozenset(),
+        candidates=3,
+        floor=0.5,
+        embedded=0,
+        verified=0,
+        embedding_seconds=0.0,
+        verifying_seconds=0.0,
+    )
+
+
+def test_the_rows_of_a_run_are_dealt_by_the_seed_the_figures_were_dealt_by(tmp_path: Path) -> None:
+    pairs, asked = a_world_whose_threshold_tells_the_split()
+    for seed, half_of_q1, threshold in zip(
+        seeds_for_each_side(pairs, "s001"),
+        (CHOOSING, REPORTING),
+        (pytest.approx(0.55), None),
+        strict=True,
+    ):
+        run = tmp_path / seed
+        summary = write_cache_run(
+            a_run_of(asked),
+            run,
+            description="",
+            config={},
+            measured_on=DAY,
+            seed=seed,
+            other_splits=0,
+        )
+        rows = [json.loads(line) for line in (run / "pairs.jsonl").read_text().splitlines()]
+        served_rows = [
+            json.loads(line) for line in (run / "questions.jsonl").read_text().splitlines()
+        ]
+
+        assert summary["config"]["split_seed"] == seed
+        assert summary["cache_view"]["policies"][COSINE]["threshold"] == threshold
+        assert {row["pair"]: row["half"] for row in rows}["s001"] == half_of_q1
+        assert [row["half"] for row in rows] == [row["half"] for row in served_rows]
+        # Where q1 chooses, its rewording is served. Where q4 chooses, nothing is.
+        assert {row["pair"]: row["served"][COSINE] for row in served_rows}["s001"] == (
+            "q1" if half_of_q1 == CHOOSING else None
+        )
+
+
+def test_each_row_says_what_its_own_scores_threshold_serves(tmp_path: Path) -> None:
+    # One group, so one half chooses for both pairs. By the cosine the near-miss is on
+    # top and nothing is safe. By the verifier it is at the bottom and 0.5 is safe.
+    asked = [
+        ask(same_row("s001"), ("q1", scores(0.8, 0.9))),
+        ask(different_row("d001"), ("q1", scores(0.9, 0.1))),
+    ]
+
+    summary = write_cache_run(
+        a_run_of(asked), tmp_path, description="", config={}, measured_on=DAY, other_splits=0
+    )
+    rows = {
+        row["pair"]: row
+        for row in map(json.loads, (tmp_path / "questions.jsonl").read_text().splitlines())
+    }
+
+    thresholds = {
+        policy: summary["cache_view"]["policies"][policy]["threshold"] for policy in POLICIES
+    }
+    assert thresholds == {COSINE: None, ENTAILS_MIN: 0.5, ENTAILS_MEAN: 0.5}
+    assert rows["s001"]["served"] == {COSINE: None, ENTAILS_MIN: "q1", ENTAILS_MEAN: "q1"}
+    assert rows["s001"]["outcome"] == {COSINE: MISSED, ENTAILS_MIN: RIGHT, ENTAILS_MEAN: RIGHT}
+    assert rows["d001"]["served"] == {COSINE: None, ENTAILS_MIN: None, ENTAILS_MEAN: None}
+    assert rows["d001"]["outcome"] == dict.fromkeys(POLICIES, NOT_SERVED)

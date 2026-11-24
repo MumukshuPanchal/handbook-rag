@@ -39,6 +39,8 @@ def report_lines(summary: Mapping[str, Any]) -> list[str]:
         "",
         *_reported(summary),
         "",
+        *_tested(summary),
+        "",
         *_described(summary),
         *_disputed(summary),
     ]
@@ -55,14 +57,23 @@ def _share(estimate: Mapping[str, Any] | None) -> str:
 
 
 def _whose(serve: Mapping[str, Any]) -> str:
-    return "its own golden question" if serve["own"] else "another stored question"
+    whose = "its own golden question" if serve["own"] else "another stored question"
+    # What a cache holds for a question the handbook does not answer is a decline.
+    return f"{whose} {serve['served']}{', a stored decline' if serve['stored_unanswered'] else ''}"
+
+
+def _serve(serve: Mapping[str, Any] | None) -> str:
+    """A wrong serve in one phrase, or ``none`` where a half holds no such question."""
+    if serve is None:
+        return "none"
+    return f"{serve['pair']} ({serve['group']}) at {serve['score']:.4f}, {_whose(serve)}"
 
 
 def _models(summary: Mapping[str, Any]) -> list[str]:
     counted, config, timing = summary["pairs"], summary["config"], summary["timing"]
     return [
-        f"Cache measurement: {counted['agreed']} agreed pairs ({counted[SAME]} same, "
-        f"{counted[DIFFERENT]} different). Disputed and listed apart: "
+        f"Cache measurement of {summary['measured_on']}: {counted['agreed']} agreed pairs "
+        f"({counted[SAME]} same, {counted[DIFFERENT]} different). Disputed and listed apart: "
         f"{', '.join(counted['disputed']) or 'none'}",
         "  requests     none to any model API: both models run on this machine",
         f"  embedding    {config['embedding_model']} on {config['embedding_device']}: "
@@ -92,7 +103,7 @@ def _pair_view(summary: Mapping[str, Any]) -> list[str]:
             f"{different['median']:>8.3f}{different['max']:>7.3f}"
         )
     lines.append(f"  median by group     {'pairs':>5}" + "".join(f"{p:>14}" for p in POLICIES))
-    for kind, by in ((SAME, "by_how"), (DIFFERENT, "by_what_differs")):
+    for kind, by in ((SAME, "by_how"), (DIFFERENT, "by_what_differs"), (DIFFERENT, "by_source")):
         for group, spread in view[COSINE][by].items():
             medians = "".join(f"{view[policy][by][group]['median']:>14.3f}" for policy in POLICIES)
             lines.append(f"  {kind + ', ' + group:<20}{spread['pairs']:>5}{medians}")
@@ -104,7 +115,7 @@ def _pair_view(summary: Mapping[str, Any]) -> list[str]:
     for place, threshold in enumerate(THRESHOLDS):
         cells = [view[policy]["at_or_above"][place] for policy in POLICIES]
         counts = "".join(f"{f'{cell[SAME]}, {cell[DIFFERENT]}':>16}" for cell in cells)
-        lines.append(f"  {threshold:<10.3f}{counts}")
+        lines.append(f"  at {threshold:<7.3f}{counts}")
     return lines
 
 
@@ -112,8 +123,9 @@ def _chosen(summary: Mapping[str, Any]) -> list[str]:
     cache = summary["cache_view"]
     own, split = cache["own_question"], cache["split"]
     lines = [
-        f"Cache view: {cache['stored_questions']} stored questions. Each question meets its "
-        f"{cache['candidates']} nearest above a cosine of {cache['floor']}",
+        f"Cache view: {cache['stored_questions']} stored questions, "
+        f"{cache['stored_unanswered']} of them ones the handbook does not answer. Each question "
+        f"meets its {cache['candidates']} nearest above a cosine of {cache['floor']}",
     ]
     above = cache["stored_above_floor"]
     lines.append(
@@ -127,13 +139,22 @@ def _chosen(summary: Mapping[str, Any]) -> list[str]:
             f"different {own[DIFFERENT][key]} of {own[DIFFERENT]['pairs']}"
         )
     lines.append(
-        f"  split        {split['groups']} groups of pairs that share a golden question "
+        f"  split        {split['groups']} groups of pairs that name the same golden question "
         f"(the largest has {split['largest_group']} pairs), never divided"
     )
     for half in (CHOOSING, REPORTING):
+        of_half = split[half]
+        groups, sources = of_half["groups_of"], of_half["different_by_source"]
         lines.append(
-            f"               {half}: {split[half]['pairs']} pairs ({split[half][SAME]} same, "
-            f"{split[half][DIFFERENT]} different)"
+            f"               {half}: {of_half['pairs']} pairs. {of_half[SAME]} same from "
+            f"{groups[SAME]['groups']} groups, {of_half[DIFFERENT]} different from "
+            f"{groups[DIFFERENT]['groups']} groups ({groups[DIFFERENT]['largest']} from the "
+            f"largest), {sources['golden']} of them two golden questions"
+        )
+        lines.append(
+            f"               {half}: {of_half['candidates']['named_by_the_other_half']} of its "
+            f"{of_half['candidates']['not_own']} candidates that are not the pair's own golden "
+            "question are named by a pair of the other half"
         )
     lines += [
         "",
@@ -143,11 +164,9 @@ def _chosen(summary: Mapping[str, Any]) -> list[str]:
     ]
     for policy, figures in cache["policies"].items():
         chose, by = figures[CHOOSING][SAME], figures["decided_by"]
-        set_by = "nothing wrong at any threshold"
-        if by is not None:
-            set_by = (
-                f"{by['pair']} ({by['group']}), {_whose(by)} {by['served']} at {by['score']:.4f}"
-            )
+        set_by = "nothing wrong at any threshold" if by is None else _serve(by)
+        if figures["halfway_to"] is not None:
+            set_by += f"; halfway to the next score, {figures['halfway_to']:.4f}"
         right = f"{chose[RIGHT]} of {chose['pairs']}"
         lines.append(f"  {policy:<14}{_threshold(figures['threshold']):>10}   {right:<19}{set_by}")
     lines.append(
@@ -164,24 +183,29 @@ def _reported(summary: Mapping[str, Any]) -> list[str]:
     ]
     for policy, figures in cache["policies"].items():
         same, different = figures[REPORTING][SAME], figures[REPORTING][DIFFERENT]
-        lines.append(f"  {policy} at {_threshold(figures['threshold'])}")
+        served_nothing = figures["threshold"] is None
+        lines.append(
+            f"  {policy} at {_threshold(figures['threshold'])}"
+            + (": it serves nothing by the rule, so no rate is estimated" if served_nothing else "")
+        )
         for label, name in (
             ("same: served right", RIGHT),
             ("same: served another answer", WRONG),
             ("same: missed", MISSED),
         ):
-            lines.append(
-                f"    {label:<30}{same[name]:>3} of {same['pairs']:<4}"
-                f"{_share(same[f'{name}_share'])}"
-            )
+            share = "" if served_nothing else _share(same[f"{name}_share"])
+            lines.append(f"    {label:<30}{same[name]:>3} of {same['pairs']:<4}{share}".rstrip())
+        share = "" if served_nothing else _share(different["wrong_share"])
         lines.append(
             f"    {'different: served wrongly':<30}{different[WRONG]:>3} of "
-            f"{different['pairs']:<4}{_share(different['wrong_share'])}"
+            f"{different['pairs']:<4}{share}".rstrip()
         )
         for wrong in figures["wrong_on_reporting"]:
+            lines.append(f"      wrong: {_serve(wrong)}")
+        for right in figures["right_only_by_the_margin"]:
             lines.append(
-                f"      wrong: {wrong['pair']} ({wrong['group']}) was served {_whose(wrong)} "
-                f"{wrong['served']} at {wrong['score']:.4f}"
+                f"      right only because the threshold is halfway to the next score: "
+                f"{right['pair']} ({right['group']}) at {right['score']:.4f}"
             )
     allows = cache["zero_wrong_allows"]
     if allows["up_to"] is not None:
@@ -189,6 +213,40 @@ def _reported(summary: Mapping[str, Any]) -> list[str]:
             f"  What this half cannot show: none wrong of {allows['near_misses']} near-misses "
             f"would still allow a true rate of up to {allows['up_to']:.3f}."
         )
+    return lines
+
+
+def _tested(summary: Mapping[str, Any]) -> list[str]:
+    """What each half holds to test a threshold with.
+
+    Nothing wrong on the reporting half says little when that half holds nothing that
+    comes near the threshold, so the hardest question of each half is printed.
+    """
+    cache = summary["cache_view"]
+    above = cache["near_misses_above"]
+    lines = [
+        "  What each half holds to test a threshold with: the highest score at which a "
+        "question of it would be served something wrong",
+    ]
+    for policy, figures in cache["policies"].items():
+        for half in (CHOOSING, REPORTING):
+            highest = figures["highest_wrong"][half]
+            lines.append(f"  {policy}, {half}, a near-miss: {_serve(highest[DIFFERENT])}")
+            lines.append(
+                f"  {policy}, {half}, a rewording served another answer: {_serve(highest[SAME])}"
+            )
+    for policy, found in above["policies"].items():
+        named = ", ".join(
+            f"{pair['pair']} at {pair['score']:.4f} ({pair['half']})" for pair in found["pairs"]
+        )
+        line = f"  {policy}, near-misses it would serve at {above['score']}: {named or 'none'}"
+        if found["pairs"]:
+            line += (
+                ". All of them are on the choosing half in "
+                f"{found['other_splits_with_all_on_the_choosing_half']} of the "
+                f"{cache['other_splits']['splits']} other splits"
+            )
+        lines.append(line)
     return lines
 
 
@@ -222,13 +280,31 @@ def _described(summary: Mapping[str, Any]) -> list[str]:
             taken = f"{figures['chosen']:>6}{figures['splits_without_a_threshold']:>14}"
         else:
             taken = f"{others['splits'] - figures['splits_without_a_choice']:>6}"
-        lines.append(
-            f"  {name:<18}{taken:<20}   {_across(figures['right_share'], 15)}   "
-            f"{_across(figures['wrong_share_of_different'], 20)}"
-            f"{figures['splits_with_nothing_wrong']:>7}"
-        )
+        lines.append(f"  {name:<18}{taken:<20}   {_over_splits(figures)}")
     lines.append("  clean: the splits whose reporting half was served nothing wrong")
+    lines.append(
+        "  The same, apart by where one pair fell: the pair whose wrong serve scores highest "
+        "with every pair in view"
+    )
+    for policy, figures in others["policies"].items():
+        fell = figures["by_where_the_hardest_pair_fell"]
+        if fell is None:
+            continue
+        for half in (CHOOSING, REPORTING):
+            where = f"{policy}, {fell['pair']} on the {half} half"
+            lines.append(
+                f"  {where:<44}{fell[half]['splits']:>4} splits   {_over_splits(fell[half])}"
+            )
     return lines
+
+
+def _over_splits(figures: Mapping[str, Any]) -> str:
+    """The shares over some splits, and in how many of them nothing wrong was served."""
+    return (
+        f"{_across(figures['right_share'], 15)}   "
+        f"{_across(figures['wrong_share_of_different'], 20)}"
+        f"{figures['splits_with_nothing_wrong']:>7}"
+    )
 
 
 def _across(spread: Mapping[str, float] | None, width: int) -> str:

@@ -402,6 +402,7 @@ CACHE = {
     "Second check, weaker direction": "entails_min",
     "Second check, mean of both directions": "entails_mean",
 }
+MONTHS = "January February March April May June July August September October November December"
 
 
 def test_the_cache_measurement_is_the_committed_run() -> None:
@@ -410,12 +411,15 @@ def test_the_cache_measurement_is_the_committed_run() -> None:
     policies, others = cache["policies"], cache["other_splits"]
     rows = table(readme(), "| Decided by | Threshold | Rewordings served right |")
 
-    def counted(count: int, estimate: Any) -> str:
-        """A count with its share, as the table prints it: 7 of 49: 0.143 (0.071 to 0.267)."""
-        return f"{count} of {estimate['count']}: {with_interval(estimate)}"
+    def counted(count: int, of: int, estimate: Any) -> str:
+        """A count, with its share where the run gives one: 7 of 49: 0.143 (0.071 to 0.267)."""
+        return f"{count} of {of}" + ("" if estimate is None else f": {with_interval(estimate)}")
+
+    def said(start: str) -> str:
+        return line_starting(readme(), start)
 
     def says(start: str) -> list[str]:
-        return numbers(line_starting(readme(), start))
+        return numbers(said(start))
 
     assert [row[0] for row in rows] == list(CACHE)
     for label, threshold, right, wrong in rows:
@@ -423,27 +427,49 @@ def test_the_cache_measurement_is_the_committed_run() -> None:
         same, different = policy["reporting"]["same"], policy["reporting"]["different"]
         assert [threshold, right, wrong] == [
             "none" if policy["threshold"] is None else f"{policy['threshold']:.4f}",
-            counted(same["right"], same["right_share"]),
-            counted(different["wrong"], different["wrong_share"]),
+            counted(same["right"], same["pairs"], same.get("right_share")),
+            counted(different["wrong"], different["pairs"], different.get("wrong_share")),
         ], label
         # The table is the half that chose nothing: the run's counts of that half.
-        assert same["right_share"]["count"] == cache["split"]["reporting"]["same"]
-        assert different["wrong_share"]["count"] == cache["split"]["reporting"]["different"]
+        assert same["pairs"] == cache["split"]["reporting"]["same"]
+        assert different["pairs"] == cache["split"]["reporting"]["different"]
+        # A cache that serves nothing by the rule has counts and no rate.
+        assert ("right_share" in same) == (policy["threshold"] is not None), label
+    assert policies["cosine"]["threshold"] is None
+    assert rows[0][2:] == ["0 of 49", "0 of 50"]
 
-    # The issue, the pairs, the stored questions, and the day of the run, which no run records.
-    assert says("A semantic cache would answer a new question") == [
+    # The issue, the pairs, the stored questions, and the day the run records.
+    year, month, day = run["measured_on"].split("-")
+    start = "A semantic cache would answer a new question"
+    assert says(start) == [
         "24",
         str(pairs["agreed"]),
         str(pairs["same"]),
         str(pairs["different"]),
         str(cache["stored_questions"]),
-        "24",
-        "2026",
+        str(int(day)),
+        year,
     ]
-    assert "(evals/runs/cache/baseline)" in line_starting(readme(), "A semantic cache would answer")
+    assert f"The run, on {int(day)} {MONTHS.split()[int(month) - 1]} {year}, is" in said(start)
+    assert "(evals/runs/cache/baseline)" in said(start)
+    assert "a threshold was chosen on one half of the pairs" in said(start)
+    assert "and the table is the other half." in said(start)
+
+    # Under the table: why the intervals are too narrow, with the run's own counts.
+    groups = cache["split"]["reporting"]["groups_of"]["different"]
+    start = "A cell is a count, then its share with a 95% interval."
+    assert says(start) == [
+        str(cache["split"]["reporting"]["different"]),
+        str(groups["groups"]),
+        str(groups["largest"]),
+    ]
+    assert "The intervals are too narrow, because pairs share test questions" in said(start)
 
     (at_95,) = [row for row in cache["whole_set"]["curves"]["cosine"] if row["threshold"] == 0.95]
-    assert says("- **The similarity of two embeddings does not tell a rewording") == [
+    start = (
+        "- **The similarity of two embeddings does not tell a rewording from a near-miss on these"
+    )
+    assert says(start) == [
         str(pairs["agreed"]),
         three(scores["cosine"]["area_under_curve"]),
         "0.5",
@@ -454,35 +480,62 @@ def test_the_cache_measurement_is_the_committed_run() -> None:
         str(pairs["different"]),
     ]
     # "no threshold served a rewording without a near-miss, so [it] serves nothing"
-    assert policies["cosine"]["threshold"] is None
     assert policies["cosine"]["reporting"]["same"]["right"] == 0
 
     weaker = policies["entails_min"]
     same, different = weaker["reporting"]["same"], weaker["reporting"]["different"]
-    assert says("- **A second check helps, and serves little.**") == [
+    there, chose = weaker["reporting_by_how"], weaker["choosing_by_how"]
+    other_shapes = ("short", "long", "indirect")
+    start = "- **A second check helps, and serves little.**"
+    assert says(start) == [
         three(scores["entails_min"]["area_under_curve"]),
         three(scores["entails_mean"]["area_under_curve"]),
         str(same["right"]),
         str(same["pairs"]),
         str(different["pairs"]),
-        str(same["missed"]),
+        str(same["right"]),
+        str(there["reworded"]["right"]),
+        str(there["reworded"]["pairs"]),
+        str(there["synonyms"]["right"]),
+        str(there["synonyms"]["pairs"]),
+        str(sum(there[how]["pairs"] for how in other_shapes)),
+        str(sum(chose[how]["pairs"] for how in other_shapes)),
     ]
     assert different["wrong"] == 0
-    # "It passes a question put in other words, and not one typed as into a search box,
-    # with a personal lead-in or from another angle."
-    by_how = weaker["reporting_by_how"]
-    assert by_how["reworded"]["right"] + by_how["synonyms"]["right"] == same["right"]
-    assert [by_how[how]["right"] for how in ("short", "long", "indirect")] == [0, 0, 0]
+    assert "and none of the 50 near-misses" in said(start)
+    # "None of its 31 questions ... was served, and on the choosing half one of 27 was."
+    assert there["reworded"]["right"] + there["synonyms"]["right"] == same["right"]
+    assert sum(there[how]["right"] for how in other_shapes) == 0
+    assert sum(chose[how]["right"] for how in other_shapes) == 1
+    assert "was served, and on the choosing half one of 27 was." in said(start)
 
-    assert says("- **None wrong of 50 is not safe.**") == [
+    hard = cache["near_misses_above"]
+    fell = others["policies"]["entails_min"]["by_where_the_hardest_pair_fell"]
+    highest = weaker["highest_wrong"]["reporting"]["different"]
+    start = "- **None wrong of 50 was no test of the threshold.**"
+    assert says(start) == [
         str(different["pairs"]),
-        three(cache["zero_wrong_allows"]["up_to"]),
+        three(highest["score"]),
+        str(len(hard["policies"]["entails_min"]["pairs"])),
+        str(hard["score"]),
         str(others["splits"]),
         str(others["chosen_policy"]["splits_with_something_wrong"]),
     ]
-    assert says("- **These are rates on a hard set, not on real questions.**") == [
-        str(cache["stored_questions"])
+    assert highest["score"] < weaker["threshold"]
+    assert {pair["half"] for pair in hard["policies"]["entails_min"]["pairs"]} == {"choosing"}
+    # "those are exactly the splits that put one pair, `d067`, on the reporting half"
+    assert f"`{fell['pair']}`" in said(start)
+    assert fell["reporting"]["splits"] == others["chosen_policy"]["splits_with_something_wrong"]
+    assert fell["reporting"]["splits_with_nothing_wrong"] == 0
+    assert fell["choosing"]["splits_with_something_wrong"] == 0
+
+    start = "- **These are rates on a hard set, not on real questions.**"
+    assert says(start) == [
+        str(pairs["different_by_source"]["written"]),
+        str(pairs["different_by_source"]["golden"]),
+        str(cache["stored_questions"]),
     ]
+    assert "Whether the threshold is stricter than real use needs is not measured." in said(start)
 
 
 def test_every_link_to_a_file_or_a_heading_leads_to_one() -> None:

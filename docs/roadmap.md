@@ -45,7 +45,7 @@ Done since 1.0:
 
 Started since 1.0, and not finished:
 
-- **A semantic cache** ([issue 24](https://github.com/MumukshuPanchal/handbook-rag/issues/24)) is measured and not built. On 198 pairs of a test question and a rewording or a near-miss, the similarity of two embeddings alone could serve nothing safely. A second model that reads the two questions together served 7 of 49 rewordings and none of 50 near-misses on the half of the pairs that chose nothing, and the same rules served something wrong on 97 of 200 other splits of the pairs ([the guide](evaluation.md#a-semantic-cache-measured-before-it-is-built)). No person has read the pairs. What remains is the cache itself: what it stores, when a stored answer goes stale, whether the saving measured is worth a second model, and a decision record for its design.
+- **A semantic cache** ([issue 24](https://github.com/MumukshuPanchal/handbook-rag/issues/24)) is measured and not built. On 198 pairs of a test question and a rewording or a near-miss, the similarity of two embeddings alone could serve nothing safely. A second model that reads the two questions together served 7 of 49 rewordings and none of 50 near-misses on the half of the pairs that chose nothing. That half held no near-miss hard enough to test the threshold: on 200 other splits of the pairs, the same rules served something wrong in the 97 that put the hardest near-miss there ([the guide](evaluation.md#a-semantic-cache-measured-before-it-is-built)). No person has read the pairs. What remains is the cache itself: what it stores, when a stored answer goes stale, whether the saving measured is worth a second model, and a decision record for its design.
 
 ## How work flows
 

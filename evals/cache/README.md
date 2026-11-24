@@ -95,7 +95,7 @@ They would make useful `same` pairs that look like `different` ones, and are a r
 
 ## The second labelling
 
-A second model session labelled every pair again, blind. It got the 200 pairs in a shuffled order under neutral names (`p001` to `p200`), each with only its two questions: no kind, way, note or id. It could read the golden set and the handbook snapshot, and was told not to open the maker's files. For each pair it gave a label (`same`, `different` or `unsure`), how confident it was, what the label rests on, a one-sentence reason and, where it had one, a flag. Its labels are on every line of the file as `second`, matched to the pairs through the key from its neutral names to the pair ids, and `agreed` says whether its label equals `kind`.
+A second model session labelled every pair again, blind. It got the 200 pairs in a shuffled order under neutral names (`p001` to `p200`), each with only its two questions: no kind, way, note or id. It could read the golden set and the handbook snapshot, and was told not to open the maker's files. For each pair it gave a label (`same`, `different` or `unsure`), how confident it was, what the label rests on, a one-sentence reason and, where it had one, a flag. Its labels are on every line of the file as `second`, matched to the pairs through the key from its neutral names to the pair ids, and `agreed` says whether its label equals `kind`. The second session's own file of labels and that key are not in the repository. That `second` on each line is what the session wrote was checked by a script when this file was built, and cannot be checked from the repository.
 
 | Maker's label | Second: `same` | Second: `different` | Second: `unsure` | All |
 |---|---|---|---|---|
@@ -174,25 +174,25 @@ No cache is built yet. On 24 November 2026 `handbook-rag eval-cache` measured wh
 The run follows the four steps above and goes further in three ways:
 
 - **A second score.** Besides the similarity of the two embeddings, each pair is scored by a second model, `cross-encoder/nli-deberta-v3-small`, which reads the two questions together and gives the probability that one implies the other. It is asked in both directions, and the two are combined as the weaker direction and as the mean.
-- **A simulated cache.** A pair is not a cache, as the second caution above says. So a cache that holds all 165 golden questions is simulated, each pair's other question is asked of it, and its 3 nearest stored questions are the candidates. In the 13 pairs whose other question is a golden question itself (`source: golden`), that question's own entry is left out: serving it would be an exact match.
-- **Two halves.** A threshold chosen and scored on the same pairs flatters. Each threshold is chosen on one half of the agreed pairs, so that nothing wrong is served there, and the result is reported on the other half: 99 pairs on each side, 49 `same` and 50 `different`. Pairs that share a golden question stay on one side, because the pairs are not independent (see [Known limits](#known-limits)).
+- **A simulated cache.** A pair is not a cache, as the second caution above says. So a cache that holds all 165 golden questions is simulated, the 33 that the handbook does not answer among them. Each pair's other question is asked of it, and its 3 nearest stored questions are the candidates. In the 13 pairs whose other question is a golden question itself (`source: golden`), that question's own entry is left out: serving it would be an exact match.
+- **Two halves.** A threshold chosen and scored on the same pairs can flatter. Each threshold is chosen on one half of the agreed pairs, so that nothing wrong is served there, and the result is reported on the other half: 99 pairs on each side, 49 `same` and 50 `different`. Pairs that name the same golden question stay on one side, because the pairs are not independent (see [Known limits](#known-limits)). The split balances `same` against `different`, and nothing else.
 
 What it found, in short:
 
 - **The similarity of the embeddings alone does not tell the two kinds apart.** Its area under the curve is 0.546, where 0.5 is a coin, and the highest similarity of all 198 agreed pairs belongs to a `different` pair. No threshold was safe on the choosing half, so on the reporting half it served nothing.
 - **The second model separates them far better**: 0.865 by its weaker direction and 0.915 by the mean. At the threshold the choosing half gave, it served 7 of the 49 `same` questions of the reporting half right, and none of the 50 `different` ones.
-- **None of 50 is not safe.** The interval on it still reaches 0.071. On 200 other splits of the same pairs, the same rules served something wrong on the reporting half in 97.
+- **None of 50 was no test of that threshold.** The highest score of a `different` pair of the reporting half is 0.143 by the weaker direction, so the same result would have come out at almost any threshold. The 3 `different` pairs that the second model scores above 0.8 are all on the choosing half. The interval on none of 50 reaches 0.071, and it is too narrow: the 50 come from 31 groups of pairs that name the same golden question. On 200 other splits of the same pairs, the same rules served something wrong on the reporting half in 97, and those are exactly the splits that put `d067` there.
 - **The two disputed pairs are in no figure.** `s078` has a similarity of 0.963, and an entailment of 0.975 in one direction and 0.035 in the other. `s100` has a similarity of 0.893, and 0.015 and 0.065. Neither is served at any of the chosen thresholds.
 
-By `how`, as step 4 asks. The medians are over all agreed pairs. The last two columns are the reporting half, decided by the weaker direction of the second model:
+By `how`, as step 4 asks. The medians are over all agreed pairs. The last four columns are the two halves, decided by the weaker direction of the second model:
 
-| `how` | Agreed pairs | Median similarity | Median entailment, weaker direction | Median entailment, mean | On the reporting half | Served right there |
-|---|---|---|---|---|---|---|
-| `reworded` | 20 | 0.964 | 0.989 | 0.992 | 5 | 2 |
-| `short` | 20 | 0.893 | 0.007 | 0.490 | 9 | 0 |
-| `long` | 20 | 0.906 | 0.039 | 0.516 | 10 | 0 |
-| `synonyms` | 20 | 0.907 | 0.912 | 0.949 | 13 | 5 |
-| `indirect` | 18 | 0.889 | 0.001 | 0.097 | 12 | 0 |
+| `how` | Agreed pairs | Median similarity | Median entailment, weaker direction | Median entailment, mean | On the choosing half | Served right there | On the reporting half | Served right there |
+|---|---|---|---|---|---|---|---|---|
+| `reworded` | 20 | 0.964 | 0.989 | 0.992 | 15 | 8 | 5 | 2 |
+| `short` | 20 | 0.893 | 0.007 | 0.490 | 11 | 0 | 9 | 0 |
+| `long` | 20 | 0.906 | 0.039 | 0.516 | 10 | 0 | 10 | 0 |
+| `synonyms` | 20 | 0.907 | 0.912 | 0.949 | 7 | 1 | 13 | 5 |
+| `indirect` | 18 | 0.889 | 0.001 | 0.097 | 6 | 1 | 12 | 0 |
 
 By `what_differs`, over all agreed pairs, with the reporting half in the last two columns:
 
@@ -205,9 +205,18 @@ By `what_differs`, over all agreed pairs, with the reporting half in the last tw
 | `scope` | 15 | 0.969 | 0.991 | 0.001 | 0.134 | 8 | 0 |
 | `aspect` | 25 | 0.840 | 0.962 | 0.000 | 0.989 | 9 | 0 |
 
+By `source`, over all agreed `different` pairs, with the number on each half:
+
+| `source` | Agreed pairs | Lowest similarity | Median | Highest | Highest entailment, weaker direction | On the choosing half | On the reporting half |
+|---|---|---|---|---|---|---|---|
+| `golden` | 13 | 0.497 | 0.685 | 0.790 | 0.495 | 4 | 9 |
+| `written` | 87 | 0.673 | 0.918 | 0.994 | 0.989 | 46 | 41 |
+
 - **A single pair decides each threshold.** Step 4 warns that one group can. For the similarity it is `d012`, which changes one word, "doesn't" to "does", and has the highest similarity on the choosing half. For the second model it is `d067`, an `aspect` pair that asks for which quarters a budget was allocated where its golden question asks how much.
-- **The second model passes plain rewordings and little else.** A question typed as into a search box, one with a personal lead-in and one from another angle each have at least one direction of entailment that is low, as the medians show, and none of them was served.
-- **The set is hard on purpose.** Each rate is per `different` question asked or per `same` question asked, not per question a real user asks. A threshold chosen here is stricter than real use needs, as the known limits say.
+- **The two `different` pairs the second model scores highest are stored declines.** `d067` and `d081` are the only ones it scores above 0.9. In both, the golden question is one the handbook does not answer (`u004` and `u046`), so what a cache holds for it is a decline, and by the pair's note the other question has an answer. A cache that stores no declines would have met neither of them. That was not measured.
+- **The second model passes plain rewordings, and few others.** On the reporting half it served 2 of the 5 `reworded` and 5 of the 13 `synonyms` questions, and none of the 31 `short`, `long` and `indirect` ones. On the choosing half it served one of the 27 of those three kinds, `s062`. Most of them have at least one direction of entailment that is low, as the medians show.
+- **The 13 `golden` pairs are not close.** Two golden questions on neighbouring subjects are far apart for a near-miss, as the table by `source` shows, and 9 of them are among the 50 `different` pairs of the reporting half. The hard cases are among the 87 `written` pairs.
+- **The set is hard on purpose.** Each rate is per `different` question asked or per `same` question asked, not per question a real user asks. Whether a threshold chosen here is stricter than real use needs is not measured.
 
 ## Format
 
@@ -245,7 +254,7 @@ Each line is one JSON object with these fields:
 - **Built on questions that were mostly written by a model that could see the passage.** 122 of the 132 answerable golden questions were. The other questions were written by a model too. Real users' wording, with typos, vaguer questions and several questions at once, is not represented, and model-written paraphrases may sit closer together, or further apart, than real ones.
 - **The maker reasoned the answers of the `written` questions and did not look them up.** They come from the reference answer, the evidence quote or the golden question's note. The second session read the handbook snapshot for 73 of the `different` pairs and agreed with every label, but its reading corrects several notes (see [what the second labels rest on](#what-the-second-labels-rest-on)).
 - **The pairs are not independent.** The 200 pairs use 131 golden questions, 59 of them more than once, and four questions (`q034`, `q063`, `b13` and `b08`) are in 19 pairs. A fault in one golden question, or a quirk of its wording, moves several pairs at once, and an interval computed as if the 200 pairs were independent is too narrow.
-- **The set is hard by construction.** By plain word overlap (the share of distinct words two questions have in common), the `different` pairs are closer to their golden question than the `same` pairs: medians of 0.63 against 0.45. The second session, counting its own way, found 0.61 against 0.43. Real traffic is not half near-misses, so a threshold chosen here will be stricter than real use needs, which is the safe side for a cache.
+- **The set is hard by construction.** By plain word overlap (the share of distinct words two questions have in common), the `different` pairs are closer to their golden question than the `same` pairs: medians of 0.63 against 0.45. The second session, counting its own way, found 0.61 against 0.43. Real traffic is not half near-misses, so a rate measured here is per near-miss asked, not per question asked. Whether a threshold chosen here is stricter than real use needs is not measured.
 - **Style predicts the label.** All 20 questions typed as into a search box are `same`, and no `different` question is a fragment. Of the 22 other questions that open with a personal lead-in, 20 are `same`; the 2 `different` ones are `d045` and `d056`, and in `d056` the golden question has the same lead-in. The set cannot show whether a short fragment is matched to a neighbouring question it should not be.
 - **Declines are tested one way only: against an answer.** In 30 `different` pairs one question should be declined and the other answered: 26 in which a golden question is unanswerable and 4 in which the written question is the one to decline (by the second session's reading, about 12 more). No pair has two questions that should both be declined, and no `same` pair rewords an unanswerable question, so whether the cache may reuse a stored decline for a reworded unanswerable question is not tested.
 - **Some labels depend on direction, or on how the stored reply happens to be worded.** The second session named about seven: `s011`, `s064`, `s066`, `s083`, `s078`, `s100` and `d062`. In each, a reply to one question would serve the other in one direction and fall short in the other, or a reply would open with a bare "Yes" or "No" that reads wrongly against the other question. The cache serves in one direction, the reply stored for the earlier question given for the later one, and a single label per pair cannot hold that.

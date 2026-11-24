@@ -1,5 +1,6 @@
 {
   "description": "The cosine of two question embeddings, and an entailment check in both directions, as the test of a semantic cache.",
+  "measured_on": "2026-11-24",
   "config": {
     "embedding_model": "BAAI/bge-small-en-v1.5",
     "embedding_query_prefix": "Represent this sentence for searching relevant passages: ",
@@ -12,12 +13,16 @@
       "neutral"
     ],
     "verifier_entailment_output": 1,
-    "pairs_fingerprint": "0045c3c13f4b975a",
-    "stored_questions_fingerprint": "83b6d025ee5b34b1",
+    "pairs_fingerprint": "c6e74e9ebd1a6972",
+    "stored_questions_fingerprint": "0ed0bee2c9c03dab",
     "candidates": 3,
     "floor": 0.5,
     "split_seed": "cache-pairs-split-1",
     "other_splits": 200
+  },
+  "rows": {
+    "pairs.jsonl": "68365e5c386571ce",
+    "questions.jsonl": "e10e1002529c8c11"
   },
   "pairs": {
     "in_file": 200,
@@ -28,7 +33,11 @@
       "s078",
       "s100"
     ],
-    "other_is_a_stored_question": 13
+    "other_is_a_stored_question": 13,
+    "different_by_source": {
+      "golden": 13,
+      "written": 87
+    }
   },
   "pair_view": {
     "what": "Each agreed pair by itself: the scores of its golden question against its other question. A description of all agreed pairs, not a held-out result.",
@@ -117,6 +126,20 @@
             "min": 0.6045740295780405,
             "median": 0.8404005491583506,
             "max": 0.9615801859563433
+          }
+        },
+        "by_source": {
+          "golden": {
+            "pairs": 13,
+            "min": 0.49744712125935453,
+            "median": 0.6850116706913575,
+            "max": 0.7896004494151043
+          },
+          "written": {
+            "pairs": 87,
+            "min": 0.6725564533866009,
+            "median": 0.9178833708368301,
+            "max": 0.993528535448292
           }
         },
         "at_or_above": [
@@ -265,6 +288,20 @@
             "pairs": 25,
             "min": 2.2078604160924442e-05,
             "median": 0.00506479199975729,
+            "max": 0.9943538904190063
+          }
+        },
+        "by_source": {
+          "golden": {
+            "pairs": 13,
+            "min": 5.3182357078185305e-05,
+            "median": 0.0001822367194108665,
+            "max": 0.8016265034675598
+          },
+          "written": {
+            "pairs": 87,
+            "min": 2.2078604160924442e-05,
+            "median": 0.0012758411467075348,
             "max": 0.9943538904190063
           }
         },
@@ -417,6 +454,20 @@
             "max": 0.988816499710083
           }
         },
+        "by_source": {
+          "golden": {
+            "pairs": 13,
+            "min": 2.2796813937020488e-05,
+            "median": 0.00042292449506931007,
+            "max": 0.8889930844306946
+          },
+          "written": {
+            "pairs": 87,
+            "min": 1.950163823494222e-05,
+            "median": 0.0008050281321629882,
+            "max": 0.988816499710083
+          }
+        },
         "at_or_above": [
           {
             "threshold": 0.5,
@@ -563,6 +614,20 @@
             "pairs": 25,
             "min": 2.2078604160924442e-05,
             "median": 0.00021668433328159153,
+            "max": 0.988816499710083
+          }
+        },
+        "by_source": {
+          "golden": {
+            "pairs": 13,
+            "min": 2.2796813937020488e-05,
+            "median": 9.299133671447635e-05,
+            "max": 0.49459847807884216
+          },
+          "written": {
+            "pairs": 87,
+            "min": 1.950163823494222e-05,
+            "median": 0.0004438463947735727,
             "max": 0.988816499710083
           }
         },
@@ -715,6 +780,20 @@
             "max": 0.9915851950645447
           }
         },
+        "by_source": {
+          "golden": {
+            "pairs": 13,
+            "min": 8.184100079233758e-05,
+            "median": 0.0003725705319084227,
+            "max": 0.6384186893701553
+          },
+          "written": {
+            "pairs": 87,
+            "min": 3.137917701678816e-05,
+            "median": 0.0018703090681810863,
+            "max": 0.9915851950645447
+          }
+        },
         "at_or_above": [
           {
             "threshold": 0.5,
@@ -782,6 +861,7 @@
   },
   "cache_view": {
     "stored_questions": 165,
+    "stored_unanswered": 33,
     "candidates": 3,
     "floor": 0.5,
     "own_question": {
@@ -810,13 +890,49 @@
         "pairs": 99,
         "same": 49,
         "different": 50,
-        "groups": 64
+        "groups": 64,
+        "groups_of": {
+          "same": {
+            "groups": 48,
+            "largest": 2
+          },
+          "different": {
+            "groups": 40,
+            "largest": 3
+          }
+        },
+        "different_by_source": {
+          "golden": 4,
+          "written": 46
+        },
+        "candidates": {
+          "not_own": 200,
+          "named_by_the_other_half": 79
+        }
       },
       "reporting": {
         "pairs": 99,
         "same": 49,
         "different": 50,
-        "groups": 53
+        "groups": 53,
+        "groups_of": {
+          "same": {
+            "groups": 45,
+            "largest": 2
+          },
+          "different": {
+            "groups": 31,
+            "largest": 8
+          }
+        },
+        "different_by_source": {
+          "golden": 9,
+          "written": 41
+        },
+        "candidates": {
+          "not_own": 201,
+          "named_by_the_other_half": 68
+        }
       }
     },
     "policies": {
@@ -828,8 +944,10 @@
           "group": "negation",
           "served": "q021",
           "own": true,
+          "stored_unanswered": false,
           "score": 0.992366914591555
         },
+        "halfway_to": null,
         "choosing": {
           "same": {
             "pairs": 49,
@@ -850,38 +968,46 @@
             "pairs": 49,
             "right": 0,
             "wrong": 0,
-            "missed": 49,
-            "right_share": {
-              "mean": 0.0,
-              "low": 0.0,
-              "high": 0.07269782028398425,
-              "count": 49
-            },
-            "wrong_share": {
-              "mean": 0.0,
-              "low": 0.0,
-              "high": 0.07269782028398425,
-              "count": 49
-            },
-            "missed_share": {
-              "mean": 1.0,
-              "low": 0.9273021797160157,
-              "high": 1.0,
-              "count": 49
-            }
+            "missed": 49
           },
           "different": {
             "pairs": 50,
             "wrong": 0,
             "wrong_own": 0,
             "wrong_other": 0,
-            "not_served": 50,
-            "wrong_share": {
-              "mean": 0.0,
-              "low": 0.0,
-              "high": 0.07134760017861413,
-              "count": 50
-            }
+            "not_served": 50
+          }
+        },
+        "choosing_by_how": {
+          "reworded": {
+            "pairs": 15,
+            "right": 0,
+            "wrong": 0,
+            "missed": 15
+          },
+          "short": {
+            "pairs": 11,
+            "right": 0,
+            "wrong": 0,
+            "missed": 11
+          },
+          "long": {
+            "pairs": 10,
+            "right": 0,
+            "wrong": 0,
+            "missed": 10
+          },
+          "synonyms": {
+            "pairs": 7,
+            "right": 0,
+            "wrong": 0,
+            "missed": 7
+          },
+          "indirect": {
+            "pairs": 6,
+            "right": 0,
+            "wrong": 0,
+            "missed": 6
           }
         },
         "reporting_by_how": {
@@ -916,6 +1042,50 @@
             "missed": 12
           }
         },
+        "choosing_by_what_differs": {
+          "region": {
+            "pairs": 3,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 3
+          },
+          "number": {
+            "pairs": 5,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 5
+          },
+          "entity": {
+            "pairs": 11,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 11
+          },
+          "negation": {
+            "pairs": 8,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 8
+          },
+          "scope": {
+            "pairs": 7,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 7
+          },
+          "aspect": {
+            "pairs": 16,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 16
+          }
+        },
         "reporting_by_what_differs": {
           "region": {
             "pairs": 10,
@@ -960,7 +1130,34 @@
             "not_served": 9
           }
         },
-        "wrong_on_reporting": []
+        "wrong_on_reporting": [],
+        "right_only_by_the_margin": [],
+        "highest_wrong": {
+          "choosing": {
+            "same": null,
+            "different": {
+              "pair": "d012",
+              "kind": "different",
+              "group": "negation",
+              "served": "q021",
+              "own": true,
+              "stored_unanswered": false,
+              "score": 0.992366914591555
+            }
+          },
+          "reporting": {
+            "same": null,
+            "different": {
+              "pair": "d036",
+              "kind": "different",
+              "group": "number",
+              "served": "q063",
+              "own": true,
+              "stored_unanswered": false,
+              "score": 0.993528535448292
+            }
+          }
+        }
       },
       "entails_min": {
         "threshold": 0.9893561601638794,
@@ -970,8 +1167,10 @@
           "group": "aspect",
           "served": "u004",
           "own": true,
+          "stored_unanswered": true,
           "score": 0.988816499710083
         },
+        "halfway_to": 0.9898958206176758,
         "choosing": {
           "same": {
             "pairs": 49,
@@ -1026,6 +1225,38 @@
             }
           }
         },
+        "choosing_by_how": {
+          "reworded": {
+            "pairs": 15,
+            "right": 8,
+            "wrong": 0,
+            "missed": 7
+          },
+          "short": {
+            "pairs": 11,
+            "right": 0,
+            "wrong": 0,
+            "missed": 11
+          },
+          "long": {
+            "pairs": 10,
+            "right": 0,
+            "wrong": 0,
+            "missed": 10
+          },
+          "synonyms": {
+            "pairs": 7,
+            "right": 1,
+            "wrong": 0,
+            "missed": 6
+          },
+          "indirect": {
+            "pairs": 6,
+            "right": 1,
+            "wrong": 0,
+            "missed": 5
+          }
+        },
         "reporting_by_how": {
           "reworded": {
             "pairs": 5,
@@ -1056,6 +1287,50 @@
             "right": 0,
             "wrong": 0,
             "missed": 12
+          }
+        },
+        "choosing_by_what_differs": {
+          "region": {
+            "pairs": 3,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 3
+          },
+          "number": {
+            "pairs": 5,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 5
+          },
+          "entity": {
+            "pairs": 11,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 11
+          },
+          "negation": {
+            "pairs": 8,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 8
+          },
+          "scope": {
+            "pairs": 7,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 7
+          },
+          "aspect": {
+            "pairs": 16,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 16
           }
         },
         "reporting_by_what_differs": {
@@ -1102,7 +1377,56 @@
             "not_served": 9
           }
         },
-        "wrong_on_reporting": []
+        "wrong_on_reporting": [],
+        "right_only_by_the_margin": [
+          {
+            "pair": "s013",
+            "group": "synonyms",
+            "score": 0.9898093938827515
+          }
+        ],
+        "highest_wrong": {
+          "choosing": {
+            "same": {
+              "pair": "s053",
+              "kind": "same",
+              "group": "short",
+              "served": "q086",
+              "own": false,
+              "stored_unanswered": false,
+              "score": 0.06748506426811218
+            },
+            "different": {
+              "pair": "d067",
+              "kind": "different",
+              "group": "aspect",
+              "served": "u004",
+              "own": true,
+              "stored_unanswered": true,
+              "score": 0.988816499710083
+            }
+          },
+          "reporting": {
+            "same": {
+              "pair": "s073",
+              "kind": "same",
+              "group": "long",
+              "served": "q110",
+              "own": false,
+              "stored_unanswered": false,
+              "score": 0.8539615869522095
+            },
+            "different": {
+              "pair": "d036",
+              "kind": "different",
+              "group": "number",
+              "served": "q063",
+              "own": true,
+              "stored_unanswered": false,
+              "score": 0.1426519751548767
+            }
+          }
+        }
       },
       "entails_mean": {
         "threshold": 0.9917868226766586,
@@ -1112,8 +1436,10 @@
           "group": "aspect",
           "served": "u004",
           "own": true,
+          "stored_unanswered": true,
           "score": 0.9915851950645447
         },
+        "halfway_to": 0.9919884502887726,
         "choosing": {
           "same": {
             "pairs": 49,
@@ -1168,6 +1494,38 @@
             }
           }
         },
+        "choosing_by_how": {
+          "reworded": {
+            "pairs": 15,
+            "right": 8,
+            "wrong": 0,
+            "missed": 7
+          },
+          "short": {
+            "pairs": 11,
+            "right": 0,
+            "wrong": 0,
+            "missed": 11
+          },
+          "long": {
+            "pairs": 10,
+            "right": 0,
+            "wrong": 0,
+            "missed": 10
+          },
+          "synonyms": {
+            "pairs": 7,
+            "right": 1,
+            "wrong": 0,
+            "missed": 6
+          },
+          "indirect": {
+            "pairs": 6,
+            "right": 1,
+            "wrong": 0,
+            "missed": 5
+          }
+        },
         "reporting_by_how": {
           "reworded": {
             "pairs": 5,
@@ -1198,6 +1556,50 @@
             "right": 0,
             "wrong": 0,
             "missed": 12
+          }
+        },
+        "choosing_by_what_differs": {
+          "region": {
+            "pairs": 3,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 3
+          },
+          "number": {
+            "pairs": 5,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 5
+          },
+          "entity": {
+            "pairs": 11,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 11
+          },
+          "negation": {
+            "pairs": 8,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 8
+          },
+          "scope": {
+            "pairs": 7,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 7
+          },
+          "aspect": {
+            "pairs": 16,
+            "wrong": 0,
+            "wrong_own": 0,
+            "wrong_other": 0,
+            "not_served": 16
           }
         },
         "reporting_by_what_differs": {
@@ -1244,13 +1646,132 @@
             "not_served": 9
           }
         },
-        "wrong_on_reporting": []
+        "wrong_on_reporting": [],
+        "right_only_by_the_margin": [],
+        "highest_wrong": {
+          "choosing": {
+            "same": {
+              "pair": "s024",
+              "kind": "same",
+              "group": "indirect",
+              "served": "q122",
+              "own": false,
+              "stored_unanswered": false,
+              "score": 0.43202731767087243
+            },
+            "different": {
+              "pair": "d067",
+              "kind": "different",
+              "group": "aspect",
+              "served": "u004",
+              "own": true,
+              "stored_unanswered": true,
+              "score": 0.9915851950645447
+            }
+          },
+          "reporting": {
+            "same": {
+              "pair": "s073",
+              "kind": "same",
+              "group": "long",
+              "served": "q110",
+              "own": false,
+              "stored_unanswered": false,
+              "score": 0.9197822213172913
+            },
+            "different": {
+              "pair": "d006",
+              "kind": "different",
+              "group": "region",
+              "served": "q009",
+              "own": true,
+              "stored_unanswered": false,
+              "score": 0.48035113845253363
+            }
+          }
+        }
       }
     },
     "chosen_policy": "entails_min",
     "zero_wrong_allows": {
       "near_misses": 50,
       "up_to": 0.07134760017861413
+    },
+    "near_misses_above": {
+      "what": "The near-misses the second check would serve at this score, by name. The score was set after the first run was read, to describe it. No result is chosen by it.",
+      "score": 0.8,
+      "policies": {
+        "entails_min": {
+          "pairs": [
+            {
+              "pair": "d067",
+              "kind": "different",
+              "group": "aspect",
+              "served": "u004",
+              "own": true,
+              "stored_unanswered": true,
+              "score": 0.988816499710083,
+              "half": "choosing"
+            },
+            {
+              "pair": "d081",
+              "kind": "different",
+              "group": "aspect",
+              "served": "u046",
+              "own": true,
+              "stored_unanswered": true,
+              "score": 0.9470254182815552,
+              "half": "choosing"
+            },
+            {
+              "pair": "d004",
+              "kind": "different",
+              "group": "region",
+              "served": "q007",
+              "own": true,
+              "stored_unanswered": false,
+              "score": 0.820620059967041,
+              "half": "choosing"
+            }
+          ],
+          "other_splits_with_all_on_the_choosing_half": 24
+        },
+        "entails_mean": {
+          "pairs": [
+            {
+              "pair": "d067",
+              "kind": "different",
+              "group": "aspect",
+              "served": "u004",
+              "own": true,
+              "stored_unanswered": true,
+              "score": 0.9915851950645447,
+              "half": "choosing"
+            },
+            {
+              "pair": "d081",
+              "kind": "different",
+              "group": "aspect",
+              "served": "u046",
+              "own": true,
+              "stored_unanswered": true,
+              "score": 0.9521445631980896,
+              "half": "choosing"
+            },
+            {
+              "pair": "d004",
+              "kind": "different",
+              "group": "region",
+              "served": "q007",
+              "own": true,
+              "stored_unanswered": false,
+              "score": 0.8612417578697205,
+              "half": "choosing"
+            }
+          ],
+          "other_splits_with_all_on_the_choosing_half": 24
+        }
+      }
     },
     "whole_set": {
       "what": "All agreed pairs at fixed thresholds, and at the threshold the rule would choose with all of them in view. A description: these thresholds are scored on the pairs they are read from.",
@@ -1853,6 +2374,15 @@
             "wrong_own": 0,
             "wrong_other": 0,
             "not_served": 100
+          },
+          "decided_by": {
+            "pair": "d036",
+            "kind": "different",
+            "group": "number",
+            "served": "q063",
+            "own": true,
+            "stored_unanswered": false,
+            "score": 0.993528535448292
           }
         },
         "entails_min": {
@@ -1869,6 +2399,15 @@
             "wrong_own": 0,
             "wrong_other": 0,
             "not_served": 100
+          },
+          "decided_by": {
+            "pair": "d067",
+            "kind": "different",
+            "group": "aspect",
+            "served": "u004",
+            "own": true,
+            "stored_unanswered": true,
+            "score": 0.988816499710083
           }
         },
         "entails_mean": {
@@ -1885,6 +2424,15 @@
             "wrong_own": 0,
             "wrong_other": 0,
             "not_served": 100
+          },
+          "decided_by": {
+            "pair": "d067",
+            "kind": "different",
+            "group": "aspect",
+            "served": "u004",
+            "own": true,
+            "stored_unanswered": true,
+            "score": 0.9915851950645447
           }
         }
       }
@@ -1906,7 +2454,41 @@
             "max": 0.14285714285714285
           },
           "splits_with_nothing_wrong": 183,
-          "splits_with_something_wrong": 17
+          "splits_with_something_wrong": 17,
+          "by_where_the_hardest_pair_fell": {
+            "pair": "d036",
+            "score": 0.993528535448292,
+            "choosing": {
+              "splits": 93,
+              "right_share": {
+                "min": 0.0,
+                "median": 0.0,
+                "max": 0.0
+              },
+              "wrong_share_of_different": {
+                "min": 0.0,
+                "median": 0.0,
+                "max": 0.0
+              },
+              "splits_with_nothing_wrong": 93,
+              "splits_with_something_wrong": 0
+            },
+            "reporting": {
+              "splits": 107,
+              "right_share": {
+                "min": 0.0,
+                "median": 0.0,
+                "max": 0.04081632653061224
+              },
+              "wrong_share_of_different": {
+                "min": 0.0,
+                "median": 0.0,
+                "max": 0.14285714285714285
+              },
+              "splits_with_nothing_wrong": 90,
+              "splits_with_something_wrong": 17
+            }
+          }
         },
         "entails_min": {
           "chosen": 127,
@@ -1922,7 +2504,41 @@
             "max": 0.061224489795918366
           },
           "splits_with_nothing_wrong": 103,
-          "splits_with_something_wrong": 97
+          "splits_with_something_wrong": 97,
+          "by_where_the_hardest_pair_fell": {
+            "pair": "d067",
+            "score": 0.988816499710083,
+            "choosing": {
+              "splits": 103,
+              "right_share": {
+                "min": 0.08163265306122448,
+                "median": 0.16326530612244897,
+                "max": 0.24489795918367346
+              },
+              "wrong_share_of_different": {
+                "min": 0.0,
+                "median": 0.0,
+                "max": 0.0
+              },
+              "splits_with_nothing_wrong": 103,
+              "splits_with_something_wrong": 0
+            },
+            "reporting": {
+              "splits": 97,
+              "right_share": {
+                "min": 0.20408163265306123,
+                "median": 0.3469387755102041,
+                "max": 0.5
+              },
+              "wrong_share_of_different": {
+                "min": 0.018867924528301886,
+                "median": 0.02040816326530612,
+                "max": 0.061224489795918366
+              },
+              "splits_with_nothing_wrong": 0,
+              "splits_with_something_wrong": 97
+            }
+          }
         },
         "entails_mean": {
           "chosen": 73,
@@ -1938,7 +2554,41 @@
             "max": 0.08
           },
           "splits_with_nothing_wrong": 103,
-          "splits_with_something_wrong": 97
+          "splits_with_something_wrong": 97,
+          "by_where_the_hardest_pair_fell": {
+            "pair": "d067",
+            "score": 0.9915851950645447,
+            "choosing": {
+              "splits": 103,
+              "right_share": {
+                "min": 0.10204081632653061,
+                "median": 0.16326530612244897,
+                "max": 0.2653061224489796
+              },
+              "wrong_share_of_different": {
+                "min": 0.0,
+                "median": 0.0,
+                "max": 0.0
+              },
+              "splits_with_nothing_wrong": 103,
+              "splits_with_something_wrong": 0
+            },
+            "reporting": {
+              "splits": 97,
+              "right_share": {
+                "min": 0.25,
+                "median": 0.3673469387755102,
+                "max": 0.6938775510204082
+              },
+              "wrong_share_of_different": {
+                "min": 0.018867924528301886,
+                "median": 0.02040816326530612,
+                "max": 0.08
+              },
+              "splits_with_nothing_wrong": 0,
+              "splits_with_something_wrong": 97
+            }
+          }
         }
       },
       "chosen_policy": {
@@ -1992,10 +2642,10 @@
   ],
   "timing": {
     "questions_embedded": 352,
-    "embedding_seconds": 7.3,
-    "embedding_ms_per_question": 20.6,
+    "embedding_seconds": 8.3,
+    "embedding_ms_per_question": 23.7,
     "pairs_verified": 605,
-    "verifying_seconds": 16.1,
-    "verifying_ms_per_pair": 26.6
+    "verifying_seconds": 15.7,
+    "verifying_ms_per_pair": 26.0
   }
 }

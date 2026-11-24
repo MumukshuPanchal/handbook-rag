@@ -17,21 +17,25 @@ plain semantic cache has, and a verifier that reads the two questions together
   question. The nearest stored questions are its candidates, and the first that passes
   the threshold is served. This is what a cache would do, so it is the view that counts.
 
-A threshold chosen and scored on the same pairs flatters. So the pairs are split in two
-by a rule fixed in code, a threshold is chosen for each score on one half, and the
-result is reported on the other. Pairs that share a golden question stay on one side.
+A threshold chosen and scored on the same pairs can flatter. So the pairs are split in
+two by a rule fixed in code, a threshold is chosen for each score on one half, and the
+result is reported on the other. Pairs that name the same golden question stay on one
+side. The cache holds every golden question for both halves, so a question can still
+meet a stored question that a pair of the other half names.
 
-Nothing here asks an answer model anything. The labels were written by one model session
-and labelled again, blind, by a second. No person has read the pairs.
+Nothing here asks an answer model anything. The pairs were written and labelled by one
+model session and labelled again by a second, as their card describes. No person has read
+them.
 """
 
+import datetime
 import hashlib
 import json
 import math
 import statistics
 import time
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -51,6 +55,9 @@ HOWS = ("reworded", "short", "long", "synonyms", "indirect")
 """The ways the other question of a ``same`` pair differs from its golden question."""
 WHAT_DIFFERS = ("region", "number", "entity", "negation", "scope", "aspect")
 """What makes the answers of a ``different`` pair differ."""
+SOURCES = ("golden", "written")
+"""How a ``different`` pair was made: from two golden questions on neighbouring subjects,
+or from one golden question and a question written to change one decisive detail of it."""
 
 COSINE = "cosine"
 ENTAILS_FORWARD = "entails_forward"
@@ -63,6 +70,8 @@ POLICIES = (COSINE, ENTAILS_MIN, ENTAILS_MEAN)
 """The scores a cache could decide by, in the order of preference when two serve equally
 many: the cosine needs no second model, and the smaller direction is the stricter of the
 verifier's two."""
+VERIFIER_POLICIES = (ENTAILS_MIN, ENTAILS_MEAN)
+"""The two ways to decide by the verifier."""
 
 RIGHT = "right"
 """A ``same`` question was served the answer of its own golden question."""
@@ -84,13 +93,19 @@ FLOOR = 0.5
 cache from verifying questions that have nothing to do with each other. These pairs
 cannot choose it: every question in them is near a stored one by construction."""
 SPLIT_SEED = "cache-pairs-split-1"
-"""Names the one split the results are reported for. It was fixed before any score was
-computed with this code, and is not a setting of the command."""
+"""Names the one split the results are reported for. It is fixed here, and the command
+has no option for it. Whether a split is a typical one cannot be seen from a seed, which
+is why the same rules are also run on other splits."""
 OTHER_SPLITS = 200
 """How many other splits the same rules are run on, to show how far the result depends
 on the split."""
 THRESHOLDS = (0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.925, 0.95, 0.975, 0.99, 0.995, 0.999)
 """The thresholds the descriptive curves are printed at. No result is chosen from them."""
+HARD_NEAR_MISS = 0.8
+"""The near-misses the verifier would serve at this score are listed by name, with the
+half each is on. Whether a half tests a threshold depends on whether it holds one of
+them. The score was set after the first run had been read, to describe that run, and no
+result is chosen by it."""
 
 PAIRS_PATH = Path("evals/cache/pairs.jsonl")
 PAIRS_FILE = "pairs.jsonl"
@@ -277,6 +292,8 @@ class Measured:
     asked: list[Asked]
     stored: int
     """How many questions the simulated cache held."""
+    unanswered: frozenset[str]
+    """Those among them that the handbook does not answer."""
     candidates: int
     floor: float
     embedded: int
@@ -381,6 +398,7 @@ def measure(
             for pair in pairs
         ],
         stored=len(stored),
+        unanswered=unanswered_questions(golden),
         candidates=candidates,
         floor=floor,
         embedded=len(vectors),
@@ -558,11 +576,12 @@ def tally(asked: Iterable[Asked], policy: str, threshold: float | None) -> Tally
 
 @dataclass(frozen=True, slots=True)
 class WrongServe:
-    """A stored question served wrongly for a pair's other question, and its score."""
+    """A stored question served wrongly for a pair's other question."""
 
     pair: str
     served: str
     score: float
+    """The highest threshold at which it is served."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -574,6 +593,43 @@ class Threshold:
     decided_by: WrongServe | None
     """The wrong serve with the highest score, which the threshold has to stay above.
     ``None`` when nothing wrong could be served at any threshold."""
+    halfway_to: float | None = None
+    """The next score seen above that wrong serve. The threshold is put halfway between
+    the two, so a question that scores between the threshold and this is served only
+    because of where in that gap the rule puts the threshold."""
+
+
+def wrong_serves(question: Asked, policy: str) -> Iterator[WrongServe]:
+    """Each wrong answer a question would be served at some threshold.
+
+    A candidate is served where its score reaches the threshold and no nearer candidate's
+    does: at every threshold above the best score of those before it, up to its own. One
+    that a nearer candidate outscores is never reached, since the nearer one passes at
+    every threshold it passes.
+    """
+    ahead = -math.inf
+    for candidate in question.candidates:
+        score = candidate.scores.of(policy)
+        if score <= ahead:
+            continue
+        ahead = score
+        if outcome(question.pair, candidate.question_id) == WRONG:
+            yield WrongServe(question.pair.pair, candidate.question_id, score)
+
+
+def highest_wrong_serve(asked: Iterable[Asked], policy: str) -> WrongServe | None:
+    """The wrong serve with the highest score among these questions.
+
+    No threshold at or below that score is safe for them, so it is the one that sets a
+    threshold, and the one a set of questions tests a threshold with. Of two with the
+    same score, the first met is named.
+    """
+    worst: WrongServe | None = None
+    for question in asked:
+        for serve in wrong_serves(question, policy):
+            if worst is None or serve.score > worst.score:
+                worst = serve
+    return worst
 
 
 def choose_threshold(asked: Sequence[Asked], policy: str) -> Threshold:
@@ -585,37 +641,24 @@ def choose_threshold(asked: Sequence[Asked], policy: str) -> Threshold:
     strict the threshold is made. If that highest score is the highest of all, no
     threshold serves anything safely, and the cache serves nothing.
 
-    A wrong candidate counts only where it would be served. One that a nearer candidate
-    outscores is never reached, since the nearer one passes at every threshold it passes.
     Raising a threshold can bring a farther candidate into play, which is why the rule
-    looks at every threshold above the one it chooses and not at that one alone.
+    looks at every threshold above the one it chooses and not at that one alone (see
+    :func:`wrong_serves`).
 
     The rule sits exactly on the edge of what these questions show, so on other
     questions something wrong can still be served. That is what the other half is for.
     """
-    seen: set[float] = set()
-    worst: WrongServe | None = None
-    for question in asked:
-        ahead = -math.inf
-        for candidate in question.candidates:
-            score = candidate.scores.of(policy)
-            seen.add(score)
-            if score <= ahead:
-                continue
-            # Served at every threshold above ``ahead`` and up to its own score.
-            ahead = score
-            if outcome(question.pair, candidate.question_id) == WRONG and (
-                worst is None or score > worst.score
-            ):
-                worst = WrongServe(question.pair.pair, candidate.question_id, score)
+    seen = {c.scores.of(policy) for question in asked for c in question.candidates}
+    worst = highest_wrong_serve(asked, policy)
     if worst is None:
         return Threshold(min(seen) if seen else None, None)
     higher = [score for score in seen if score > worst.score]
     if not higher:
         return Threshold(None, worst)
-    middle = (worst.score + min(higher)) / 2
+    above = min(higher)
+    middle = (worst.score + above) / 2
     # Two scores can be so close that their middle is the lower one again.
-    return Threshold(middle if middle > worst.score else min(higher), worst)
+    return Threshold(middle if middle > worst.score else above, worst, halfway_to=above)
 
 
 def choose_policy(right: Mapping[str, int]) -> str | None:
@@ -651,8 +694,9 @@ def fingerprint(value: object) -> str:
 def data_fingerprints(
     pairs: Sequence[CachePair], golden: Sequence[GoldenQuestion]
 ) -> dict[str, str]:
-    """Hashes of what the scores depend on: each pair's two questions and labels, and the
-    stored questions. A note or a reason can be reworded without making a run stale."""
+    """Hashes of what the figures depend on: each pair's two questions and labels, and the
+    stored questions with whether the handbook answers them. A note or a reason can be
+    reworded without making a run stale."""
     return {
         "pairs_fingerprint": fingerprint(
             [
@@ -664,13 +708,21 @@ def data_fingerprints(
                     p.other_id,
                     p.how,
                     p.what_differs,
+                    p.source,
                     p.agreed,
                 ]
                 for p in pairs
             ]
         ),
-        "stored_questions_fingerprint": fingerprint([[q.id, q.question] for q in golden]),
+        "stored_questions_fingerprint": fingerprint([[q.id, q.question, q.type] for q in golden]),
     }
+
+
+def unanswered_questions(golden: Iterable[GoldenQuestion]) -> frozenset[str]:
+    """The stored questions the handbook does not answer. What a cache holds for one of
+    them is a decline, and a decline served to a question that has an answer is a false
+    hit like any other."""
+    return frozenset(question.id for question in golden if question.type == "unanswerable")
 
 
 def summarise(
@@ -679,19 +731,22 @@ def summarise(
     stored: int,
     candidates: int,
     floor: float,
+    unanswered: Collection[str] = (),
     seed: str = SPLIT_SEED,
     other_splits: int = OTHER_SPLITS,
 ) -> dict[str, Any]:
     """Every figure of the measurement, from the scores and candidates of each pair.
 
     It runs no model, so the figures of a saved run can be worked out again from its
-    rows, and a test does that.
+    rows, and a test does that. ``unanswered`` names the stored questions the handbook
+    does not answer (:func:`unanswered_questions`); the rows do not hold that.
     """
     agreed = [question for question in asked if question.pair.agreed]
     disputed = [question for question in asked if not question.pair.agreed]
     pairs = [question.pair for question in agreed]
     if not _of_kind(pairs, SAME) or not _of_kind(pairs, DIFFERENT):
         raise DatasetError("The measurement needs agreed pairs of both kinds.")
+    by_id = {pair.pair: pair for pair in pairs}
     split = split_pairs(pairs, seed=seed)
     halves = {
         half: [question for question in agreed if split.half_of(question.pair.pair) == half]
@@ -707,6 +762,80 @@ def summarise(
     }
     near_misses = _of_kind((question.pair for question in halves[REPORTING]), DIFFERENT)
     by_group = Counter(split.groups.values())
+
+    def named(serve: WrongServe | None) -> dict[str, Any] | None:
+        """A wrong serve as it is saved: the pair, and what it was served."""
+        if serve is None:
+            return None
+        pair = by_id[serve.pair]
+        return {
+            "pair": pair.pair,
+            "kind": pair.kind,
+            "group": pair.group,
+            "served": serve.served,
+            "own": serve.served == pair.question_id,
+            # A stored question the handbook does not answer: the answer served is a decline.
+            "stored_unanswered": serve.served in unanswered,
+            "score": serve.score,
+        }
+
+    def of_policy(policy: str) -> dict[str, Any]:
+        threshold = thresholds[policy]
+        return {
+            "threshold": threshold.value,
+            "decided_by": named(threshold.decided_by),
+            "halfway_to": threshold.halfway_to,
+            CHOOSING: _counts(on_choosing[policy]),
+            # A cache that serves nothing by rule has no rate to estimate.
+            REPORTING: _counts(reported[policy], intervals=threshold.value is not None),
+            **{
+                f"{half}_by_how": _by_group(halves[half], policy, threshold.value, SAME)
+                for half in halves
+            },
+            **{
+                f"{half}_by_what_differs": _by_group(
+                    halves[half], policy, threshold.value, DIFFERENT
+                )
+                for half in halves
+            },
+            "wrong_on_reporting": [
+                named(serve) for serve in _served_wrong(halves[REPORTING], policy, threshold.value)
+            ],
+            "right_only_by_the_margin": _right_only_by_the_margin(
+                halves[REPORTING], policy, threshold
+            ),
+            # What each half could test a threshold with: the wrong serve it holds with
+            # the highest score, for near-misses and for rewordings served another answer.
+            "highest_wrong": {
+                half: {
+                    kind: named(
+                        highest_wrong_serve(
+                            (q for q in halves[half] if q.pair.kind == kind), policy
+                        )
+                    )
+                    for kind in KINDS
+                }
+                for half in halves
+            },
+        }
+
+    def hard_near_misses(policy: str) -> list[WrongServe]:
+        """The near-misses this score would serve at :data:`HARD_NEAR_MISS`, hardest first."""
+        found = [
+            highest_wrong_serve([question], policy)
+            for question in agreed
+            if question.pair.kind == DIFFERENT
+            and served(question, policy, HARD_NEAR_MISS) is not None
+        ]
+        return sorted((serve for serve in found if serve), key=lambda serve: -serve.score)
+
+    hard = {policy: hard_near_misses(policy) for policy in VERIFIER_POLICIES}
+    others = _other_splits(
+        agreed,
+        seed=seed,
+        count=other_splits,
+        hard={policy: [serve.pair for serve in found] for policy, found in hard.items()},
+    )
     return {
         "pairs": {
             "in_file": len(asked),
@@ -715,6 +844,7 @@ def summarise(
             DIFFERENT: _of_kind(pairs, DIFFERENT),
             "disputed": [question.pair.pair for question in disputed],
             "other_is_a_stored_question": sum(q.excluded is not None for q in agreed),
+            "different_by_source": _by_source(pairs),
         },
         "pair_view": {
             "what": (
@@ -725,6 +855,7 @@ def summarise(
         },
         "cache_view": {
             "stored_questions": stored,
+            "stored_unanswered": len(unanswered),
             "candidates": candidates,
             "floor": floor,
             "own_question": {
@@ -749,32 +880,40 @@ def summarise(
                         SAME: _of_kind((q.pair for q in halves[half]), SAME),
                         DIFFERENT: _of_kind((q.pair for q in halves[half]), DIFFERENT),
                         "groups": len({split.groups[q.pair.pair] for q in halves[half]}),
+                        "groups_of": {
+                            kind: _groups_of(split, halves[half], kind) for kind in KINDS
+                        },
+                        "different_by_source": _by_source(q.pair for q in halves[half]),
+                        "candidates": _candidates_across(halves[half], halves[other]),
                     }
-                    for half in (CHOOSING, REPORTING)
+                    for half, other in ((CHOOSING, REPORTING), (REPORTING, CHOOSING))
                 },
             },
-            "policies": {
-                policy: {
-                    "threshold": thresholds[policy].value,
-                    "decided_by": _decided_by(thresholds[policy], agreed),
-                    CHOOSING: _counts(on_choosing[policy]),
-                    REPORTING: _counts(reported[policy], intervals=True),
-                    "reporting_by_how": _by_group(
-                        halves[REPORTING], policy, thresholds[policy], SAME
-                    ),
-                    "reporting_by_what_differs": _by_group(
-                        halves[REPORTING], policy, thresholds[policy], DIFFERENT
-                    ),
-                    "wrong_on_reporting": _wrong_serves(
-                        halves[REPORTING], policy, thresholds[policy].value
-                    ),
-                }
-                for policy in POLICIES
-            },
+            "policies": {policy: of_policy(policy) for policy in POLICIES},
             "chosen_policy": chosen,
             "zero_wrong_allows": {
                 "near_misses": near_misses,
                 "up_to": share_with_interval(0, near_misses).high if near_misses else None,
+            },
+            "near_misses_above": {
+                "what": (
+                    "The near-misses the second check would serve at this score, by name. "
+                    "The score was set after the first run was read, to describe it. No "
+                    "result is chosen by it."
+                ),
+                "score": HARD_NEAR_MISS,
+                "policies": {
+                    policy: {
+                        "pairs": [
+                            {**(named(serve) or {}), "half": split.half_of(serve.pair)}
+                            for serve in found
+                        ],
+                        "other_splits_with_all_on_the_choosing_half": others["hard_on_choosing"][
+                            policy
+                        ],
+                    }
+                    for policy, found in hard.items()
+                },
             },
             "whole_set": {
                 "what": (
@@ -789,9 +928,15 @@ def summarise(
                     ]
                     for policy in POLICIES
                 },
-                "chosen_on_all_pairs": {policy: _chosen_on(agreed, policy) for policy in POLICIES},
+                "chosen_on_all_pairs": {
+                    policy: {
+                        **_chosen_on(agreed, policy),
+                        "decided_by": named(highest_wrong_serve(agreed, policy)),
+                    }
+                    for policy in POLICIES
+                },
             },
-            "other_splits": _other_splits(agreed, seed=seed, count=other_splits),
+            "other_splits": others["figures"],
         },
         "disputed": [
             {
@@ -826,14 +971,55 @@ def _spread(values: Sequence[float]) -> dict[str, Any]:
     }
 
 
+def _by_source(pairs: Iterable[CachePair]) -> dict[str, int]:
+    """How many ``different`` pairs are of each source: two golden questions, or a golden
+    question and one written to change a decisive detail of it."""
+    counted: Counter[str | None] = Counter(pair.source for pair in pairs if pair.kind == DIFFERENT)
+    return {source: counted[source] for source in SOURCES}
+
+
+def _groups_of(split: Split, asked: Iterable[Asked], kind: str) -> dict[str, int]:
+    """How many groups the pairs of one kind come from, and how many the largest gives.
+
+    Pairs of one group share a golden question, so they are not independent, and an
+    interval that counts each pair as one draw is too narrow.
+    """
+    counted = Counter(split.groups[q.pair.pair] for q in asked if q.pair.kind == kind)
+    return {"groups": len(counted), "largest": max(counted.values(), default=0)}
+
+
+def _candidates_across(asked: Sequence[Asked], other_half: Sequence[Asked]) -> dict[str, int]:
+    """How many candidates of one half are stored questions that the other half names.
+
+    The split keeps apart the golden questions that pairs name. The cache holds every
+    golden question for both halves, so a question can still meet, as a candidate, a
+    stored question that a pair of the other half is about.
+    """
+    named = {q.pair.question_id for q in other_half} | {
+        q.pair.other_id for q in other_half if q.pair.other_id
+    }
+    others = [
+        candidate.question_id
+        for q in asked
+        for candidate in q.candidates
+        if candidate.question_id != q.pair.question_id
+    ]
+    return {
+        "not_own": len(others),
+        "named_by_the_other_half": sum(question_id in named for question_id in others),
+    }
+
+
 def _pair_view(agreed: Sequence[Asked], score: str) -> dict[str, Any]:
     """How one score spreads over the pairs, each compared with its own golden question."""
 
-    def values(kind: str, group: str | None = None) -> list[float]:
+    def values(kind: str, group: str | None = None, source: str | None = None) -> list[float]:
         return [
             q.own.of(score)
             for q in agreed
-            if q.pair.kind == kind and (group is None or q.pair.group == group)
+            if q.pair.kind == kind
+            and (group is None or q.pair.group == group)
+            and (source is None or q.pair.source == source)
         ]
 
     same, different = values(SAME), values(DIFFERENT)
@@ -845,6 +1031,11 @@ def _pair_view(agreed: Sequence[Asked], score: str) -> dict[str, Any]:
             what: _spread(values(DIFFERENT, what))
             for what in WHAT_DIFFERS
             if values(DIFFERENT, what)
+        },
+        "by_source": {
+            source: _spread(values(DIFFERENT, source=source))
+            for source in SOURCES
+            if values(DIFFERENT, source=source)
         },
         "at_or_above": [
             {
@@ -884,7 +1075,7 @@ def _counts(counted: Tally, *, intervals: bool = False) -> dict[str, Any]:
 
 
 def _by_group(
-    asked: Sequence[Asked], policy: str, threshold: Threshold, kind: str
+    asked: Sequence[Asked], policy: str, threshold: float | None, kind: str
 ) -> dict[str, dict[str, Any]]:
     """The counts of one kind of pair by its group. Counts only: the groups are too small
     for an interval to say anything."""
@@ -893,48 +1084,51 @@ def _by_group(
     for group in groups:
         members = [q for q in asked if q.pair.kind == kind and q.pair.group == group]
         if members:
-            rows[group] = _counts(tally(members, policy, threshold.value))[kind]
+            rows[group] = _counts(tally(members, policy, threshold))[kind]
     return rows
 
 
-def _wrong_serves(
-    asked: Sequence[Asked], policy: str, threshold: float | None
-) -> list[dict[str, Any]]:
-    """Each wrong serve by name, so that it can be read: only the pair's own golden
-    question is covered by its label."""
+def _served_wrong(asked: Sequence[Asked], policy: str, threshold: float | None) -> list[WrongServe]:
+    """Each wrong serve at one threshold, so that it can be named and read: only the
+    pair's own golden question is covered by its label."""
     found = []
     for question in asked:
         served_id = served(question, policy, threshold)
-        if outcome(question.pair, served_id) == WRONG:
-            found.append(
-                {
-                    "pair": question.pair.pair,
-                    "kind": question.pair.kind,
-                    "group": question.pair.group,
-                    "served": served_id,
-                    "own": served_id == question.pair.question_id,
-                    "score": next(
-                        candidate.scores.of(policy)
-                        for candidate in question.candidates
-                        if candidate.question_id == served_id
-                    ),
-                }
+        if served_id is not None and outcome(question.pair, served_id) == WRONG:
+            score = next(
+                candidate.scores.of(policy)
+                for candidate in question.candidates
+                if candidate.question_id == served_id
             )
+            found.append(WrongServe(question.pair.pair, served_id, score))
     return found
 
 
-def _decided_by(threshold: Threshold, asked: Sequence[Asked]) -> dict[str, Any] | None:
-    if threshold.decided_by is None:
-        return None
-    pair = next(q.pair for q in asked if q.pair.pair == threshold.decided_by.pair)
-    return {
-        "pair": pair.pair,
-        "kind": pair.kind,
-        "group": pair.group,
-        "served": threshold.decided_by.served,
-        "own": threshold.decided_by.served == pair.question_id,
-        "score": threshold.decided_by.score,
-    }
+def _right_only_by_the_margin(
+    asked: Sequence[Asked], policy: str, threshold: Threshold
+) -> list[dict[str, Any]]:
+    """The questions served right at the threshold that would be missed at the next score.
+
+    The rule puts the threshold halfway between the wrong serve it has to stay above and
+    the next score seen. Putting it at that next score would be as safe on the choosing
+    half, so whatever scores in the upper half of the gap is served by that choice alone.
+    """
+    if threshold.value is None or threshold.halfway_to is None:
+        return []
+    return [
+        {
+            "pair": question.pair.pair,
+            "group": question.pair.group,
+            "score": next(
+                candidate.scores.of(policy)
+                for candidate in question.candidates
+                if candidate.question_id == question.pair.question_id
+            ),
+        }
+        for question in asked
+        if outcome(question.pair, served(question, policy, threshold.value)) == RIGHT
+        and outcome(question.pair, served(question, policy, threshold.halfway_to)) != RIGHT
+    ]
 
 
 def _chosen_on(asked: Sequence[Asked], policy: str) -> dict[str, Any]:
@@ -942,21 +1136,34 @@ def _chosen_on(asked: Sequence[Asked], policy: str) -> dict[str, Any]:
     return {"threshold": threshold.value, **_counts(tally(asked, policy, threshold.value))}
 
 
-def _other_splits(agreed: Sequence[Asked], *, seed: str, count: int) -> dict[str, Any]:
+def _other_splits(
+    agreed: Sequence[Asked], *, seed: str, count: int, hard: Mapping[str, Sequence[str]]
+) -> dict[str, Any]:
     """The same rules on other splits of the same pairs.
 
     One split is one draw: with about fifty pairs of each kind on a side, a single hard
     pair landing on one side or the other moves the result. Running the rules on many
     splits shows how much. It is still the same pairs each time, so it shows the
     dependence on the split, and not what other questions would give.
+
+    The results are also given apart by where one pair fell: the pair whose wrong serve
+    scores highest with every pair in view. On the choosing half it sets the threshold.
+    On the reporting half it is the hardest test a threshold meets.
+
+    ``hard`` names, for each score it is given for, the near-misses to look for on the
+    choosing half. Returned under ``hard_on_choosing``: in how many splits all of them
+    are there, or ``None`` where there are none to look for.
     """
     pairs = [question.pair for question in agreed]
+    hardest = {policy: highest_wrong_serve(agreed, policy) for policy in POLICIES}
+    splits: list[Split] = []
     runs: dict[str, list[Tally]] = {policy: [] for policy in POLICIES}
     without: Counter[str] = Counter()
     chosen: list[str | None] = []
     of_choice: list[Tally] = []
     for number in range(1, count + 1):
         split = split_pairs(pairs, seed=f"{seed}/other-{number}")
+        splits.append(split)
         choosing = [q for q in agreed if q.pair.pair in split.choosing]
         reporting = [q for q in agreed if q.pair.pair in split.reporting]
         right: dict[str, int] = {}
@@ -980,17 +1187,42 @@ def _other_splits(agreed: Sequence[Asked], *, seed: str, count: int) -> dict[str
             "splits_with_something_wrong": sum(t.wrong > 0 for t in tallies),
         }
 
+    def where_it_fell(policy: str) -> dict[str, Any] | None:
+        pair = hardest[policy]
+        if pair is None:
+            return None
+        fell: dict[str, list[Tally]] = {CHOOSING: [], REPORTING: []}
+        for split, counted in zip(splits, runs[policy], strict=True):
+            fell[CHOOSING if pair.pair in split.choosing else REPORTING].append(counted)
+        return {
+            "pair": pair.pair,
+            "score": pair.score,
+            **{half: {"splits": len(found), **across(found)} for half, found in fell.items()},
+        }
+
     return {
-        "splits": count,
-        "policies": {
-            policy: {
-                "chosen": chosen.count(policy),
-                "splits_without_a_threshold": without[policy],
-                **across(runs[policy]),
-            }
-            for policy in POLICIES
+        "figures": {
+            "splits": count,
+            "policies": {
+                policy: {
+                    "chosen": chosen.count(policy),
+                    "splits_without_a_threshold": without[policy],
+                    **across(runs[policy]),
+                    "by_where_the_hardest_pair_fell": where_it_fell(policy),
+                }
+                for policy in POLICIES
+            },
+            "chosen_policy": {
+                "splits_without_a_choice": chosen.count(None),
+                **across(of_choice),
+            },
         },
-        "chosen_policy": {"splits_without_a_choice": chosen.count(None), **across(of_choice)},
+        "hard_on_choosing": {
+            policy: sum(all(pair in split.choosing for pair in found) for split in splits)
+            if found
+            else None
+            for policy, found in hard.items()
+        },
     }
 
 
@@ -1011,6 +1243,7 @@ def write_cache_run(
     *,
     description: str,
     config: Mapping[str, object],
+    measured_on: datetime.date,
     seed: str = SPLIT_SEED,
     other_splits: int = OTHER_SPLITS,
 ) -> dict[str, Any]:
@@ -1019,13 +1252,16 @@ def write_cache_run(
     The rows hold each score to its last digit, so the figures can be worked out again
     from them. All three files are small and are committed for a run that is kept.
     ``config`` names the models and the data. What the figures were computed with is
-    added to it here, so that a saved run cannot name other settings than it used.
+    added to it here, so that a saved run cannot name other settings than it used. The
+    day of the run is recorded too, so that a document that gives it can be held to it,
+    and so is a hash of each file of rows, so that the figures name the rows they are of.
     """
     figures = summarise(
         measured.asked,
         stored=measured.stored,
         candidates=measured.candidates,
         floor=measured.floor,
+        unanswered=measured.unanswered,
         seed=seed,
         other_splits=other_splits,
     )
@@ -1079,6 +1315,7 @@ def write_cache_run(
     _write_rows(run_dir / QUESTIONS_FILE, question_rows)
     summary = {
         "description": description,
+        "measured_on": measured_on.isoformat(),
         "config": {
             **config,
             "candidates": measured.candidates,
@@ -1086,6 +1323,7 @@ def write_cache_run(
             "split_seed": seed,
             "other_splits": other_splits,
         },
+        "rows": rows_fingerprints(run_dir),
         **figures,
         # On this machine, in this run. The verifier read its pairs in batches, so the
         # time for a pair is not the time one question would wait for.
@@ -1102,6 +1340,14 @@ def write_cache_run(
     }
     write_json(run_dir / SUMMARY_FILE, summary)
     return summary
+
+
+def rows_fingerprints(run_dir: Path) -> dict[str, str]:
+    """A short hash of each file of rows in a run directory, byte for byte."""
+    return {
+        name: hashlib.sha256((run_dir / name).read_bytes()).hexdigest()[:16]
+        for name in (PAIRS_FILE, QUESTIONS_FILE)
+    }
 
 
 def _per_item_ms(seconds: float, items: int) -> float | None:

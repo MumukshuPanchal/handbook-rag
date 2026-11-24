@@ -95,6 +95,8 @@ def test_the_place_is_read_from_text_keys_and_any_letter_case() -> None:
         entailment_output({"0": "CONTRADICTION", "1": "NEUTRAL", "2": "Entailment"}, model="m") == 2
     )
     assert entailment_output(NLI, model="m") == 1
+    # A name with spaces around it is the same name.
+    assert entailment_output({0: "neutral", 1: " entailment\n"}, model="m") == 1
 
 
 @pytest.mark.parametrize(

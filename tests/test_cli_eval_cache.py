@@ -4,6 +4,7 @@ It is in a file of its own, beside ``test_cli.py``, because it needs none of tha
 fixtures: no snapshot, no index and no answer model.
 """
 
+import datetime
 import json
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,7 @@ def files(tmp_path: Path) -> list[str]:
 def test_eval_cache_measures_the_pairs_and_saves_a_scratch_run(
     models: dict[str, Any], files: list[str]
 ) -> None:
+    before = datetime.date.today()
     result = runner.invoke(app, ["eval-cache", *files])
 
     assert result.exit_code == 0, result.output
@@ -85,7 +87,12 @@ def test_eval_cache_measures_the_pairs_and_saves_a_scratch_run(
         "split_seed": cache_pairs.SPLIT_SEED,
         "other_splits": cache_pairs.OTHER_SPLITS,
     }
-    assert "Cache measurement: 24 agreed pairs (12 same, 12 different)" in result.output
+    # The day of the run, by the clock of the machine that made it.
+    assert summary["measured_on"] in {before.isoformat(), datetime.date.today().isoformat()}
+    assert summary["rows"] == cache_pairs.rows_fingerprints(run)
+    assert (
+        f"Cache measurement of {summary['measured_on']}: 24 agreed pairs (12 same, 12 different)"
+    ) in result.output
     assert "none to any model API" in result.output
     assert "On the reporting half, which chose nothing" in result.output
     assert "not a held-out result" in result.output
@@ -101,6 +108,13 @@ def test_eval_cache_embeds_on_the_cpu_as_the_service_does(
 ) -> None:
     runner.invoke(app, ["eval-cache", *files])
     assert models["embedding_settings"].embedding_device == "cpu"
+
+    # The run records the device the embedding model says it ran on, not an assumption.
+    models["embedder"].device = "mps"
+    runner.invoke(app, ["eval-cache", *files])
+    recorded = json.loads(Path("evals/runs/cache/current/summary.json").read_text(encoding="utf-8"))
+    assert recorded["config"]["embedding_device"] == "mps"
+    assert recorded["config"]["verifier_device"] == "cpu"
 
     # A device named in the settings is kept, as it is for the service.
     monkeypatch.setenv("HANDBOOK_RAG_EMBEDDING_DEVICE", "mps")
@@ -138,6 +152,7 @@ def test_eval_cache_gives_the_same_figures_each_time(
     )
 
     assert {**first, "timing": None} == {**second, "timing": None}
+    assert first["rows"] == second["rows"]
     for name in ("pairs.jsonl", "questions.jsonl"):
         assert (tmp_path / "first" / name).read_bytes() == (tmp_path / "second" / name).read_bytes()
 

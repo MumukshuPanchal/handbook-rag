@@ -8,8 +8,10 @@ node runs the script as it is. Without node the tests are skipped, and say why.
 
 The harness reads back what a reader would see in each turn: the question's bubble, the
 answer or the notice or the failure card, the placeholders and the caret while the answer
-comes, the badges under it, its source cards, and what pointing at, focusing and pressing
-a number in the answer does to them.
+comes, the badges under it, its source cards and found passages, and what pointing at,
+focusing and pressing a number in the answer does to them; and around the turns, the
+buttons and their states, the focus, the status line and the alert, the examples, "Ask
+again", the copy of a trace id, and the count of what is sent.
 
 A second test plants faults in the script and asks that the first one would have seen
 each, so that a check which saw nothing would not pass unnoticed.
@@ -42,9 +44,28 @@ pytestmark = pytest.mark.skipif(
 )
 
 # The steps in which the page waited on the service, by how the turn ended.
-ANSWERED = ("first", "rewritten", "given back", "asked by itself", "cited", "arrived")
+ANSWERED = (
+    "first",
+    "rewritten",
+    "given back",
+    "asked by itself",
+    "cited",
+    "semantic",
+    "fallback",
+    "no searched event",
+    "arrived",
+    "stop after answer",
+    "asked again",
+)
 DECLINED = ("declined", "cached")
-FAILED = ("error after text", "unreadable answer", "refused", "stream cut")
+FAILED = (
+    "error after text",
+    "unreadable answer",
+    "refused",
+    "late failure",
+    "stream cut",
+    "failure before new",
+)
 # Steps recorded while an answer was still coming, when its turn had not ended.
 UNDER_WAY = ("waiting", "writing")
 
@@ -66,7 +87,15 @@ def run(source: str, tmp_path: Path) -> dict[str, dict[str, Any]]:
         check=False,
     )
     assert done.returncode == 0, done.stderr
-    return {step["name"]: step for step in json.loads(done.stdout)}
+    steps = json.loads(done.stdout)
+    # A step with no turn on the page, such as one a fault kept from being asked, has none
+    # of a turn's fields: it is given them empty, so that the checks say what is missing
+    # instead of failing on a missing field.
+    template: dict[str, Any] = next((step for step in steps if "bubble" in step), {})
+    for step in steps:
+        for key, value in template.items():
+            step.setdefault(key, None if value is None else type(value)())
+    return {step["name"]: step for step in steps}
 
 
 def conversation_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
@@ -244,11 +273,7 @@ def source_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         found.append("a source card does not give a screen reader the whole address")
     # Shown in brief: the host first and whole, the middle of the path left out, on one line.
     brief = leave["brief"]
-    if (
-        not brief.startswith(f"handbook.example.com {CRUMB} ")
-        or "…" not in brief
-        or len(brief) > 42
-    ):
+    if brief != f"handbook.example.com {CRUMB} … {CRUMB} leave-in-the-united-states":
         found.append("the address in brief does not start with the host, or is not brief")
     if not (leave["briefHiddenFromReaders"] and faq["briefHiddenFromReaders"]):
         found.append("a screen reader reads the address in brief as well as the whole one")
@@ -306,7 +331,8 @@ def key_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
             found.append(f"the stop button is shown or hidden wrongly ({name})")
         if step["askDisabled"] != ("true" if under_way else "false"):
             found.append(f"Ask does not say whether an answer is being written ({name})")
-    if steps["keys"]["busy"] != {"stopHidden": False, "askDisabled": "true"}:
+    busy = steps["keys"]["busy"]
+    if (busy["stopHidden"], busy["askDisabled"]) != (False, "true"):
         found.append("the stop button is shown or hidden wrongly (keys)")
     return found
 
@@ -333,6 +359,232 @@ def label_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
     return found
 
 
+def control_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """What the controls around the turns get wrong: the examples, "Ask again", the copy of
+    a trace id, the new-conversation button, the alert, the count of what is sent."""
+    found = []
+    by_itself = steps["asked by itself"]
+    if by_itself["turnCount"] != 1 or by_itself["bubble"] != [f"You asked: {FIRST}"]:
+        found.append("an example button does not ask its question")
+    busy = steps["keys"]["busy"]
+    for name, step in steps.items():
+        disabled = "true" if name in UNDER_WAY else "false"
+        if step["examplesDisabled"] != [disabled] * 4:
+            found.append(
+                f"the examples are not marked as unavailable while an answer is written ({name})"
+            )
+        if step["formBusy"] != (name in UNDER_WAY):
+            found.append(f"Ask's busy look is shown or left wrongly ({name})")
+        if step["newConversationHidden"] != (step["turnCount"] == 0 and step["conversation"] == []):
+            found.append(f"the new conversation button is shown or hidden wrongly ({name})")
+    if busy["examplesDisabled"] != ["true"] * 4 or not busy["formBusy"]:
+        found.append("the examples are not marked as unavailable while an answer is written (keys)")
+    again = steps["asked again"]
+    if again["sent"] != 1 or again["query"] != "and the rest":
+        found.append("Ask again does not ask the question again")
+    if busy["askAgainSent"] != 0:
+        found.append("Ask again sends while an answer is being written")
+    copy = steps["refused"]["copy"]
+    if copy["text"] != TRACE_ID or copy["status"] != "The trace id is copied.":
+        found.append("the trace id is not copied, or the copy is not announced")
+    if "could not be copied" not in copy["refusedStatus"]:
+        found.append("a copy the clipboard refused is not announced")
+    started = busy["newConversation"]
+    if not (started["turnsKept"] and started["conversationKept"]) or not started[
+        "status"
+    ].startswith("An answer is still being written"):
+        found.append("a new conversation begins while an answer is being written")
+    if steps["new after failure"]["failure"] != "":
+        found.append("the alert keeps a failure after a new conversation")
+    if steps["waiting"]["failure"] != "":
+        found.append("the alert keeps the last failure while the next question is answered")
+    keys = steps["keys"]
+    if len(keys["conversation"]) <= 10 or busy["earlierSent"] != 10:
+        found.append("the run does not hold a conversation of more than ten questions")
+    if keys["conversationSummary"] != "10 earlier questions are sent with your next question":
+        found.append("the page says it sends more earlier questions than it does")
+    if (
+        steps["first"]["conversationSummary"]
+        != "1 earlier question is sent with your next question"
+    ):
+        found.append("the count of what is sent is not said, or not in good grammar")
+    return found
+
+
+def announcement_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """What the status line and the words for a screen reader get wrong."""
+    found = []
+    if (
+        steps["declined"]["status"]
+        != "Not in the handbook: the assistant declined instead of guessing."
+    ):
+        found.append("a decline or a withheld reply is announced as the other")
+    if not steps["withheld"]["status"].startswith("Not an answer: the reply was withheld"):
+        found.append("a decline or a withheld reply is announced as the other")
+    if not steps["cached"]["status"].endswith("It came from the cache."):
+        found.append("an answer from the cache is not announced as one")
+    if steps["fallback"]["status"] != "The answer is complete. It cites 1 source.":
+        found.append("the status line counts sources the text does not cite")
+    for name in FAILED:
+        if steps[name]["status"] != "No answer.":
+            found.append(f"a failure is not announced ({name})")
+    cited = steps["cited"]
+    if cited["chipLabels"] != ["Source 1: Leave", "Source 1: Leave", "Source 2: Leave FAQ"]:
+        found.append("a citation is read as a bare number")
+    names = [card["foldName"] for card in cited["cards"]]
+    names += [found_passage["foldName"] for found_passage in cited["passages"]]
+    if names != [" of source 1, Leave", " of source 2, Leave FAQ"] + [
+        f" of found passage {rank}, Leave" for rank in (1, 2, 3)
+    ]:
+        found.append("a fold is not named for its passage")
+    if not all(item["foldAddressHidden"] for item in [*cited["cards"], *cited["passages"]]):
+        found.append("a screen reader reads the whole address twice")
+    return found
+
+
+def search_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """What the fold of found passages and the Search badge get wrong."""
+    found = []
+    cited = steps["cited"]
+    if not cited["searchFoldShown"] or cited["searchCount"] != " 3 passages":
+        found.append("the fold of what the search found is not shown")
+    passages = cited["passages"]
+    if [item["rank"] for item in passages] != ["1.", "2.", "3."]:
+        found.append("the fold says how many passages were found and lists none")
+    elif any(item["link"] != LEAVE_URL for item in passages):
+        found.append("a found passage's title is not a link to its page")
+    elif any(
+        item["address"] != LEAVE_URL or not item["brief"].startswith("handbook.example.com")
+        for item in passages
+    ):
+        found.append("a found passage does not show where its link leads")
+    for name, wanted in (
+        ("declined", "Search: 1 passage found"),
+        ("cached", "Search: failed"),
+        ("withheld", "Search: failed"),
+        ("no searched event", "Search: not run"),
+    ):
+        if wanted not in steps[name]["badges"]:
+            found.append(f"the Search badge does not say what the search did ({name})")
+    if steps["withheld"]["searchState"] != "The search failed. The service could not be reached.":
+        found.append("a search that could not reach the service does not say so")
+    if steps["cached"]["searchState"] != "The search failed. The service is busy.":
+        found.append("a search the service refused does not say so")
+    return found
+
+
+def badge_word_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """Whether each badge that stands out stands where it should, and only there."""
+    found = []
+    fallback = steps["fallback"]["badges"]
+    for name in (*ANSWERED, *DECLINED, "withheld"):
+        badges = steps[name]["badges"]
+        if name != "fallback" and any(
+            badge.startswith(("Requests", "Written by")) for badge in badges
+        ):
+            found.append(f"a warning badge stands on an ordinary answer ({name})")
+    if "Requests: 2" not in fallback or "Written by: the fallback model" not in fallback:
+        found.append("an answer of two requests by the fallback model is not badged so")
+    if "Cited: 1 source" not in fallback:
+        found.append("the Cited badge counts sources the text does not cite")
+    if "Follow-up: rewrite failed" not in steps["failed rewrite"]["badges"]:
+        found.append("a follow-up whose rewrite failed is badged as something else")
+    for name in (*DECLINED, "withheld"):
+        if any(badge.startswith("Cited") for badge in steps[name]["badges"]):
+            found.append(f"a reply that is not an answer has a Cited badge ({name})")
+    semantic = steps["semantic"]
+    if "From the cache: matched by meaning" not in semantic["badges"]:
+        found.append("a match by meaning is badged as something else")
+    if "That judgement can be wrong." not in semantic["cached"]:
+        found.append("a match by meaning does not warn that it can be wrong")
+    return found
+
+
+def outcome_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """What each turn shows once it has ended, besides its card's look."""
+    found = []
+    after = steps["stop after answer"]
+    if after["cardTitle"] != "Answer" or after["note"] != "":
+        found.append("Stop pressed after the answer came marks it as stopped")
+    if steps["stopped"]["focus"] != "question":
+        found.append("the focus is lost when the stop button goes")
+    for name in FAILED:
+        if steps[name]["sourcesShown"]:
+            found.append(f"a failed turn keeps a Sources heading over nothing ({name})")
+    if steps["first"]["sourcesNone"] != "This answer cites no source.":
+        found.append("an answer with no source says nothing under its Sources heading")
+    if steps["error after text"]["madeShown"] or not steps["refused"]["madeShown"]:
+        found.append("a failure without a trace id shows an empty About this request")
+    if "Why the model stopped: safety." not in " ".join(steps["withheld"]["notice"]):
+        found.append("a withheld reply does not say why the model stopped")
+    for name in ("error after text", "stream cut", "stopped"):
+        if not steps[name]["streamUnfinished"]:
+            found.append(
+                f"text that arrived before a failure or a stop is not marked unfinished ({name})"
+            )
+    return found
+
+
+def look_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """What the brief address, the piece of a passage and the motion of the page get wrong."""
+    found = []
+    last = steps["new after failure"]
+    briefs = last["briefs"]
+    host = "very-long-host-name-" * 4 + "example.com"
+    wanted = {
+        "https://handbook.example.com": "handbook.example.com",
+        "https://handbook.example.com/": "handbook.example.com",
+        f"https://{host}/": host,
+        f"https://{host}/handbook/people/leave/": f"{host} {CRUMB} … {CRUMB} leave",
+        "https://handbook.gitlab.com/handbook/total-rewards/benefits/general-and-entity-benefits/"
+        "gitlab-ireland-ltd/": f"handbook.gitlab.com {CRUMB} … {CRUMB} gitlab-ireland-ltd",
+        "ftp://handbook.example.com/faq": "ftp://handbook.example.com/faq",
+    }
+    if any(brief.startswith("threw") for brief in briefs.values()):
+        found.append("the address in brief throws")
+    elif any(briefs[url] != brief for url, brief in wanted.items()):
+        found.append("the address in brief does not keep the host whole and name the page")
+    if not briefs["https://handbook.gitlab.com@evil.example/handbook/people/leave/"].startswith(
+        "evil.example"
+    ) or not briefs["https://h\u0430ndbook.gitlab.com/handbook/people/leave/"].startswith("xn--"):
+        found.append("the address in brief does not show the host the browser reads")
+    if not briefs["https://handbook.example.com:8443/handbook/people/leave/"].startswith(
+        "handbook.example.com:8443 "
+    ):
+        found.append("the address in brief does not show the host the browser reads")
+    long_part = briefs[
+        "https://handbook.gitlab.com/handbook/" + "a-very-long-part-of-a-path-" * 3 + "end/"
+    ]
+    if not long_part.endswith("…t-of-a-path-end") or not long_part.startswith(
+        f"handbook.gitlab.com {CRUMB} … {CRUMB} a-very-long-par"
+    ):
+        found.append("the address in brief does not cut a long last part in its middle")
+    piece, text = last["snippet"], last["longText"]
+    whole_words = text.startswith(piece[:-1]) and text[len(piece) - 1 : len(piece)] == " "
+    if not piece.endswith("…") or len(piece) > 201 or not whole_words:
+        found.append("the piece of a passage is not cut short at a word")
+    for name, step in steps.items():
+        if step["question"] is None or "scrolled" not in step:
+            continue
+        first_of_conversation = name in ("first", "asked by itself")
+        if (step["scrolled"] == 0) != first_of_conversation:
+            found.append(f"a later turn is not brought into view, or the first is ({name})")
+    if steps["writing"]["progressText"] != "Writing":
+        found.append("the card does not say that the model is writing")
+    for name, as_typed in (
+        ("failed rewrite", True),
+        ("unusable rewrite", True),
+        ("not rewritten", True),
+        ("rewritten", False),
+        ("given back", False),
+    ):
+        if steps[name]["searchedAsTyped"] != as_typed:
+            found.append("the warning look of a follow-up searched as typed is wrong")
+    if last["consoleErrors"] != ["Failed to fetch"]:
+        found.append(f"the script wrote errors no step should cause: {last['consoleErrors']}")
+    return found
+
+
 def faults(steps: dict[str, dict[str, Any]]) -> list[str]:
     """What the page did wrong in the conversation, in words. Empty when nothing."""
     return [
@@ -342,6 +594,12 @@ def faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         *source_faults(steps),
         *key_faults(steps),
         *label_faults(steps),
+        *control_faults(steps),
+        *announcement_faults(steps),
+        *search_faults(steps),
+        *badge_word_faults(steps),
+        *outcome_faults(steps),
+        *look_faults(steps),
     ]
 
 
@@ -416,7 +674,7 @@ PLANTED_IN_THIS_ROUND = [
     ),
     (
         "the address in brief does not start with the host, or is not brief",
-        "  if (crumbs(parts).length <= length) {",
+        "  if (parts.length === 0 || crumbs(parts).length <= length) {",
         "  if (true) {",
     ),
     (
@@ -689,3 +947,282 @@ def test_the_run_finds_each_fault_planted_in_the_script(
     assert source.count(old) == 1, old
 
     assert fault in faults(run(source.replace(old, new), tmp_path))
+
+
+# The faults the review of pull request 86 planted, 40 of them, on the lines as they stand
+# now, each with the check that finds it. The review found that 37 of them got past the
+# tests then; these keep them found.
+PLANTED_BY_THE_REVIEW = [
+    (
+        "a found passage does not show where its link leads",
+        "  item.append(addressLine(passage.url));\n",
+        "",
+    ),
+    (
+        "a found passage's title is not a link to its page",
+        '" ", sourceLink(passage.url, title));',
+        '" ", make("span", "", title));',
+    ),
+    (
+        "a fold is not named for its passage",
+        '  summary.append(make("span", "visually-hidden", ` of ${name}, ${title}`));\n',
+        "",
+    ),
+    (
+        "a citation is read as a bare number",
+        '  button.setAttribute("aria-label", `Source ${number}: ${title}`);\n',
+        "",
+    ),
+    (
+        "Ask again does not ask the question again",
+        '  again.addEventListener("click", () => start(question));\n',
+        "",
+    ),
+    (
+        "Ask again sends while an answer is being written",
+        "() => start(question));",
+        "() => ask(question));",
+    ),
+    (
+        "an example button does not ask its question",
+        'example.addEventListener("click", () => start(example.textContent.trim()));',
+        'example.addEventListener("click", () => start(""));',
+    ),
+    (
+        "the examples are not marked as unavailable while an answer is written (waiting)",
+        '    example.setAttribute("aria-disabled", String(busy));\n',
+        "",
+    ),
+    (
+        "the focus is lost when the stop button goes",
+        "  if (!busy && document.activeElement === page.stop) {\n    page.question.focus();\n  }\n",
+        "",
+    ),
+    (
+        "Stop pressed after the answer came marks it as stopped",
+        "  if (turn.body.children.length > 0 || !turn.error.hidden) {\n    return;\n  }\n",
+        "",
+    ),
+    (
+        "a failed turn keeps a Sources heading over nothing (refused)",
+        "    turn.sourcesBlock.hidden = true;\n",
+        "",
+    ),
+    (
+        "an answer with no source says nothing under its Sources heading",
+        '    cards.push(make("li", "sources-none", none));\n',
+        "",
+    ),
+    (
+        "a decline or a withheld reply is announced as the other",
+        '      ? "Not in the handbook: the assistant declined instead of guessing."\n'
+        '      : "Not an answer: the reply was withheld or did not come to a proper end.";',
+        '      ? "Not an answer: the reply was withheld or did not come to a proper end."\n'
+        '      : "Not in the handbook: the assistant declined instead of guessing.";',
+    ),
+    (
+        "a warning badge stands on an ordinary answer (first)",
+        "  if (requests !== null && requests > 1) {",
+        "  if (requests !== null && requests > 0) {",
+    ),
+    (
+        "a warning badge stands on an ordinary answer (first)",
+        "  if (answer.fallback === true) {",
+        "  if (answer.fallback !== true) {",
+    ),
+    (
+        "a follow-up whose rewrite failed is badged as something else",
+        '    failed: "rewrite failed",',
+        '    failed: "rewritten to stand alone",',
+    ),
+    (
+        "a reply that is not an answer has a Cited badge (declined)",
+        '  if (answer.answered) {\n    badges.push(["Cited"',
+        '  if (true) {\n    badges.push(["Cited"',
+    ),
+    (
+        "the new conversation button is shown or hidden wrongly (first)",
+        "  page.newConversation.hidden = turns.length === 0 && conversation.length === 0;",
+        "  page.newConversation.hidden = true;",
+    ),
+    (
+        "the page says it sends more earlier questions than it does",
+        "  const sent = Math.min(conversation.length, EARLIER_SENT);",
+        "  const sent = conversation.length;",
+    ),
+    (
+        "the alert keeps a failure after a new conversation",
+        '  page.turns.replaceChildren();\n  page.failure.textContent = "";\n',
+        "  page.turns.replaceChildren();\n",
+    ),
+    (
+        "the alert keeps the last failure while the next question is answered",
+        '  setBusy(true);\n  page.failure.textContent = "";\n',
+        "  setBusy(true);\n",
+    ),
+    (
+        "a withheld reply does not say why the model stopped",
+        '  box.append(make("p", "notice-why", why));\n',
+        "",
+    ),
+    (
+        "a failure without a trace id shows an empty About this request",
+        "  turn.made.hidden = turn.factsFold.hidden;",
+        "  turn.made.hidden = false;",
+    ),
+    (
+        "the fold of what the search found is not shown",
+        "  turn.searchFold.hidden = false;\n",
+        "",
+    ),
+    (
+        "the fold says how many passages were found and lists none",
+        "  turn.passages.replaceChildren(...results.map(passageItem));",
+        "  turn.passages.replaceChildren();",
+    ),
+    (
+        "the Search badge does not say what the search did (withheld)",
+        'could not be reached.";\n    turn.found.textContent = "failed";',
+        'could not be reached.";',
+    ),
+    (
+        "a new conversation begins while an answer is being written",
+        'page.newConversation.addEventListener("click", () => {\n  if (current !== null) {',
+        'page.newConversation.addEventListener("click", () => {\n  if (false) {',
+    ),
+    (
+        "a screen reader reads the whole address twice",
+        '  address.setAttribute("aria-hidden", "true");\n',
+        "",
+    ),
+    (
+        "a later turn is not brought into view, or the first is (rewritten)",
+        '  if (turns.length > 1) {\n    item.scrollIntoView({ block: "start" });\n  }\n',
+        "",
+    ),
+    (
+        "the piece of a passage is not cut short at a word",
+        "  if (words.length <= length) {\n    return words;\n  }",
+        "  if (true) {\n    return words;\n  }",
+    ),
+    (
+        "the piece of a passage is not cut short at a word",
+        "  return `${(space > length / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;",
+        "  return `${cut}…`;",
+    ),
+    (
+        "the Search badge does not say what the search did (declined)",
+        'results.length === 0 ? "nothing found" : `${count} found`',
+        'results.length === 1 ? "nothing found" : `${count} found`',
+    ),
+    (
+        "the address in brief does not show the host the browser reads",
+        "[parsed.host, ...list]",
+        "[parsed.hostname, ...list]",
+    ),
+    (
+        "the address in brief does not keep the host whole and name the page",
+        '  return crumbs(parts.length > 1 ? ["…", last] : [last]);',
+        '  return crumbs(parts.length > 1 ? ["…"] : []);',
+    ),
+    (
+        "Ask's busy look is shown or left wrongly (arrived)",
+        '  page.form.classList.toggle("busy", busy);',
+        '  page.form.classList.toggle("busy", true);',
+    ),
+    (
+        "the card does not say that the model is writing",
+        '  turn.progress.textContent = "Writing";\n',
+        "",
+    ),
+    (
+        "a match by meaning is badged as something else",
+        '    const tier = hit.tier === "exact" ? "exact match" : "matched by meaning";',
+        '    const tier = "exact match";',
+    ),
+    (
+        "the warning look of a follow-up searched as typed is wrong",
+        '"searched-as-typed", line !== "" && !line.startsWith("Searched for:"));',
+        '"searched-as-typed", false);',
+    ),
+    (
+        "a failure is not announced (refused)",
+        '  label(turn, "Failed");\n  say("No answer.");',
+        '  label(turn, "Failed");',
+    ),
+    (
+        "text that arrived before a failure or a stop is not marked unfinished (error after text)",
+        '  turn.stream.classList.toggle("unfinished", partial);\n  const told',
+        "  const told",
+    ),
+]
+
+# And the faults of this round's own fixes.
+PLANTED_FOR_THE_FIXES = [
+    (
+        "the address in brief throws",
+        "  if (parts.length === 0 || crumbs(parts).length <= length) {",
+        "  if (crumbs(parts).length <= length) {",
+    ),
+    (
+        "the address in brief does not keep the host whole and name the page",
+        "  return part.length <= longest ? part : `${part.slice(0, half)}…${part.slice(-half)}`;",
+        "  return `${part.slice(0, 7)}…${part.slice(-7)}`;",
+    ),
+    (
+        "the Search badge does not say what the search did (no searched event)",
+        '    turn.found.textContent = "not run";\n',
+        "",
+    ),
+    (
+        "the Cited badge counts sources the text does not cite",
+        '    badges.push(["Cited", plural(citedNumbers(answer).size, "source", "sources"), ""]);',
+        '    badges.push(["Cited", plural(answer.sources.length, "source", "sources"), ""]);',
+    ),
+    (
+        "the status line counts sources the text does not cite",
+        'It cites ${plural(citedNumbers(data).size, "source", "sources")}.`;',
+        'It cites ${plural(data.sources.length, "source", "sources")}.`;',
+    ),
+    (
+        "the count of what is sent is not said, or not in good grammar",
+        '` ${sent === 1 ? "is" : "are"} sent with your next question`;',
+        '" are sent with your next question";',
+    ),
+    (
+        "the trace id is not copied, or the copy is not announced",
+        '      say("The trace id is copied.");\n',
+        "",
+    ),
+]
+
+
+@pytest.mark.parametrize(("fault", "old", "new"), PLANTED_BY_THE_REVIEW + PLANTED_FOR_THE_FIXES)
+def test_the_run_finds_each_fault_the_review_planted_and_each_of_the_fixes(
+    fault: str, old: str, new: str, tmp_path: Path
+) -> None:
+    source = script()
+    assert source.count(old) == 1, old
+
+    assert fault in faults(run(source.replace(old, new), tmp_path))
+
+
+def test_a_source_card_that_cannot_be_built_does_not_cost_the_answer(tmp_path: Path) -> None:
+    """Building the answer cannot fail halfway: a card that throws stands as a card that
+    says so, and the answer and the other cards are shown, and the turn is remembered."""
+    source = script()
+    old = "function sourceCard(turn, source) {\n"
+    assert source.count(old) == 1
+    breaking = old + '  if (source.number === 2) {\n    throw new TypeError("planted");\n  }\n'
+
+    cited = run(source.replace(old, breaking), tmp_path)["cited"]
+
+    assert cited["answer"]
+    assert not cited["error"]
+    assert [card["number"] for card in cited["cards"]] == ["1", "2"]
+    assert [card["unreadable"] for card in cited["cards"]] == [False, True]
+    assert cited["cards"][1]["path"] == "This source could not be shown."
+    assert (
+        cited["conversation"][-1]
+        == "How many weeks of parental leave do new parents get in the US?"
+    )

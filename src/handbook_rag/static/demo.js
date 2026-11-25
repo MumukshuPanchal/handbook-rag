@@ -155,6 +155,12 @@ function answerPieces(answer) {
   }));
 }
 
+// The numbers of the sources that the answer's text cites, each once. An answer can list
+// a source that its text does not cite.
+function citedNumbers(answer) {
+  return new Set(answerPieces(answer).flatMap((piece) => piece.numbers));
+}
+
 // Whether a reply that is not an answer is a decline: the model finished and said that
 // the handbook does not hold the answer, or nothing was found to answer from. Any other
 // way of stopping means that the reply was withheld or cut off, which is not a decline.
@@ -201,7 +207,7 @@ function answerBadges(answer) {
     badges.push(["From the cache", tier, "cache"]);
   }
   if (answer.answered) {
-    badges.push(["Cited", plural(answer.sources.length, "source", "sources"), ""]);
+    badges.push(["Cited", plural(citedNumbers(answer).size, "source", "sources"), ""]);
   }
   badges.push(["Model", shown(answer.model), ""]);
   const firstText = answer.first_text_ms === null ? "none" : seconds(answer.first_text_ms);
@@ -483,6 +489,7 @@ const page = {
   turns: document.getElementById("turns"),
   conversationArea: document.getElementById("conversation-area"),
   conversationCount: document.getElementById("conversation-count"),
+  conversationVerb: document.getElementById("conversation-verb"),
   conversation: document.getElementById("conversation"),
   newConversation: document.getElementById("new-conversation"),
 };
@@ -529,11 +536,14 @@ function sourceLink(url, title) {
 }
 
 // A web address in brief: its host, then the parts of its path as a breadcrumb. When that
-// runs long, the parts in the middle are left out: the last two are kept if they fit, then
-// the last, and the last is cut in its middle if it is still too long. The host is never
-// cut: it says which site the link leads to. Anything that is not a web address is given
+// runs long, the parts in the middle are left out: the last two are kept if they fit, and
+// otherwise the last one. Only a last part that is long by itself is cut, in its middle.
+// The host is always given whole, however long, since it says which site the link leads
+// to: it is the host the browser reads, so a name before an @ is not shown as the host,
+// and a host in another script shows as the browser holds it, in punycode. The line wraps
+// on the page, so nothing of it is hidden. Anything that is not a web address is given
 // whole.
-function addressInBrief(url, length = 42) {
+function addressInBrief(url, length = 48) {
   const isWebAddress =
     typeof url === "string" && (url.startsWith("https://") || url.startsWith("http://"));
   if (!isWebAddress) {
@@ -547,19 +557,20 @@ function addressInBrief(url, length = 42) {
   }
   const parts = parsed.pathname.split("/").filter((part) => part !== "");
   const crumbs = (list) => [parsed.host, ...list].join(" › ");
-  if (crumbs(parts).length <= length) {
+  if (parts.length === 0 || crumbs(parts).length <= length) {
     return crumbs(parts);
   }
-  const last = parts.at(-1);
-  const left = parts.length > 1 ? ["…"] : [];
+  const last = partInBrief(parts.at(-1));
   if (parts.length > 2 && crumbs(["…", parts.at(-2), last]).length <= length) {
     return crumbs(["…", parts.at(-2), last]);
   }
-  if (crumbs([...left, last]).length <= length) {
-    return crumbs([...left, last]);
-  }
-  const half = Math.floor(Math.max(8, length - crumbs([...left, ""]).length - 1) / 2);
-  return crumbs([...left, `${last.slice(0, half)}…${last.slice(-half)}`]);
+  return crumbs(parts.length > 1 ? ["…", last] : [last]);
+}
+
+// One part of an address's path, cut in its middle only when it is long by itself.
+function partInBrief(part, longest = 32) {
+  const half = Math.floor((longest - 1) / 2);
+  return part.length <= longest ? part : `${part.slice(0, half)}…${part.slice(-half)}`;
 }
 
 // Where a link leads, under its title, since the title can say anything: the address in
@@ -639,6 +650,22 @@ function sourceCard(turn, source) {
   card.addEventListener("focusout", () => link(turn, number, false));
   turn.cards.set(number, card);
   return card;
+}
+
+// A source's card, or, if it cannot be built, a card that says so: one source the page
+// cannot show does not cost the reader the answer and the other sources.
+function cardOrNotice(turn, source) {
+  try {
+    return sourceCard(turn, source);
+  } catch (error) {
+    console.error(error);
+    const card = make("li", "source-card source-unreadable");
+    const head = make("div", "source-head");
+    head.append(make("span", "source-number", shown(source.number)));
+    head.append(make("p", "source-path", "This source could not be shown."));
+    card.append(head);
+    return card;
+  }
 }
 
 // A number after a piece of the answer. Pointing at it or focusing it marks its source's
@@ -821,7 +848,7 @@ function renderAnswer(turn, answer) {
     text.textContent = "The reply holds no text.";
   }
   parts.push(answer.answered ? text : notice(answer, text));
-  const cards = answer.sources.map((source) => sourceCard(turn, source));
+  const cards = answer.sources.map((source) => cardOrNotice(turn, source));
   if (cards.length === 0) {
     const none = answer.answered ? "This answer cites no source." : "Nothing is cited: this reply is not an answer.";
     cards.push(make("li", "sources-none", none));
@@ -838,6 +865,11 @@ function renderAnswer(turn, answer) {
   turn.body.replaceChildren(...parts);
   turn.sources.replaceChildren(...cards);
   turn.sourcesCount.textContent = answer.sources.length === 0 ? "" : ` ${answer.sources.length}`;
+  // A follow-up is searched for once the service has said which question it searched
+  // for. An answer that came without saying so ran no search on this page.
+  if (turn.searchFold.hidden) {
+    turn.found.textContent = "not run";
+  }
   turn.badges.replaceChildren(turn.foundBadge, ...badges);
   turn.madeTitle.textContent = answer.answered ? "How this answer was made" : "How this reply was made";
   renderFacts(turn, facts, answer.trace_id);
@@ -993,6 +1025,7 @@ function renderConversation() {
   page.conversationArea.hidden = conversation.length === 0;
   const sent = Math.min(conversation.length, EARLIER_SENT);
   page.conversationCount.textContent = plural(sent, "earlier question", "earlier questions");
+  page.conversationVerb.textContent = ` ${sent === 1 ? "is" : "are"} sent with your next question`;
   updateChrome();
 }
 
@@ -1135,7 +1168,7 @@ function showAnswer(turn, data) {
     return false;
   }
   const from = cacheHit(data) === null ? "" : " It came from the cache.";
-  let words = `The answer is complete. It cites ${plural(data.sources.length, "source", "sources")}.`;
+  let words = `The answer is complete. It cites ${plural(citedNumbers(data).size, "source", "sources")}.`;
   if (!data.answered) {
     words = isDecline(data)
       ? "Not in the handbook: the assistant declined instead of guessing."

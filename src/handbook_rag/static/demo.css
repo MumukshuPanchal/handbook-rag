@@ -1095,16 +1095,15 @@ h1 {
 }
 
 /* Where a source's link leads, since its title can say anything: the host and the path
-   in brief, quiet, on one line. The whole address is the link's title and is written out
-   in the fold with the passage. */
+   in brief, quiet. The line wraps and is never cut, so the host is always seen whole; a
+   test holds every rule of this sheet to that. The whole address is the link's title and
+   is written out in the fold with the passage. */
 .source-address {
   margin-top: var(--s1);
-  overflow: hidden;
   color: var(--muted);
   font-size: var(--fs-xs);
   line-height: 1.45;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .passage-address {
@@ -1198,25 +1197,46 @@ h1 {
   background: linear-gradient(to bottom, transparent, var(--bg) var(--s5));
 }
 
+/* The fold of what is sent and the button that starts again, in one row, and under them
+   the line that says what is sent and what is kept, whenever there is a conversation. */
 .context-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--s2);
+  display: grid;
+  grid-template-areas:
+    "fold new"
+    "notice notice";
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--s1) var(--s2);
 }
 
 .context-bar:has(> :not([hidden])) {
   margin-bottom: var(--s2);
 }
 
+/* The wrapper only shows or hides its two parts, which take their places in the grid. */
 .context {
-  flex: 1 1 16rem;
+  display: contents;
+}
+
+.context-fold {
+  grid-area: fold;
   min-width: 0;
   font-size: var(--fs-sm);
 }
 
-.context > summary {
+.context-notice {
+  grid-area: notice;
+  padding: 0 var(--s1);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+#new-conversation {
+  grid-area: new;
+  white-space: nowrap;
+}
+
+.context-fold > summary {
   width: fit-content;
   padding: 0.3rem 0.75rem;
   border: 1px solid var(--border);
@@ -1227,7 +1247,9 @@ h1 {
 }
 
 .context-body {
+  max-height: min(40vh, 18rem);
   margin-top: var(--s2);
+  overflow-y: auto;
   padding: var(--s3) var(--s4);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1484,16 +1506,7 @@ textarea:focus-visible {
     background: linear-gradient(to bottom, transparent, var(--bg) var(--s3));
   }
 
-  .context-bar {
-    flex-wrap: nowrap;
-    align-items: center;
-  }
-
-  .context {
-    flex: 0 1 auto;
-  }
-
-  .context > summary,
+  .context-fold > summary,
   .ghost {
     padding: 0.2rem 0.65rem;
     font-size: var(--fs-xs);

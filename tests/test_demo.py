@@ -411,9 +411,13 @@ def test_the_question_has_a_label_and_the_state_of_the_request_is_announced() ->
     } == {"status", "failure"}
     assert [attrs["id"] for _, attrs in markup.elements if attrs.get("aria-live")] == []
     assert "output" not in [tag for tag, _ in markup.elements], "an output element announces"
-    script = static("demo.js")
-    assert "aria-live" not in script
-    assert not re.search(r"\.role\b", script)
+    # The script makes none either: no live attribute or property, no role, and no output
+    # element, which the list of the elements it may make leaves out
+    # (test_the_check_of_the_script_finds_each_kind_of_call_planted_in_it plants each).
+    problems = problems_in(static("demo.js"))
+    assert "a live region made by the script" not in problems
+    assert "an element the page does not make" not in problems
+    assert "output" not in ELEMENTS_MADE
 
 
 def test_every_element_the_script_looks_up_is_on_the_page() -> None:
@@ -468,10 +472,46 @@ FORBIDDEN = {
 }
 
 
+# The elements the script may make, by name. The rules on the page's markup bind the HTML;
+# the script builds most of the page, so these bind what it builds. Nothing here loads
+# anything, runs anything or announces anything: no img, iframe, script, style, link,
+# object, embed, form, output or svg. A link is made by sourceLink alone, below.
+ELEMENTS_MADE = {
+    "article", "button", "code", "dd", "details", "div", "dl", "dt", "h3", "h4",
+    "li", "ol", "p", "span", "summary", "ul",
+}  # fmt: skip
+
+
+def elements_made_wrongly(source: str) -> bool:
+    """Whether the script makes an element by a name not in the list, or by a name it
+    does not write out: every call of make names its element in a string."""
+    calls = re.findall(r"\bmake\(\s*([^,)]*)", source)
+    named = [re.fullmatch(r"([\"'`])([a-z0-9]+)\1", call.strip()) for call in calls]
+    # The one call that is no call: make's own declaration, `function make(tag, ...)`.
+    unnamed = [call for call, name in zip(calls, named, strict=True) if name is None]
+    if unnamed != ["tag"]:
+        return True
+    literal = re.findall(r"createElement\s*\(\s*([\"'`])([A-Za-z0-9]+)\1", source)
+    names = [name.group(2) for name in named if name is not None] + [n for _, n in literal]
+    return any(name.lower() not in ELEMENTS_MADE | {"a"} for name in names)
+
+
 def problems_in(source: str) -> list[str]:
     """What a script holds that the demo page's script must not."""
     found = [name for name, pattern in FORBIDDEN.items() if re.search(pattern, source)]
     link, make = function_body(source, "sourceLink"), function_body(source, "make")
+    # The streamed text is not announced: the script makes no live region, by attribute,
+    # by property or by role. An output element is one too, and is not in the list.
+    if re.search(r"(?i)\baria-?live\b|\.role\b|\[\s*[\"'`]role[\"'`]\s*\]", source):
+        found.append("a live region made by the script")
+    if elements_made_wrongly(source):
+        found.append("an element the page does not make")
+    # Nothing that loads or styles: the policy would refuse it, and the guard says so too.
+    if re.search(
+        r"\.(?:src|srcset|style)\b|\[\s*[\"'`](?:src|srcset|style|innerHTML|outerHTML)[\"'`]\s*\]",
+        source,
+    ):
+        found.append("a source or a style set as a property")
 
     def outside(pattern: str, allowed: range) -> bool:
         return any(match.start() not in allowed for match in re.finditer(pattern, source))
@@ -558,6 +598,21 @@ def test_the_script_reads_nothing_as_html_or_code_and_makes_links_in_one_place()
         ("sessionStorage.conversation = question;", "storage in the browser"),
         ("document.cookie = question;", "storage in the browser"),
         ('indexedDB.open("conversation");', "storage in the browser"),
+        ('turn.stream.ariaLive = "polite";', "a live region made by the script"),
+        ('turn.stream.setAttribute("aria-live", "polite");', "a live region made by the script"),
+        ('turn.stream.role = "status";', "a live region made by the script"),
+        ('turn.body.append(make("output", "", data.text));', "an element the page does not make"),
+        ('turn.body.append(make("img", "", ""));', "an element the page does not make"),
+        ('turn.body.append(make("IFRAME", "", ""));', "an element the page does not make"),
+        ('turn.body.append(make(data.kind, "", ""));', "an element the page does not make"),
+        (
+            'turn.body.append(document.createElement("script"));',
+            "an element the page does not make",
+        ),
+        ("picture.src = data.url;", "a source or a style set as a property"),
+        ("picture.srcset = data.url;", "a source or a style set as a property"),
+        ("turn.body.style.backgroundImage = data.url;", "a source or a style set as a property"),
+        ('turn.body["innerHTML"] = data.text;', "a source or a style set as a property"),
     ],
 )
 def test_the_check_of_the_script_finds_each_kind_of_call_planted_in_it(
@@ -694,9 +749,128 @@ def test_a_new_conversation_can_be_started_and_the_page_says_what_is_sent() -> N
     assert {"conversation-area", "conversation", "new-conversation"} <= ids
     assert "Only questions are sent, never answers." in html
     assert "reloading it starts a new conversation" in html
+    # The same, in one short line that shows whenever there is a conversation: inside the
+    # area the script shows then, and outside the fold that holds the list.
+    start = html.index('<div id="conversation-area"')
+    fold_end = html.index("</details>", start)
+    area, after_fold = html[start:fold_end], html[fold_end : html.index('id="new-conversation"')]
+    assert '<details class="context-fold">' in area
+    notice = page().paragraphs["conversation-notice"]
+    assert '<p id="conversation-notice"' in after_fold
+    assert "Only questions are sent, never answers." in notice
+    assert "kept on this page only" in notice
     assert "conversation.length = 0;" in body_of("forget")
     # The line about the question searched for belongs to each turn, which the script
     # builds: it is not an element of the page's markup any more.
     turn = body_of("addTurn")
     assert 'turn.searchedLine = make("p", "searched");' in turn
     assert "turn.searchedLine.hidden = true;" in turn
+
+
+# The address under a source. The reader must see where a link leads: the line wraps, and
+# no rule of the stylesheet may hide or cut any part of it, its host included.
+
+
+def css_rules(sheet: str) -> list[tuple[str, dict[str, str]]]:
+    """Every rule of a stylesheet, inside a media query or not: its selectors and its
+    declarations, by property."""
+    sheet = re.sub(r"/\*.*?\*/", "", sheet, flags=re.DOTALL)
+    rules = []
+    for selector, block in re.findall(r"([^{}]+)\{([^{}]*)\}", sheet):
+        declarations = {}
+        for declaration in block.split(";"):
+            name, _, value = declaration.partition(":")
+            if value.strip():
+                declarations[name.strip().lower()] = value.strip().lower()
+        rules.append((" ".join(selector.split()), declarations))
+    return rules
+
+
+# The address line itself, and the elements around it whose own rules could clip it.
+ADDRESS = ("source-address", "address-brief", "passage-address")
+AROUND = ("source-card", "passage-item", "source-cards", "passages", "turn-sources", "search-fold")
+
+
+def subject_is(selector: str, names: tuple[str, ...]) -> bool:
+    """Whether a rule is for one of these classes: whether the last part of one of its
+    selectors, the element the rule styles, has one of them. `.source-address .x` is for
+    the element inside the line, not for the line."""
+    for part in selector.split(","):
+        words = part.split()
+        if words and set(re.findall(r"\.([\w-]+)", words[-1])) & set(names):
+            return True
+    return False
+
+
+# What would hide part of the line, set on the line itself.
+HIDES_THE_LINE = {
+    "text-overflow": lambda value: True,
+    "line-clamp": lambda value: True,
+    "-webkit-line-clamp": lambda value: True,
+    "max-height": lambda value: True,
+    "height": lambda value: value != "auto",
+    "white-space": lambda value: value not in ("normal", "pre-wrap", "pre-line", "break-spaces"),
+    "overflow": lambda value: value != "visible",
+    "overflow-x": lambda value: value != "visible",
+    "display": lambda value: value == "none",
+    "visibility": lambda value: value in ("hidden", "collapse"),
+    "clip-path": lambda value: value != "none",
+    "clip": lambda value: value != "auto",
+}
+# What would clip it, set on an element around it.
+CLIPS_WHAT_IT_HOLDS = {
+    "overflow": lambda value: value in ("hidden", "clip"),
+    "overflow-x": lambda value: value in ("hidden", "clip"),
+    "line-clamp": lambda value: True,
+    "-webkit-line-clamp": lambda value: True,
+}
+
+
+def cuts_the_address(selector: str, declarations: dict[str, str]) -> list[str]:
+    """What a rule does that could hide part of the address line."""
+    found = []
+    for names, hides in ((ADDRESS, HIDES_THE_LINE), (AROUND, CLIPS_WHAT_IT_HOLDS)):
+        if subject_is(selector, names):
+            found += [
+                f"{name}: {value} on {selector}"
+                for name, value in declarations.items()
+                if name in hides and hides[name](value)
+            ]
+    return found
+
+
+def test_no_rule_of_the_stylesheet_can_cut_the_address_under_a_source() -> None:
+    rules = css_rules(static("demo.css"))
+    found = [
+        problem
+        for selector, declarations in rules
+        for problem in cuts_the_address(selector, declarations)
+    ]
+
+    assert found == []
+    # It wraps instead, so a long host shows whole on as many lines as it needs.
+    (address,) = [d for selector, d in rules if selector == ".source-address"]
+    assert address.get("overflow-wrap") == "anywhere"
+    # The script puts the address in brief in this line, for the sources and the found
+    # passages alike.
+    assert 'const line = make("p", "source-address");' in body_of("addressLine")
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        ".source-address { overflow: hidden; }",
+        ".source-address { text-overflow: ellipsis; white-space: nowrap; }",
+        ".source-address { white-space: nowrap; }",
+        "@media (max-width: 30rem) { .source-address { max-height: 1.4em; } }",
+        ".address-brief { display: none; }",
+        ".source-card { overflow: hidden; }",
+        ".passage-item, .source-card { overflow: clip; }",
+        ".source-card .source-address { visibility: hidden; }",
+        ".source-address { -webkit-line-clamp: 1; }",
+    ],
+)
+def test_the_check_of_the_stylesheet_finds_each_rule_that_could_cut_the_address(rule: str) -> None:
+    rules = css_rules(f"{static('demo.css')}\n{rule}\n")
+
+    assert [problem for selector, d in rules for problem in cuts_the_address(selector, d)] != []

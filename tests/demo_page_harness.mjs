@@ -2,17 +2,19 @@
 // conversation, and prints what the page did after each step as JSON. The Python test
 // tests/test_demo_behaviour.py runs it with node and reads the result. It needs node and
 // nothing else: no package, no browser. The fake page has only what the script touches:
-// elements with children, classes, the hidden flag and listeners. What the harness reads
-// back, it reads from those elements, as a reader would see them, and not from the
-// script's own variables.
+// elements with children, classes, the hidden flag, attributes and listeners, the element
+// that has the focus, the example buttons of the page's markup, and a clipboard. What the
+// harness reads back, it reads from those elements, as a reader would see them, and not
+// from the script's own variables.
 import fs from "node:fs";
 import vm from "node:vm";
 
 const source = fs.readFileSync(process.argv[2], "utf8");
 
-function element(tag) {
+function element(tag, id = "") {
   const node = {
     tagName: String(tag).toUpperCase(),
+    id,
     nodes: [],
     parent: null,
     hidden: false,
@@ -48,7 +50,9 @@ function element(tag) {
     addEventListener(type, handler) {
       (this.listeners[type] ??= []).push(handler);
     },
-    focus() {},
+    focus() {
+      document.activeElement = this;
+    },
     scrollIntoView() {
       this.scrolled += 1;
     },
@@ -92,9 +96,10 @@ function element(tag) {
   return node;
 }
 
-// What a reader can do to an element: point at it, focus it, press it.
+// What a reader can do to an element: point at it, focus it, press it. An element that is
+// not there takes nothing, and the test then sees that nothing happened.
 function fire(node, type) {
-  for (const handler of node.listeners[type] ?? []) {
+  for (const handler of node?.listeners[type] ?? []) {
     handler({ type, target: node, preventDefault() {} });
   }
 }
@@ -138,14 +143,34 @@ function inside(node, name) {
   return false;
 }
 
+// The texts a screen reader is told and a reader does not see, inside an element.
+function spoken(node) {
+  return byClass(node, "visually-hidden").map((hidden) => hidden.textContent).join("");
+}
+
+// The example buttons of the page's markup, as the script finds them.
+const EXAMPLES = [
+  "How many weeks of parental leave do I get in the US?",
+  "Which personal VPN does GitLab recommend for team members?",
+  "How many days of paid annual leave do UK team members get?",
+  "How many weeks of paid parental leave does GitHub give its employees?",
+];
+const examples = EXAMPLES.map((question) => {
+  const button = element("button");
+  button.className = "example";
+  button.textContent = question;
+  return button;
+});
+
 const elements = {};
 const document = {
+  activeElement: null,
   getElementById(id) {
-    elements[id] ??= element(id);
+    elements[id] ??= element("div", id);
     return elements[id];
   },
-  querySelectorAll() {
-    return [];
+  querySelectorAll(selector) {
+    return selector === "button.example" ? examples : [];
   },
   createElement(tag) {
     return element(tag);
@@ -158,15 +183,28 @@ const document = {
 const replies = [];
 const asked = [];
 const searchedFor = [];
-// The passages /search finds, by question. Any other question finds nothing.
-const passagesFor = new Map();
+// What /search does, by question: the passages it finds, "network" for a search that
+// cannot reach the service, or a status and words for one the service refuses. Any other
+// question finds nothing.
+const searchFor = new Map();
+// What the page put on the clipboard, and whether the clipboard refuses.
+const clipboard = { copied: [], refuses: false };
 
 async function fetchStub(url, options) {
   const body = JSON.parse(options.body);
   if (url === "/search") {
     searchedFor.push(body.query);
-    const results = passagesFor.get(body.query) ?? [];
-    const found = { results, mode: "hybrid", reranked: false, took_ms: 1, trace_id: null };
+    const what = searchFor.get(body.query) ?? [];
+    if (what === "network") {
+      throw new TypeError("Failed to fetch");
+    }
+    if (!Array.isArray(what)) {
+      return new Response(JSON.stringify({ detail: what.detail }), {
+        status: what.status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    const found = { results: what, mode: "hybrid", reranked: false, took_ms: 1, trace_id: null };
     return new Response(JSON.stringify(found), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -187,21 +225,33 @@ async function fetchStub(url, options) {
   return new Response(text.body, { status, headers: { "Content-Type": type } });
 }
 
+// What the script writes to the console as an error: kept, and given to the test.
+const consoleErrors = [];
+
 const context = vm.createContext({
   document,
   fetch: fetchStub,
-  console,
+  console: { ...console, error: (error) => consoleErrors.push(String(error?.message ?? error)) },
   AbortController,
   TextDecoder,
   Response,
   URL,
-  navigator: {},
+  navigator: {
+    clipboard: {
+      async writeText(text) {
+        if (clipboard.refuses) {
+          throw new DOMException("Not allowed.", "NotAllowedError");
+        }
+        clipboard.copied.push(text);
+      },
+    },
+  },
 });
 vm.runInContext(
-  `${source}\n;globalThis.__page = { ask, conversation, page, isBusy: () => current !== null };`,
+  `${source}\n;globalThis.__page = { ask, conversation, page, isBusy: () => current !== null, addressInBrief, snippet };`,
   context,
 );
-const { ask, conversation, page, isBusy } = context.__page;
+const { ask, conversation, page, isBusy, addressInBrief, snippet } = context.__page;
 
 function searched(asked, question, outcome, extra = {}) {
   return {
@@ -245,13 +295,17 @@ function stream(events) {
   return [200, events.map(([name, data]) => event(name, data)).join(""), "text/event-stream; charset=utf-8"];
 }
 
-function answered(asked, question, outcome) {
+function answered(asked, question, outcome, extra = {}) {
   const found = searched(asked, question, outcome);
   return stream([
     ["searched", found],
     ["text", { text: "Sixteen weeks." }],
-    ["answer", answer(found)],
+    ["answer", answer(found, extra)],
   ]);
+}
+
+function refusal(detail, headers = {}) {
+  return [503, JSON.stringify({ detail }), "application/json", headers];
 }
 
 // A stream that the harness writes to, piece by piece, and ends or breaks off.
@@ -278,6 +332,28 @@ async function settle() {
   }
 }
 
+async function untilIdle() {
+  for (let round = 0; round < 500 && isBusy(); round += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await settle();
+}
+
+// A source's passage, as the API sends it.
+function passage(rank, extra = {}) {
+  return {
+    rank,
+    score: 0.03,
+    doc_id: "people/leave.md",
+    title: "Leave",
+    url: "https://handbook.example.com/handbook/people/leave/",
+    section: "people",
+    heading_path: ["Parental leave"],
+    text: "New parents get sixteen weeks.",
+    ...extra,
+  };
+}
+
 // The latest turn on the page, as a reader sees it.
 function latestTurn() {
   const item = page.turns.children.at(-1);
@@ -294,10 +370,39 @@ function latestTurn() {
   const [madeTitle] = byClass(item, "made-title");
   const [cardTitle] = byClass(item, "card-title");
   const [facts] = byClass(item, "facts");
+  const [progress] = byClass(item, "card-progress");
+  const [sourcesBlock] = byClass(item, "sources-block");
+  const [searchFold] = byClass(item, "search-fold");
+  const fold = (node) => {
+    const [folded] = byClass(node, "passage");
+    const [address] = byClass(folded, "passage-address");
+    return {
+      foldName: spoken(folded.children[0]),
+      foldAddress: address === undefined ? "" : address.textContent,
+      foldAddressHidden: address !== undefined && address.attrs["aria-hidden"] === "true",
+    };
+  };
+  const addressOf = (node) => {
+    const links = all(node, (child) => child.tagName === "A");
+    const briefs = byClass(node, "address-brief");
+    return {
+      link: links.length === 0 ? null : links[0].href,
+      linkTarget: links.length === 0 ? null : links[0].target,
+      linkRel: links.length === 0 ? null : links[0].rel,
+      linkTitle: links.length === 0 ? null : (links[0].title ?? null),
+      brief: briefs.map((brief) => brief.textContent).join(""),
+      briefHiddenFromReaders: briefs.length > 0 && briefs.every((brief) => brief.attrs["aria-hidden"] === "true"),
+      // The whole address as a screen reader reads it, beside the brief one.
+      address: byClass(node, "source-address").map(spoken).join(""),
+      ...fold(node),
+    };
+  };
   return {
     turnSearchedLine: line.textContent,
     turnSearchedHidden: !isShown(line),
+    searchedAsTyped: line.classes.has("searched-as-typed"),
     bubble: byClass(item, "bubble").map((bubble) => bubble.textContent),
+    scrolled: item.scrolled,
     // An answer's text, shown as an answer and not inside the notice of a reply that is not.
     answer: answerText.some((text) => !inside(text, "notice")),
     answerText: answerText.map((text) => text.textContent),
@@ -310,36 +415,36 @@ function latestTurn() {
     placeholders: shownByClass(item, "placeholder").length,
     caret: shownByClass(item, "stream").some((text) => text.classes.has("streaming")),
     streamed: shownByClass(item, "stream").map((text) => text.textContent).join(""),
+    streamUnfinished: byClass(item, "stream").some((text) => text.classes.has("unfinished")),
     progress: shownByClass(item, "card-progress").length > 0,
+    progressText: progress.textContent,
     badges: badgeList.map((badge) => badge.textContent),
     cached: shownByClass(item, "cached").map((box) => box.textContent).join(" "),
     note: note !== undefined && isShown(note) ? note.textContent : "",
+    madeShown: made !== undefined && isShown(made),
     madeTitle: made !== undefined && isShown(made) ? madeTitle.textContent : "",
     cardTitle: cardTitle.textContent,
     ended: [...item.classes].filter((name) => name.startsWith("ended-")),
     facts: facts !== undefined && isShown(facts) ? facts.textContent : "",
+    sourcesShown: isShown(sourcesBlock),
+    sourcesNone: shownByClass(item, "sources-none").map((none) => none.textContent).join(""),
     chips: shownByClass(item, "cite").map((chip) => chip.textContent),
-    cards: cards.filter(isShown).map((card) => {
-      const links = all(card, (child) => child.tagName === "A");
-      return {
-        number: byClass(card, "source-number").map((number) => number.textContent).join(""),
-        link: links.length === 0 ? null : links[0].href,
-        linkTarget: links.length === 0 ? null : links[0].target,
-        linkRel: links.length === 0 ? null : links[0].rel,
-        path: byClass(card, "source-path").map((path) => path.textContent).join(""),
-        crumbs: byClass(card, "crumb").map((crumb) => crumb.textContent),
-        snippet: byClass(card, "source-snippet").map((piece) => piece.textContent).join(""),
-        linkTitle: links.length === 0 ? null : (links[0].title ?? null),
-        brief: byClass(card, "address-brief").map((brief) => brief.textContent).join(""),
-        briefHiddenFromReaders: byClass(card, "address-brief").every((brief) => brief.attrs["aria-hidden"] === "true"),
-        // The whole address as a screen reader reads it, beside the brief one.
-        address: byClass(card, "source-address")
-          .flatMap((line) => byClass(line, "visually-hidden"))
-          .map((whole) => whole.textContent)
-          .join(""),
-        foldAddress: byClass(card, "passage-address").map((whole) => whole.textContent).join(""),
-      };
-    }),
+    chipLabels: shownByClass(item, "cite").map((chip) => chip.attrs["aria-label"] ?? null),
+    cards: cards.filter(isShown).map((card) => ({
+      number: byClass(card, "source-number").map((number) => number.textContent).join(""),
+      path: byClass(card, "source-path").map((path) => path.textContent).join(""),
+      crumbs: byClass(card, "crumb").map((crumb) => crumb.textContent),
+      snippet: byClass(card, "source-snippet").map((piece) => piece.textContent).join(""),
+      unreadable: card.classes.has("source-unreadable"),
+      ...(card.classes.has("source-unreadable") ? {} : addressOf(card)),
+    })),
+    searchFoldShown: isShown(searchFold),
+    searchCount: byClass(item, "search-fold").flatMap((each) => byClass(each, "side-count")).map((count) => count.textContent).join(""),
+    searchState: byClass(item, "search-state").map((state) => state.textContent).join(""),
+    passages: byClass(item, "passage-item").map((found) => ({
+      rank: byClass(found, "passage-rank").map((rank) => rank.textContent).join(""),
+      ...addressOf(found),
+    })),
   };
 }
 
@@ -357,11 +462,16 @@ function record(name, question) {
     failure: page.failure.textContent,
     listed: page.conversation.children.map((item) => item.textContent),
     listHidden: page.conversationArea.hidden,
+    conversationSummary: `${page.conversationCount.textContent}${page.conversationVerb.textContent}`,
     turnCount: page.turns.children.length,
     stopHidden: page.stop.hidden,
     askDisabled: page.ask.getAttribute("aria-disabled"),
+    examplesDisabled: examples.map((example) => example.getAttribute("aria-disabled")),
+    formBusy: page.form.classes.has("busy"),
+    newConversationHidden: page.newConversation.hidden,
     welcomeHidden: page.welcome.hidden,
     status: page.status.textContent,
+    focus: document.activeElement === null ? null : document.activeElement.id,
     ...latestTurn(),
   });
 }
@@ -375,12 +485,25 @@ async function step(name, question, reply) {
     await ask(question);
     await settle();
   }
+  // A reply left unused, because a fault kept the question from being sent, is dropped,
+  // so that the next step gets its own.
+  replies.length = 0;
   record(name, question);
   steps.at(-1).searches = searchedFor.slice(searchesBefore);
 }
 
+// Presses a button of a turn, by its class. A button that is not there is not pressed,
+// and the test then sees that nothing happened.
+function press(item, name) {
+  const [button] = byClass(item, name);
+  if (button !== undefined) {
+    fire(button, "click");
+  }
+}
+
 const FIRST = "How many days of paid annual leave do UK team members get?";
 const REWRITTEN = "How many days of paid annual leave do team members in Finland get?";
+const TRACE_ID = "4be69ac5bb0e6069eaa37e98ae312974";
 
 await step("first", FIRST, answered(FIRST, FIRST, "not_asked"));
 await step("rewritten", "and in finland", answered("and in finland", REWRITTEN, "rewritten"));
@@ -413,32 +536,42 @@ await step(
     ["answer", { broken: true }],
   ]),
 );
-await step("refused", "and in ireland", [
-  503,
-  JSON.stringify({ detail: "The service is busy." }),
-  "application/json",
-  { "X-Trace-Id": "4be69ac5bb0e6069eaa37e98ae312974" },
-]);
+await step("refused", "and in ireland", refusal("The service is busy.", { "X-Trace-Id": TRACE_ID }));
+
+// The trace id of that refusal, copied, and copied again when the clipboard refuses.
+{
+  const item = page.turns.children.at(-1);
+  press(item, "copy");
+  await settle();
+  const copied = { text: clipboard.copied.at(-1) ?? null, status: page.status.textContent };
+  clipboard.refuses = true;
+  press(item, "copy");
+  await settle();
+  clipboard.refuses = false;
+  steps.at(-1).copy = { ...copied, refusedStatus: page.status.textContent };
+}
+
 await step("not rewritten", "and in germany", answered("and in germany", "and in germany", "not_asked"));
 fire(elements["new-conversation"], "click");
 await step("new conversation", null, null);
-await step("asked by itself", FIRST, answered(FIRST, FIRST, "not_asked"));
+
+// The first question of the new conversation, asked by pressing its example button.
+{
+  const searchesBefore = searchedFor.length;
+  replies.push(answered(FIRST, FIRST, "not_asked"));
+  fire(examples.find((example) => example.textContent === FIRST), "click");
+  await untilIdle();
+  replies.length = 0;
+  record("asked by itself", FIRST);
+  steps.at(-1).searches = searchedFor.slice(searchesBefore);
+}
 
 // An answer that cites two sources, one of them twice, and names a third that it does
 // not list. The search beside it finds three passages.
 const US = "How many weeks of parental leave do new parents get in the US?";
 const LEAVE_URL =
   "https://handbook.example.com/handbook/total-rewards/benefits/general-and-entity-benefits/leave-in-the-united-states/";
-passagesFor.set(US, [1, 2, 3].map((rank) => ({
-  rank,
-  score: 0.03,
-  doc_id: "people/leave.md",
-  title: "Leave",
-  url: LEAVE_URL,
-  section: "people",
-  heading_path: ["Parental leave"],
-  text: "New parents get sixteen weeks.",
-})));
+searchFor.set(US, [1, 2, 3].map((rank) => passage(rank, { url: LEAVE_URL })));
 const cited = searched("and in the us", US, "rewritten", { requests: 1, took_ms: 1200 });
 await step(
   "cited",
@@ -506,10 +639,10 @@ await step(
   linking.focusCard = { cards: markedCards(), chips: markedChips() };
   fire(card("2"), "focusout");
   linking.unfocusCard = { cards: markedCards(), chips: markedChips() };
-  const before = card("2").scrolled;
+  const before = card("2")?.scrolled ?? 0;
   fire(chip("2"), "click");
   linking.pressChip = {
-    scrolled: card("2").scrolled - before,
+    scrolled: (card("2")?.scrolled ?? 0) - before,
     marked: cards.filter((each) => each.classes.has("marked")).map(numberOf),
     status: page.status.textContent,
   };
@@ -534,6 +667,10 @@ function declined(asked, extra = {}) {
   ]);
 }
 const STORED = "Do Finland team members paid annual leave days carry over to the next year?";
+// A search that finds one passage, one the service refuses, and one that cannot reach it.
+searchFor.set("How much is the gym budget?", [passage(1)]);
+searchFor.set("do they carry over", { status: 503, detail: "The service is busy." });
+searchFor.set("Is that withheld?", "network");
 await step("declined", "How much is the gym budget?", declined("How much is the gym budget?"));
 await step(
   "cached",
@@ -545,6 +682,46 @@ await step(
   }),
 );
 await step("withheld", "Is that withheld?", declined("Is that withheld?", { stop_reason: "safety" }));
+await step(
+  "semantic",
+  "how long is leave for new parents",
+  answered("how long is leave for new parents", "how long is leave for new parents", "unchanged", {
+    usage: { input_tokens: 0, output_tokens: 0 },
+    requests: 0,
+    cached: { tier: "semantic", question: US, similarity: 0.93, score: 0.95, stored_at: "2026-11-25T11:52:07+00:00" },
+  }),
+);
+
+// An answer the fallback model wrote after two requests. It lists two sources and its
+// text cites one, and that source's passage runs long.
+const LONG_TEXT =
+  "Team members in the United States get sixteen weeks of paid parental leave, which can be taken at any point in the first year after a birth or an adoption, in one block or in several, with the agreement of their manager and the absence team";
+await step(
+  "fallback",
+  "and who pays for it",
+  answered("and who pays for it", "and who pays for it", "unchanged", {
+    requests: 2,
+    fallback: true,
+    segments: [{ text: "GitLab pays for it.", sources: [1] }],
+    sources: [
+      { number: 1, doc_id: "people/leave.md", title: "Leave", url: LEAVE_URL, section: "people", heading_path: [], text: LONG_TEXT },
+      { number: 2, doc_id: "people/faq.md", title: "Leave FAQ", url: LEAVE_URL, section: "people", heading_path: [], text: "Paid." },
+    ],
+  }),
+);
+
+// A follow-up answered by a service that sends no searched event first: no search runs.
+await step(
+  "no searched event",
+  "and in canada",
+  stream([
+    ["text", { text: "Sixteen weeks." }],
+    ["answer", answer(searched("and in canada", "and in canada", "unchanged"))],
+  ]),
+);
+
+// The next question asked after a failure: the alert is emptied for it.
+await step("late failure", "and in japan", refusal("The answer model is unavailable. Try again later."));
 
 // An answer watched as it comes: before anything, while its text is written, and done.
 {
@@ -565,7 +742,7 @@ await step("withheld", "Is that withheld?", declined("Is that withheld?", { stop
   record("arrived", "Who approves parental leave?");
 }
 
-// An answer stopped while its text is written.
+// An answer stopped while its text is written, from the stop button, which has the focus.
 {
   const body = held();
   replies.push([200, body, "text/event-stream; charset=utf-8"]);
@@ -573,10 +750,27 @@ await step("withheld", "Is that withheld?", declined("Is that withheld?", { stop
   body.send("searched", searched("Tell me about leave", "Tell me about leave", "unchanged"));
   body.send("text", { text: "Leave is" });
   await settle();
+  elements.stop.focus();
   fire(elements.stop, "click");
   await asking;
   await settle();
   record("stopped", "Tell me about leave");
+}
+
+// Stop pressed in the moment after the answer came and before the stream closed.
+{
+  const body = held();
+  replies.push([200, body, "text/event-stream; charset=utf-8"]);
+  const asking = ask("Is leave paid?");
+  const found = searched("Is leave paid?", "Is leave paid?", "unchanged");
+  body.send("searched", found);
+  body.send("text", { text: "Yes." });
+  body.send("answer", answer(found, { segments: [{ text: "Yes.", sources: [] }] }));
+  await settle();
+  fire(elements.stop, "click");
+  await asking;
+  await settle();
+  record("stop after answer", "Is leave paid?");
 }
 
 await step(
@@ -587,12 +781,13 @@ await step(
     ["text", { text: "Part of" }],
   ]),
 );
+const cutTurn = page.turns.children.at(-1);
 
 // The keys of the question box. A key press is given to the box's listeners as the
 // browser gives it, and what the harness reads is whether a question was sent, and
 // whether the key's own effect, such as a new line, was prevented.
-function press(init) {
-  const event = {
+function key(init) {
+  const pressed = {
     key: "Enter",
     shiftKey: false,
     ctrlKey: false,
@@ -606,16 +801,9 @@ function press(init) {
     },
   };
   for (const handler of page.question.listeners.keydown ?? []) {
-    handler(event);
+    handler(pressed);
   }
-  return event;
-}
-
-async function untilIdle() {
-  for (let round = 0; round < 500 && isBusy(); round += 1) {
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-  await settle();
+  return pressed;
 }
 
 async function tryKey(name, value, init, reply = null) {
@@ -624,10 +812,10 @@ async function tryKey(name, value, init, reply = null) {
   }
   page.question.value = value;
   const before = asked.length;
-  const event = press(init);
+  const pressed = key(init);
   await untilIdle();
   replies.length = 0;
-  return { name, sent: asked.length - before, prevented: event.prevented, box: page.question.value };
+  return { name, sent: asked.length - before, prevented: pressed.prevented, box: page.question.value };
 }
 
 {
@@ -642,18 +830,37 @@ async function tryKey(name, value, init, reply = null) {
     await tryKey("empty", "   ", {}),
     await tryKey("too long", "x".repeat(501), {}),
   ];
-  // Enter while an answer is being written sends nothing, and leaves the box as it is.
+  // While an answer is being written: Enter sends nothing and leaves the box as it is,
+  // "Ask again" on an earlier failure sends nothing, and a new conversation is not begun.
   const body = held();
   replies.push([200, body, "text/event-stream; charset=utf-8"]);
   page.question.value = "The first of two";
-  press({});
+  key({});
   await settle();
-  const busy = { stopHidden: page.stop.hidden, askDisabled: page.ask.getAttribute("aria-disabled") };
-  const before = asked.length;
+  const busy = {
+    stopHidden: page.stop.hidden,
+    askDisabled: page.ask.getAttribute("aria-disabled"),
+    examplesDisabled: examples.map((example) => example.getAttribute("aria-disabled")),
+    formBusy: page.form.classes.has("busy"),
+    earlierSent: asked.at(-1).earlier.length,
+  };
+  let before = asked.length;
   page.question.value = "The second of two";
-  const second = press({});
+  const second = key({});
   await settle();
   keys.push({ name: "while busy", sent: asked.length - before, prevented: second.prevented, box: page.question.value });
+  before = asked.length;
+  press(cutTurn, "again");
+  await settle();
+  busy.askAgainSent = asked.length - before;
+  const turnsBefore = page.turns.children.length;
+  const conversationBefore = conversation.length;
+  fire(elements["new-conversation"], "click");
+  busy.newConversation = {
+    turnsKept: page.turns.children.length === turnsBefore,
+    conversationKept: conversation.length === conversationBefore,
+    status: page.status.textContent,
+  };
   const found = searched("The first of two", "The first of two", "unchanged");
   body.send("searched", found);
   body.send("answer", answer(found));
@@ -662,5 +869,47 @@ async function tryKey(name, value, init, reply = null) {
   record("keys", null);
   Object.assign(steps.at(-1), { keys, busy });
 }
+
+// "Ask again" on that failure, now that nothing is being written: the question is asked
+// once more, with the conversation as it stands.
+{
+  replies.push(answered("and the rest", "And the rest of the leave?", "rewritten"));
+  const before = asked.length;
+  press(cutTurn, "again");
+  await untilIdle();
+  record("asked again", "and the rest");
+  Object.assign(steps.at(-1), { sent: asked.length - before, query: asked.at(-1).query });
+}
+
+// A failure, then a new conversation: the alert keeps nothing of it.
+await step("failure before new", "and in brazil", refusal("The answer model is unavailable. Try again later."));
+fire(elements["new-conversation"], "click");
+await step("new after failure", null, null);
+
+// The address in brief and the piece of a passage, asked of the script's own functions.
+const ADDRESSES = [
+  "https://handbook.example.com",
+  "https://handbook.example.com/",
+  `https://${"very-long-host-name-".repeat(4)}example.com/`,
+  `https://${"very-long-host-name-".repeat(4)}example.com/handbook/people/leave/`,
+  "https://handbook.gitlab.com@evil.example/handbook/people/leave/",
+  "https://hаndbook.gitlab.com/handbook/people/leave/",
+  "https://handbook.example.com:8443/handbook/people/leave/",
+  "https://handbook.gitlab.com/handbook/total-rewards/benefits/general-and-entity-benefits/gitlab-ireland-ltd/",
+  `https://handbook.gitlab.com/handbook/${"a-very-long-part-of-a-path-".repeat(3)}end/`,
+  "https://handbook.gitlab.com/handbook/finance/expenses/",
+  "ftp://handbook.example.com/faq",
+];
+const brief = (url) => {
+  try {
+    return addressInBrief(url);
+  } catch (error) {
+    return `threw: ${error.message}`;
+  }
+};
+steps.at(-1).briefs = Object.fromEntries(ADDRESSES.map((url) => [url, brief(url)]));
+steps.at(-1).consoleErrors = consoleErrors;
+steps.at(-1).longText = LONG_TEXT;
+steps.at(-1).snippet = snippet(LONG_TEXT);
 
 console.log(JSON.stringify(steps));

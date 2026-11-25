@@ -81,13 +81,16 @@
   <form id="ask-form" class="composer" aria-label="Ask a question">
     <div class="composer-inner">
       <div class="context-bar">
-        <details id="conversation-area" class="context" hidden>
-          <summary><span class="on-wide">Sent with your next question: </span><span class="on-narrow" aria-hidden="true">Sends </span><span id="conversation-count">no earlier question</span></summary>
-          <div class="context-body">
-            <p class="hint">The questions asked so far, as they were searched for. The latest are sent with your next question, so that a follow-up such as "and in Finland?" can be rewritten into a question that stands alone, with one more request to the model. Only questions are sent, never answers. They are kept on this page only: reloading it starts a new conversation.</p>
-            <ol id="conversation" class="context-list"></ol>
-          </div>
-        </details>
+        <div id="conversation-area" class="context" hidden>
+          <details class="context-fold">
+            <summary><span id="conversation-count">no earlier question</span><span id="conversation-verb" class="on-wide"> is sent with your next question</span></summary>
+            <div class="context-body">
+              <p class="hint">The questions asked so far, as they were searched for. The latest are sent with your next question, so that a follow-up such as "and in Finland?" can be rewritten into a question that stands alone, with one more request to the model. Only questions are sent, never answers. They are kept on this page only: reloading it starts a new conversation.</p>
+              <ol id="conversation" class="context-list"></ol>
+            </div>
+          </details>
+          <p id="conversation-notice" class="context-notice">Only questions are sent, never answers. They are kept on this page only.</p>
+        </div>
         <button type="button" id="new-conversation" class="ghost new" hidden><span class="on-wide">Start a new conversation</span><span class="on-narrow" aria-hidden="true">New</span></button>
       </div>
 

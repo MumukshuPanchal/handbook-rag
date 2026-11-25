@@ -108,17 +108,15 @@ TOP_UP_DAY = "25"
 TOP_UP_REQUESTS = 10
 # The days of the two second readings, as the first line of each reader's file names them.
 FIRST_READING_DAY, ADDED_READING_DAY = "24", "25"
-# The verifier's weaker direction for the one rewrite of its own that a reading checked and
-# disagreed with, as the documents give it; the run's results hold it to four places.
-OVERTURNED_SCORE = "0.9907"
+# The verifier's weaker direction for the close call, the one rewrite of its own that a
+# reading checked and disagreed with, as the documents give it, to four places.
+CLOSE_CALL_SCORE = "0.9907"
 # That rewrite is a close call too: counted right by the verifier, read as another question
 # by one reader session, and given word for word as the second reading's own second reading.
 VERIFIER_CLOSE_CALLS = {"fu-third-9"}
 # The hours between the two reader sessions of the run, and how many readings of rewrites
 # set aside each wrote, by the account of the session that coordinated the work.
 READER_GAP_HOURS = "13"
-# The readings the first reader session wrote: the first lines of the run's readings file.
-FIRST_SESSION_READINGS = 19
 # The thresholds of the line on waits: within so many seconds, and more than so many.
 QUICK, SLOW = 2, 10
 # The reader's close calls, by its own account to the session that coordinated the work:
@@ -221,7 +219,8 @@ def figures() -> dict[str, Any]:
     cost = dataclasses.asdict(report.cost)
     readings = load_readings(RUN / "readings.jsonl")
     model = json.loads(read(RUN / "run.json"))["config"]["rewrite_model"]
-    (reader,) = {reading.reader for reading in readings}
+    # Two sessions of one model: the documents name the model.
+    (reader,) = {reading.reader.split(",")[0] for reading in readings}
     seconds = [result.reply.seconds for result in report.results]
     by_kind = {kind: written[f"{group}/{kind}"] for group, kinds in KINDS.items() for kind in kinds}
 
@@ -304,20 +303,31 @@ def figures() -> dict[str, Any]:
         "verifier_disagree": report.checks.verifier_disagree,
         "verifier_agree": report.checks.verifier_read - report.checks.verifier_disagree,
         "readings_total": len(readings),
-        "first_session_readings": FIRST_SESSION_READINGS,
-        "second_session_readings": len(readings) - FIRST_SESSION_READINGS,
+        "first_session_readings": sum(r.reader == saved_run.READER for r in readings),
+        "second_session_readings": sum(r.reader == saved_run.SECOND_READER for r in readings),
+        # The follow-ups that the verifier decided and a reading disagrees with: the rule
+        # changed after the readings and then reverted counted these wrong.
+        "follow_verifier_disagree": sum(
+            result.case.group == FOLLOW_UP
+            and result.meaning.how == "verifier"
+            and result.meaning_reading is not None
+            and result.meaning_reading.label != result.meaning.by_code
+            for result in report.results
+        ),
         # The rewrites set aside that each reader session read: the first session's
         # readings are of first-run cases only, and the second's all came after.
         "first_session_read": sum(
             reading.label in (SAME, DIFFERENT)
             and reading.case_id not in ADDED_AFTER_THE_REVIEW
             and results[reading.case_id].meaning.by_code == TO_READ
-            for reading in readings[:FIRST_SESSION_READINGS]
+            for reading in readings
+            if reading.reader == saved_run.READER
         ),
         "second_session_read": sum(
             reading.label in (SAME, DIFFERENT)
             and results[reading.case_id].meaning.by_code == TO_READ
-            for reading in readings[FIRST_SESSION_READINGS:]
+            for reading in readings
+            if reading.reader == saved_run.SECOND_READER
         ),
         # Mistakes the step made without a sign, and the close call: none fell back.
         "silent": sum(
@@ -562,6 +572,11 @@ def decision_record_numbers() -> dict[str, list[str]]:
             str(k["planted"]["held_by_code"] + k["planted"]["read_held"]),
             str(k["groups"][PLANTED]),
         ],
+        "**A change of rule, made and reverted.**": [
+            str(k["follow_right"] - k["follow_verifier_disagree"]),
+            str(k["follow_right"]),
+            str(k["groups"][FOLLOW_UP]),
+        ],
         "Code decides what it can be sure of": [
             str(VERIFIED_AT),
             str(k["near_misses"]),
@@ -570,7 +585,7 @@ def decision_record_numbers() -> dict[str, list[str]]:
         ],
         "The 0.99 rule cannot be relied on by itself": [
             str(VERIFIED_AT),
-            OVERTURNED_SCORE,
+            CLOSE_CALL_SCORE,
             str(k["verifier_read"]),
             str(k["verifier_agree"]),
             str(k["verifier_disagree"]),
@@ -637,7 +652,7 @@ def decision_record_numbers() -> dict[str, list[str]]:
             str(k["planted"]["read_held"]),
         ],
         "- **The close calls.**": [
-            OVERTURNED_SCORE,
+            CLOSE_CALL_SCORE,
             str(close["follow_low"]),
             str(close["follow_high"]),
             str(k["groups"][FOLLOW_UP]),
@@ -736,13 +751,16 @@ def test_what_the_lines_of_the_decision_record_rest_on() -> None:
     close_call = results["fu-third-9"]
     assert (close_call.meaning.by_code, close_call.meaning.how) == (SAME, "verifier")
     assert close_call.meaning.score is not None
-    assert f"{close_call.meaning.score:.4f}" == OVERTURNED_SCORE
+    assert f"{close_call.meaning.score:.4f}" == CLOSE_CALL_SCORE
     assert close_call.meaning_outcome == SAME
     assert report.checks.disagree == [("fu-third-9", SAME, DIFFERENT)]
     second = close_call.case.second
     assert second is not None
     assert plain_words(second.standalone[1]) == plain_words(close_call.rewrite.question)
     assert "**A change of rule, made and reverted.**" in text
+    # Which way the rule was changed, and when it was put back.
+    assert "changed the rule so that a reading would decide over the verifier" in text
+    assert "It reverted the change after the second review" in text
     assert "a rule changed after its result is seen is not a measurement" in text
     # What the checks refuse, said as it is.
     assert "The checks refuse those shapes and no others." in text
@@ -927,7 +945,7 @@ def guide_numbers() -> dict[str, list[str]]:
             str(k["with_a_detail"]),
             str(VERIFIED_AT),
         ],
-        "- **A reading** is `same` or `different`": [OVERTURNED_SCORE, str(VERIFIED_AT)],
+        "- **A reading** is `same` or `different`": [CLOSE_CALL_SCORE, str(VERIFIED_AT)],
         "`baseline`, with `": [
             *k["model"],
             str(k["first_cases"]),
@@ -969,7 +987,7 @@ def guide_numbers() -> dict[str, list[str]]:
         "- **Where a follow-up leans on an earlier question": [
             str(k["leaning_right"]),
             str(k["leaning_of"]),
-            OVERTURNED_SCORE,
+            CLOSE_CALL_SCORE,
         ],
         "- **Where a follow-up points into the answer": [
             str(k["right"]["points_into_answer"]),
@@ -1257,7 +1275,7 @@ def card_numbers() -> dict[str, list[str]]:
         ],
         "- **The 0.99 rule cannot be relied on by itself.**": [
             str(VERIFIED_AT),
-            OVERTURNED_SCORE,
+            CLOSE_CALL_SCORE,
             str(k["by_verifier"]),
             str(k["verifier_agree"]),
             str(k["verifier_disagree"]),
@@ -1375,6 +1393,7 @@ def test_the_cards_results_are_the_saved_run() -> None:
                 str(k["readings_total"]),
                 str(k["first_session_readings"]),
                 str(k["second_session_readings"]),
+                str(k["second_session_readings"]),
             ],
             "- **Follow-ups rewritten to a question that means an acceptable form": [
                 str(k["follow_right"]),
@@ -1414,7 +1433,7 @@ def test_the_cards_results_are_the_saved_run() -> None:
                 str(planted["instruction_set_aside"]),
                 str(k["verifier_read"]),
                 str(k["verifier_agree"]),
-                OVERTURNED_SCORE,
+                CLOSE_CALL_SCORE,
             ],
             "- **What the readers found wrong.**": [
                 str(k["read_different"]),
@@ -1422,7 +1441,7 @@ def test_the_cards_results_are_the_saved_run() -> None:
                 str(k["read_different"] - k["needs_answer"]),
             ],
             "- **The close calls.**": [
-                OVERTURNED_SCORE,
+                CLOSE_CALL_SCORE,
                 str(close["follow_low"]),
                 str(close["follow_high"]),
                 str(k["groups"][FOLLOW_UP]),

@@ -909,6 +909,7 @@ def test_the_follow_up_section_is_the_committed_run() -> None:
         },
     )
     assert "no person has read them" in section
+    assert "two reader sessions decided the other 21" in section
     assert "No answer was written for the rewritten questions" in section
     assert (planted["broke_by_code"], planted["read_broke"], planted["reached_search"]) == (0, 0, 0)
     assert "no planted instruction was followed or reached the search" in section

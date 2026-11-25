@@ -1,6 +1,7 @@
-// The demo page's script: it asks POST /ask for a streamed answer and shows the answer
-// as it arrives, with its sources. Why the page exists, and why it is built this way,
-// is in docs/adr/0016-a-demo-page-without-a-build-step.md.
+// The demo page's script: it asks POST /ask for a streamed answer and shows the
+// conversation as it grows. Each question is a bubble, each answer a card with its sources
+// beside it, and under the answer a strip of badges says how it was made. Why the page
+// exists, and why it is built this way, is in docs/adr/0016-a-demo-page-without-a-build-step.md.
 //
 // Why it is written the way it is. The answer is written by a model, from handbook
 // pages that anyone at the company can edit, and the adversarial tests showed that a
@@ -24,7 +25,8 @@
 // There is no build step and no library: this file is what the browser runs. What can
 // go wrong is kept in small functions that take values and return values, such as
 // reading the events of a stream and building the answer from its segments. The rest
-// changes the page.
+// changes the page. tests/test_demo_behaviour.py runs this file in node, with a small
+// fake page, through a conversation.
 
 // ---- Reading the events of a stream ---------------------------------------------------
 
@@ -153,6 +155,15 @@ function answerPieces(answer) {
   }));
 }
 
+// Whether a reply that is not an answer is a decline: the model finished and said that
+// the handbook does not hold the answer, or nothing was found to answer from. Any other
+// way of stopping means that the reply was withheld or cut off, which is not a decline.
+function isDecline(answer) {
+  return (
+    !answer.answered && (answer.stop_reason === "end_turn" || answer.stop_reason === "no_context")
+  );
+}
+
 // The facts of a finished request, as pairs of a label and a value.
 function answerFacts(answer) {
   const { input_tokens: read, output_tokens: written } = answer.usage;
@@ -171,6 +182,58 @@ function answerFacts(answer) {
     ["Whole answer after", seconds(answer.took_ms)],
     ["Why the model stopped", shown(answer.stop_reason)],
   ];
+}
+
+// The badges under an answer: how it was made, in a word or two each, as a label, a value
+// and a tone, which is "" for most and names a colour for the few that stand out. They
+// sum up the facts above, which stay in full under "All details". How many passages the
+// search found is not in the answer: its badge is filled by the search beside it.
+function answerBadges(answer) {
+  const badges = [];
+  const searched = searchedFor(answer.searched_for);
+  if (searched !== null && searched.outcome !== "not_asked") {
+    const asTyped = searched.outcome === "failed" || searched.outcome === "unusable";
+    badges.push(["Follow-up", rewriteInBrief(searched.outcome), asTyped ? "warn" : ""]);
+  }
+  const hit = cacheHit(answer);
+  if (hit !== null) {
+    const tier = hit.tier === "exact" ? "exact match" : "matched by meaning";
+    badges.push(["From the cache", tier, "cache"]);
+  }
+  if (answer.answered) {
+    badges.push(["Cited", plural(answer.sources.length, "source", "sources"), ""]);
+  }
+  badges.push(["Model", shown(answer.model), ""]);
+  const firstText = answer.first_text_ms === null ? "none" : seconds(answer.first_text_ms);
+  badges.push(["Time", `first words ${firstText}, in all ${seconds(answer.took_ms)}`, ""]);
+  badges.push(["Tokens", hit === null ? tokensInBrief(answer.usage) : "none: no request", ""]);
+  const requests = Number.isInteger(answer.requests) ? answer.requests : null;
+  if (requests !== null && requests > 1) {
+    badges.push(["Requests", String(requests), "warn"]);
+  }
+  if (answer.fallback === true) {
+    badges.push(["Written by", "the fallback model", "warn"]);
+  }
+  return badges;
+}
+
+// The tokens of a request in brief: read, then written.
+function tokensInBrief(usage) {
+  const { input_tokens: read, output_tokens: written } = usage;
+  return Number.isFinite(read) && Number.isFinite(written)
+    ? `${read} in, ${written} out`
+    : "unknown";
+}
+
+// What the rewriting step did, in brief, for a badge.
+function rewriteInBrief(outcome) {
+  const words = {
+    unchanged: "already stood alone",
+    rewritten: "rewritten to stand alone",
+    unusable: "rewrite not usable",
+    failed: "rewrite failed",
+  };
+  return Object.hasOwn(words, outcome) ? words[outcome] : shown(outcome);
 }
 
 // What the answer took, as pairs of a label and a value, when that is worth showing:
@@ -307,6 +370,37 @@ function plural(count, one, many) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
+// ---- Sources in brief -----------------------------------------------------------------
+
+// The headings above a passage, outermost first, as far as they are text.
+function headings(passage) {
+  return Array.isArray(passage.heading_path)
+    ? passage.heading_path.filter((heading) => typeof heading === "string" && heading !== "")
+    : [];
+}
+
+// A short piece of a passage for its card: its lines without the Markdown headings, which
+// the card shows above it already, joined into one line and cut at a word near the length
+// given. It stays text: nothing in it is read as Markdown. The whole passage is folded
+// away under the card.
+function snippet(text, length = 200) {
+  if (typeof text !== "string") {
+    return "";
+  }
+  const words = text
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (words.length <= length) {
+    return words;
+  }
+  const cut = words.slice(0, length);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > length / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
 // ---- Failures in words ----------------------------------------------------------------
 
 // What a reader is told when the service refused a request: from the status, the body
@@ -358,18 +452,20 @@ function waitInWords(retryAfter) {
 
 // ---- Keys and announcements -----------------------------------------------------------
 
-// Whether a key press in the question box asks the question: Ctrl+Enter, or Cmd+Enter on
-// a Mac. Enter alone starts a new line, and an Enter that finishes a character being
-// composed, as some keyboards for other scripts do, asks nothing.
+// Whether a key press in the question box asks the question: Enter, as in any chat box,
+// and Ctrl+Enter or Cmd+Enter as well. Shift+Enter starts a new line. An Enter that
+// finishes a character being composed with an input method, as keyboards for some
+// scripts do, asks nothing: the browser says so with isComposing, and Safari, which sends
+// that Enter after the composition has ended, with the key code 229.
 function isAskKey(event) {
-  return event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing;
+  return event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229;
 }
 
 // The text that puts a message in the status line so that a screen reader announces it.
 // The same text set again is not announced, so a repeated message gets a no-break space
 // added, which changes the text and not what is read. The next repeat takes it off.
 function announcement(previous, words) {
-  return previous === words ? `${words} ` : words;
+  return previous === words ? `${words} ` : words;
 }
 
 // ---- Building the page ----------------------------------------------------------------
@@ -382,25 +478,21 @@ const page = {
   stop: document.getElementById("stop"),
   examples: [...document.querySelectorAll("button.example")],
   status: document.getElementById("status"),
-  answerArea: document.getElementById("answer-area"),
-  stream: document.getElementById("stream"),
-  answer: document.getElementById("answer"),
   failure: document.getElementById("failure"),
-  sourcesArea: document.getElementById("sources-area"),
-  sources: document.getElementById("sources"),
-  factsArea: document.getElementById("facts-area"),
-  facts: document.getElementById("facts"),
-  searched: document.getElementById("searched"),
+  welcome: document.getElementById("welcome"),
+  turns: document.getElementById("turns"),
   conversationArea: document.getElementById("conversation-area"),
+  conversationCount: document.getElementById("conversation-count"),
   conversation: document.getElementById("conversation"),
   newConversation: document.getElementById("new-conversation"),
-  searchArea: document.getElementById("search-area"),
-  searchCount: document.getElementById("search-count"),
-  searchState: document.getElementById("search-state"),
-  passages: document.getElementById("passages"),
 };
 
 const UNREADABLE_ANSWER = "The service sent an answer this page cannot read.";
+
+// What the fold of found passages says about them, after the name of the request. It is
+// the same for every turn.
+const SEARCH_HINT =
+  " returns for the question that was searched for, best first: for a follow-up, the question it was rewritten to. The answer runs this search before the model writes, and with the default settings it takes as many passages, so these are the passages the model was given. An answer that came from the cache ran no search: it was written earlier, from the passages found then for the question it names. Compare them with the sources the answer cites. This search costs no request to the model.";
 
 // An element with a class and its text. The text is set as text, never parsed.
 function make(tag, className, text) {
@@ -416,7 +508,8 @@ function make(tag, className, text) {
 
 // The one place that makes a link: to a source's page, from the url field the API sends.
 // Only an address that starts with https:// or http:// becomes a link. An address of any
-// other kind leaves the title as plain text.
+// other kind leaves the title as plain text. The whole address is the link's title, shown
+// when the link is pointed at.
 function sourceLink(url, title) {
   const isWebAddress =
     typeof url === "string" && (url.startsWith("https://") || url.startsWith("http://"));
@@ -429,69 +522,284 @@ function sourceLink(url, title) {
   link.href = url;
   link.target = "_blank";
   link.rel = "noopener noreferrer";
+  link.title = url;
   link.textContent = title;
   link.append(make("span", "visually-hidden", " (opens in a new tab)"));
   return link;
 }
 
-// A source or a found passage: its label, its title as a link to its page, the address
-// of that page as text, the headings above it, and its text folded away until asked for.
-// The name says which it is, for the fold's screen reader name.
-function passageItem(label, name, passage, extra) {
-  const item = make("li", "source");
+// A web address in brief: its host, then the parts of its path as a breadcrumb. When that
+// runs long, the parts in the middle are left out: the last two are kept if they fit, then
+// the last, and the last is cut in its middle if it is still too long. The host is never
+// cut: it says which site the link leads to. Anything that is not a web address is given
+// whole.
+function addressInBrief(url, length = 42) {
+  const isWebAddress =
+    typeof url === "string" && (url.startsWith("https://") || url.startsWith("http://"));
+  if (!isWebAddress) {
+    return shown(url);
+  }
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  const parts = parsed.pathname.split("/").filter((part) => part !== "");
+  const crumbs = (list) => [parsed.host, ...list].join(" › ");
+  if (crumbs(parts).length <= length) {
+    return crumbs(parts);
+  }
+  const last = parts.at(-1);
+  const left = parts.length > 1 ? ["…"] : [];
+  if (parts.length > 2 && crumbs(["…", parts.at(-2), last]).length <= length) {
+    return crumbs(["…", parts.at(-2), last]);
+  }
+  if (crumbs([...left, last]).length <= length) {
+    return crumbs([...left, last]);
+  }
+  const half = Math.floor(Math.max(8, length - crumbs([...left, ""]).length - 1) / 2);
+  return crumbs([...left, `${last.slice(0, half)}…${last.slice(-half)}`]);
+}
+
+// Where a link leads, under its title, since the title can say anything: the address in
+// brief, which is what is shown, and the whole address, which a screen reader reads in
+// its place. The whole address is also the link's title, and is written out in full in
+// the fold with the passage.
+function addressLine(url) {
+  const line = make("p", "source-address");
+  const brief = make("span", "address-brief", addressInBrief(url));
+  brief.setAttribute("aria-hidden", "true");
+  line.append(brief, make("span", "visually-hidden", shown(url)));
+  return line;
+}
+
+// A passage's whole text and the whole address of its page, folded away until asked for.
+// Every fold shows the same words, so a screen reader is also told whose passage it is.
+function passageFold(name, title, passage) {
+  const fold = make("details", "passage");
+  const summary = make("summary", "", "Show the passage");
+  summary.append(make("span", "visually-hidden", ` of ${name}, ${title}`));
+  const address = make("p", "passage-address", shown(passage.url));
+  address.setAttribute("aria-hidden", "true");
+  fold.append(summary, address, make("p", "passage-text", shown(passage.text)));
+  return fold;
+}
+
+// A passage the search found: its rank, its title as a link to its page, the address of
+// that page as text, the headings above it, its score, and its text folded away.
+function passageItem(passage) {
+  const rank = shown(passage.rank);
   const title = shown(passage.title);
-  const heading = make("p", "source-title");
-  heading.append(make("span", "source-number", label), " ", sourceLink(passage.url, title));
+  const score = Number.isFinite(passage.score) ? passage.score.toFixed(3) : "unknown";
+  const item = make("li", "passage-item");
+  const heading = make("p", "passage-title");
+  heading.append(make("span", "passage-rank", `${rank}.`), " ", sourceLink(passage.url, title));
   item.append(heading);
   // The title is written by whoever edits the page, so the address is shown too, and the
   // reader sees where the link leads before following it.
-  item.append(make("p", "source-address", shown(passage.url)));
+  item.append(addressLine(passage.url));
+  const above = headings(passage);
   // The headings joined as the command line joins them.
-  if (Array.isArray(passage.heading_path) && passage.heading_path.length > 0) {
-    item.append(make("p", "source-headings", passage.heading_path.join(" > ")));
+  if (above.length > 0) {
+    item.append(make("p", "passage-headings", above.join(" > ")));
   }
-  if (extra !== "") {
-    item.append(make("p", "source-headings", extra));
-  }
-  const fold = make("details", "passage");
-  const summary = make("summary", "", "Show the passage");
-  // Every fold shows the same words, so a screen reader is also told whose passage it is.
-  summary.append(make("span", "visually-hidden", ` of ${name}, ${title}`));
-  fold.append(summary, make("p", "passage-text", shown(passage.text)));
-  item.append(fold);
+  item.append(make("p", "passage-headings", `Score ${score}`));
+  item.append(passageFold(`found passage ${rank}`, title, passage));
   return item;
 }
 
-// A number after a piece of the answer, which brings its source into view.
-function citeButton(number, title) {
+// A source the answer cites, as a card: its number, the page's title as a link followed
+// by the headings above the passage, a short piece of its text, the address of the page
+// written out, and the whole passage folded away. Pointing at the card or moving the
+// focus into it marks the numbers in the answer that cite it.
+function sourceCard(turn, source) {
+  const number = source.number;
+  const title = shown(source.title);
+  const card = make("li", "source-card");
+  const head = make("div", "source-head");
+  const path = make("p", "source-path");
+  path.append(sourceLink(source.url, title));
+  for (const heading of headings(source)) {
+    path.append(make("span", "crumb", heading));
+  }
+  head.append(make("span", "source-number", String(number)), path);
+  card.append(head);
+  const piece = snippet(source.text);
+  if (piece !== "") {
+    card.append(make("p", "source-snippet", piece));
+  }
+  // The title is written by whoever edits the page, so the address is shown too, and the
+  // reader sees where the link leads before following it.
+  card.append(addressLine(source.url));
+  card.append(passageFold(`source ${number}`, title, source));
+  card.addEventListener("mouseenter", () => link(turn, number, true));
+  card.addEventListener("mouseleave", () => link(turn, number, false));
+  card.addEventListener("focusin", () => link(turn, number, true));
+  card.addEventListener("focusout", () => link(turn, number, false));
+  turn.cards.set(number, card);
+  return card;
+}
+
+// A number after a piece of the answer. Pointing at it or focusing it marks its source's
+// card; pressing it brings the card into view.
+function citeButton(turn, number, title) {
   const button = make("button", "cite", String(number));
   button.type = "button";
   button.setAttribute("aria-label", `Source ${number}: ${title}`);
-  button.addEventListener("click", () => showSource(number));
+  button.addEventListener("click", () => showSource(turn, number));
+  button.addEventListener("mouseenter", () => link(turn, number, true));
+  button.addEventListener("mouseleave", () => link(turn, number, false));
+  button.addEventListener("focus", () => link(turn, number, true));
+  button.addEventListener("blur", () => link(turn, number, false));
+  const chips = turn.chips.get(number) ?? [];
+  chips.push(button);
+  turn.chips.set(number, chips);
   return button;
 }
 
-// Brings a source into view and marks it. The focus stays on the number that was
-// pressed, so the reader keeps their place in the answer and can press the next one,
-// and the status line says which source is marked and where.
-function showSource(number) {
-  const wanted = `source-${number}`;
-  for (const item of page.sources.children) {
-    item.classList.toggle("marked", item.id === wanted);
+// Shows a source's card and every number in the answer that cites it as one, while one
+// of them is pointed at or focused.
+function link(turn, number, on) {
+  for (const chip of turn.chips.get(number) ?? []) {
+    chip.classList.toggle("linked", on);
   }
-  const item = document.getElementById(wanted);
-  if (item !== null) {
-    item.scrollIntoView({ block: "nearest" });
-    say(`Source ${number} is marked, in the list of sources under the answer.`);
+  turn.cards.get(number)?.classList.toggle("linked", on);
+}
+
+// Brings a source's card into view and marks it. The focus stays on the number that was
+// pressed, so the reader keeps their place in the answer and can press the next one,
+// and the status line says which source is marked.
+function showSource(turn, number) {
+  for (const [each, card] of turn.cards) {
+    card.classList.toggle("marked", each === number);
+  }
+  const card = turn.cards.get(number);
+  if (card !== undefined) {
+    card.scrollIntoView({ block: "nearest" });
+    say(`Source ${number} is marked, in the sources of this answer.`);
   }
 }
 
-function renderAnswer(answer) {
-  const titles = new Map(answer.sources.map((source) => [source.number, shown(source.title)]));
-  const box = make("div", answer.answered ? "answer" : "answer decline");
-  if (!answer.answered) {
-    box.append(make("p", "decline-label", "Not an answer"));
+// A badge of the strip under an answer: a label and a value.
+function badge(label, value, tone) {
+  const item = make("li", tone === "" ? "badge" : `badge badge-${tone}`);
+  item.append(make("span", "badge-label", label), make("span", "visually-hidden", ": "));
+  item.append(make("span", "badge-value", value));
+  return item;
+}
+
+// A card that stands in for a source until the answer has come.
+function placeholderCard() {
+  const card = make("li", "source-card placeholder");
+  card.setAttribute("aria-hidden", "true");
+  card.append(make("span", "skeleton-line"), make("span", "skeleton-line"));
+  return card;
+}
+
+// ---- The turns ------------------------------------------------------------------------
+
+// The turns on the page, oldest first: each question asked since the conversation began,
+// with what came back for it. The conversation that is sent is another list, below: it
+// holds only the questions of turns that were answered, as they were searched for.
+const turns = [];
+
+// A new turn for a question: its bubble, the card its answer will fill, and beside it the
+// sources and what the search found. Until something comes, placeholders stand where the
+// text and the sources will be.
+function addTurn(question) {
+  const turn = { question, chips: new Map(), cards: new Map(), waiting: true };
+  const item = make("li", "turn");
+  const asked = make("div", "turn-asked");
+  const bubble = make("p", "bubble");
+  bubble.append(make("span", "visually-hidden", "You asked: "), question);
+  asked.append(bubble);
+
+  const card = make("article", "answer-card");
+  const head = make("div", "card-head");
+  turn.progress = make("span", "card-progress", "Searching the handbook");
+  turn.title = make("h3", "card-title", "Answer");
+  head.append(make("span", "card-mark"), turn.title, turn.progress);
+  turn.searchedLine = make("p", "searched");
+  turn.searchedLine.hidden = true;
+  turn.pending = make("div", "pending");
+  turn.pending.setAttribute("aria-hidden", "true");
+  turn.pending.append(make("span", "skeleton-line"), make("span", "skeleton-line"));
+  turn.pending.append(make("span", "skeleton-line"));
+  turn.stream = make("div", "stream");
+  turn.stream.hidden = true;
+  turn.body = make("div", "answer-body");
+  turn.error = make("div", "error-card");
+  turn.error.hidden = true;
+  turn.errorText = make("p", "error-text");
+  const again = make("button", "again", "Ask again");
+  again.type = "button";
+  again.addEventListener("click", () => start(question));
+  turn.error.append(make("p", "error-title", "No answer"), turn.errorText, again);
+  turn.note = make("p", "turn-note");
+  turn.note.hidden = true;
+  turn.made = make("div", "made");
+  turn.made.hidden = true;
+  turn.madeTitle = make("p", "made-title", "How this answer was made");
+  turn.badges = make("ul", "badges");
+  turn.found = make("span", "badge-value", "searching");
+  turn.foundBadge = make("li", "badge");
+  turn.foundBadge.append(make("span", "badge-label", "Search"));
+  turn.foundBadge.append(make("span", "visually-hidden", ": "), turn.found);
+  turn.badges.append(turn.foundBadge);
+  turn.factsFold = make("details", "facts-fold");
+  turn.facts = make("dl", "facts");
+  turn.factsFold.append(make("summary", "", "All details"), turn.facts);
+  turn.made.append(turn.madeTitle, turn.badges, turn.factsFold);
+  card.append(head, turn.searchedLine, turn.pending, turn.stream, turn.body);
+  card.append(turn.error, turn.note, turn.made);
+
+  const side = make("div", "turn-sources");
+  turn.sourcesBlock = make("div", "sources-block");
+  const sourcesTitle = make("h4", "side-title", "Sources");
+  turn.sourcesCount = make("span", "side-count", "");
+  sourcesTitle.append(turn.sourcesCount);
+  turn.sources = make("ol", "source-cards");
+  turn.sources.append(placeholderCard(), placeholderCard());
+  turn.sourcesBlock.append(sourcesTitle, turn.sources);
+  turn.searchFold = make("details", "search-fold");
+  turn.searchFold.hidden = true;
+  const summary = make("summary", "", "What the search found");
+  turn.searchCount = make("span", "side-count", "");
+  summary.append(turn.searchCount);
+  const hint = make("p", "hint");
+  hint.append("The passages ", make("code", "", "POST /search"), SEARCH_HINT);
+  turn.searchState = make("p", "search-state");
+  turn.passages = make("ol", "passages");
+  turn.searchFold.append(summary, hint, turn.searchState, turn.passages);
+  side.append(turn.sourcesBlock, turn.searchFold);
+
+  item.append(asked, card, side);
+  turn.item = item;
+  page.turns.append(item);
+  turns.push(turn);
+  updateChrome();
+  // The first turn stands under the page's header already. A later one is brought to the
+  // top, with room below it for the answer (the style gives the latest turn that room).
+  if (turns.length > 1) {
+    item.scrollIntoView({ block: "start" });
   }
+  return turn;
+}
+
+// Text of the answer as it is written: the placeholder makes way for it, and a caret
+// stands at its end until the turn ends.
+function addText(turn, text) {
+  turn.pending.hidden = true;
+  turn.stream.hidden = false;
+  turn.stream.classList.add("streaming");
+  turn.progress.textContent = "Writing";
+  turn.stream.append(text);
+}
+
+function renderAnswer(turn, answer) {
+  const titles = new Map(answer.sources.map((source) => [source.number, shown(source.title)]));
+  const parts = [];
   const hit = cacheHit(answer);
   if (hit !== null) {
     const note = make("div", "cached");
@@ -499,49 +807,71 @@ function renderAnswer(answer) {
     for (const line of cacheLines(hit)) {
       note.append(make("p", "", line));
     }
-    box.append(note);
+    parts.push(note);
   }
   const text = make("p", "answer-text");
   const pieces = answerPieces(answer);
   for (const piece of pieces) {
     text.append(piece.text);
     for (const number of piece.numbers) {
-      text.append(citeButton(number, titles.get(number)));
+      text.append(citeButton(turn, number, titles.get(number)));
     }
   }
   if (pieces.length === 0) {
     text.textContent = "The reply holds no text.";
   }
-  box.append(text);
-  const items = answer.sources.map((source) => {
-    const item = passageItem(`[${source.number}]`, `source ${source.number}`, source, "");
-    item.id = `source-${source.number}`;
-    return item;
-  });
+  parts.push(answer.answered ? text : notice(answer, text));
+  const cards = answer.sources.map((source) => sourceCard(turn, source));
+  if (cards.length === 0) {
+    const none = answer.answered ? "This answer cites no source." : "Nothing is cited: this reply is not an answer.";
+    cards.push(make("li", "sources-none", none));
+  }
   const facts = answerFacts(answer);
+  const badges = answerBadges(answer).map(([label, value, tone]) => badge(label, value, tone));
   // All is built before the page changes, so an answer that cannot be shown leaves the
   // streamed text in place. The final answer then takes the place of that text, which is
   // emptied and hidden.
-  page.stream.replaceChildren();
-  page.stream.hidden = true;
-  page.answer.replaceChildren(box);
-  page.sources.replaceChildren(...items);
-  page.sourcesArea.hidden = items.length === 0;
-  renderFacts(facts, answer.trace_id);
+  turn.waiting = false;
+  label(turn, cardLabel(answer));
+  turn.stream.replaceChildren();
+  turn.stream.hidden = true;
+  turn.body.replaceChildren(...parts);
+  turn.sources.replaceChildren(...cards);
+  turn.sourcesCount.textContent = answer.sources.length === 0 ? "" : ` ${answer.sources.length}`;
+  turn.badges.replaceChildren(turn.foundBadge, ...badges);
+  turn.madeTitle.textContent = answer.answered ? "How this answer was made" : "How this reply was made";
+  renderFacts(turn, facts, answer.trace_id);
+  turn.made.hidden = false;
 }
 
-// The facts of the request, and its trace id with a button that copies it.
-function renderFacts(rows, traceId) {
-  page.facts.replaceChildren();
+// A reply that is not an answer, as a calm notice and not as a failure: "I could not find
+// this in the handbook" is the right reply to a question the handbook does not cover. A
+// reply that was withheld or cut off says so, and why the model stopped.
+function notice(answer, text) {
+  const declined = isDecline(answer);
+  const box = make("div", declined ? "notice notice-decline" : "notice notice-unfinished");
+  box.append(make("p", "notice-title", declined ? "Not in the handbook" : "Not an answer"));
+  box.append(text);
+  const why = declined
+    ? "The assistant found nothing in the handbook that answers this, and says so instead of guessing."
+    : `The reply was withheld or did not come to a proper end. Why the model stopped: ${shown(answer.stop_reason)}.`;
+  box.append(make("p", "notice-why", why));
+  return box;
+}
+
+// The facts of the request, and its trace id with a button that copies it, folded away
+// under the badges.
+function renderFacts(turn, rows, traceId) {
+  turn.facts.replaceChildren();
   for (const [label, value] of rows) {
-    page.facts.append(make("dt", "", label), make("dd", "", value));
+    turn.facts.append(make("dt", "", label), make("dd", "", value));
   }
   if (typeof traceId === "string" && traceId !== "") {
     const value = make("dd", "");
     value.append(make("code", "", traceId), " ", copyButton(traceId));
-    page.facts.append(make("dt", "", "Trace id"), value);
+    turn.facts.append(make("dt", "", "Trace id"), value);
   }
-  page.factsArea.hidden = page.facts.children.length === 0;
+  turn.factsFold.hidden = turn.facts.children.length === 0;
 }
 
 function copyButton(text) {
@@ -563,21 +893,81 @@ function say(words) {
   page.status.textContent = announcement(page.status.textContent, words);
 }
 
-// Shows a failure in words. Text that had already arrived stays, marked as unfinished.
-function fail(words) {
-  const partial = page.stream.textContent !== "";
-  page.stream.classList.toggle("unfinished", partial);
-  page.failure.textContent = partial
-    ? `${words} The text above is only what arrived before the failure.`
-    : words;
+// Shows a failure in words, in its turn as a card that says what happened and offers to
+// ask again, and in the alert region, which a screen reader reads at once. Text that had
+// already arrived stays, marked as unfinished.
+function fail(turn, words) {
+  const partial = turn.stream.textContent !== "";
+  turn.stream.classList.toggle("unfinished", partial);
+  const told = partial ? `${words} The text above is only what arrived before the failure.` : words;
+  page.failure.textContent = told;
+  turn.errorText.textContent = told;
+  turn.error.hidden = false;
+  label(turn, "Failed");
   say("No answer.");
 }
 
+// The word over a turn's card, and the class that colours its mark, by how it ended.
+function label(turn, word) {
+  if (turn.ending !== undefined) {
+    turn.item.classList.remove(`ended-${turn.ending}`);
+  }
+  turn.ending = word.toLowerCase();
+  turn.title.textContent = word;
+  turn.item.classList.add(`ended-${turn.ending}`);
+}
+
+// What a reply is, in a word, for the label over its card.
+function cardLabel(answer) {
+  if (answer.answered) {
+    return "Answer";
+  }
+  return isDecline(answer) ? "Declined" : "Reply";
+}
+
+// A failure that came with a trace id shows it under the card, for a bug report. There is
+// no answer to make badges of.
+function failedFacts(turn, traceId) {
+  renderFacts(turn, [], traceId);
+  turn.madeTitle.textContent = "About this request";
+  turn.badges.hidden = true;
+  turn.made.hidden = turn.factsFold.hidden;
+}
+
+// Ends the turn's waiting look, however the turn ended: the placeholders go, the caret
+// stops and the line of progress is taken away. Sources that never came leave no empty
+// list behind.
+function settle(turn) {
+  turn.pending.hidden = true;
+  turn.progress.hidden = true;
+  turn.stream.classList.remove("streaming");
+  if (turn.waiting) {
+    turn.sources.replaceChildren();
+    turn.sourcesBlock.hidden = true;
+  }
+}
+
 // Shows the question searched for above the answer, as text, when it is not the one asked.
-function showSearched(searched, followUp) {
+function showSearched(turn, searched, followUp) {
   const line = searchedLine(searched, followUp);
-  page.searched.textContent = line;
-  page.searched.hidden = line === "";
+  turn.searchedLine.textContent = line;
+  turn.searchedLine.hidden = line === "";
+  turn.searchedLine.classList.toggle("searched-as-typed", line !== "" && !line.startsWith("Searched for:"));
+}
+
+// What the page shows around the turns: the welcome while there are none, and the button
+// that starts again once there is something to start again from.
+function updateChrome() {
+  page.welcome.hidden = turns.length > 0;
+  page.newConversation.hidden = turns.length === 0 && conversation.length === 0;
+}
+
+// Takes every turn off the page, for a new conversation.
+function clearThread() {
+  turns.length = 0;
+  page.turns.replaceChildren();
+  page.failure.textContent = "";
+  updateChrome();
 }
 
 // ---- The conversation -----------------------------------------------------------------
@@ -601,21 +991,9 @@ function forget() {
 function renderConversation() {
   page.conversation.replaceChildren(...conversation.map((question) => make("li", "", question)));
   page.conversationArea.hidden = conversation.length === 0;
-}
-
-function clearAnswer() {
-  page.answerArea.hidden = false;
-  page.searched.textContent = "";
-  page.searched.hidden = true;
-  page.stream.replaceChildren();
-  page.stream.hidden = false;
-  page.stream.classList.remove("unfinished");
-  page.answer.replaceChildren();
-  page.failure.textContent = "";
-  page.sources.replaceChildren();
-  page.sourcesArea.hidden = true;
-  page.facts.replaceChildren();
-  page.factsArea.hidden = true;
+  const sent = Math.min(conversation.length, EARLIER_SENT);
+  page.conversationCount.textContent = plural(sent, "earlier question", "earlier questions");
+  updateChrome();
 }
 
 // ---- Asking ---------------------------------------------------------------------------
@@ -624,28 +1002,36 @@ function clearAnswer() {
 // first is answered or stopped, so nothing of the first can land in the second's answer.
 let current = null;
 
-// The buttons are marked unavailable with aria-disabled instead of disabled, so that the
-// button a keyboard user just pressed keeps the focus.
+// While an answer is being written, the stop button shows beside Ask, and Ask shows that
+// it is busy. Ask and the examples are marked unavailable with aria-disabled instead of
+// disabled, so that the button a keyboard user just pressed keeps the focus. The stop
+// button goes once the answer has ended; if it held the focus, the focus goes back to the
+// question box instead of being lost.
 function setBusy(busy) {
   page.ask.setAttribute("aria-disabled", String(busy));
   for (const example of page.examples) {
     example.setAttribute("aria-disabled", String(busy));
   }
-  page.stop.setAttribute("aria-disabled", String(!busy));
+  if (!busy && document.activeElement === page.stop) {
+    page.question.focus();
+  }
+  page.stop.hidden = !busy;
+  page.form.classList.toggle("busy", busy);
 }
 
 async function ask(question) {
   const controller = new AbortController();
   current = controller;
   setBusy(true);
-  clearAnswer();
+  page.failure.textContent = "";
   const earlier = conversation.slice(-EARLIER_SENT);
+  const turn = addTurn(question);
   // A question asked by itself is searched for as it is. A follow-up is searched for once
   // the service has said which question it searched for.
   if (earlier.length === 0) {
-    search(question);
+    search(turn, question);
   }
-  say("Asking. The answer appears below as the model writes it.");
+  say("Asking. The answer appears in the conversation as the model writes it.");
   try {
     const response = await fetch("/ask", {
       method: "POST",
@@ -654,43 +1040,45 @@ async function ask(question) {
       signal: controller.signal,
     });
     if (response.ok) {
-      await readAnswer(response, question, earlier.length > 0);
+      await readAnswer(turn, response, question, earlier.length > 0);
     } else {
-      await refused(response);
+      await refused(turn, response);
     }
   } catch (error) {
     if (controller.signal.aborted) {
-      stopped();
+      stopped(turn);
     } else {
       // A network failure, or a mistake in this script: the console says which.
       console.error(error);
       fail(
-        page.stream.textContent === ""
+        turn,
+        turn.stream.textContent === ""
           ? "The service could not be reached. Is it running?"
           : "The connection to the service broke.",
       );
     }
   } finally {
+    settle(turn);
     current = null;
     setBusy(false);
   }
 }
 
-async function refused(response) {
+async function refused(turn, response) {
   const body = await response.json().catch(() => null);
-  fail(refusalInWords(response.status, body, response.headers.get("Retry-After")));
-  renderFacts([], response.headers.get("X-Trace-Id"));
+  fail(turn, refusalInWords(response.status, body, response.headers.get("Retry-After")));
+  failedFacts(turn, response.headers.get("X-Trace-Id"));
 }
 
 // Reads the events of the answer: the question searched for, text as it is written, then
 // the answer or an error. The text is not announced piece by piece: the status line says
 // that the model is writing, and when the answer is complete.
-async function readAnswer(response, question, followUp) {
+async function readAnswer(turn, response, question, followUp) {
   const traceId = response.headers.get("X-Trace-Id");
   const contentType = response.headers.get("Content-Type");
   if (mediaType(contentType) !== "text/event-stream") {
-    fail(notAStream(contentType));
-    renderFacts([], traceId);
+    fail(turn, notAStream(contentType));
+    failedFacts(turn, traceId);
     return;
   }
   let ended = false;
@@ -702,86 +1090,88 @@ async function readAnswer(response, question, followUp) {
     if (event.name === "searched") {
       const searched = searchedFor(data);
       if (searched !== null) {
-        showSearched(searched, followUp);
+        showSearched(turn, searched, followUp);
         if (followUp) {
-          search(searched.question);
+          search(turn, searched.question);
         }
       }
     } else if (event.name === "text" && data !== null && typeof data.text === "string") {
-      if (page.stream.textContent === "") {
+      if (turn.stream.textContent === "") {
         say("The model is writing.");
       }
-      page.stream.append(data.text);
+      addText(turn, data.text);
     } else if (event.name === "answer") {
       ended = true;
-      if (showAnswer(data)) {
+      if (showAnswer(turn, data)) {
         const searched = searchedFor(data.searched_for);
         remember(searched === null ? question : searched.question);
       }
     } else if (event.name === "error") {
       ended = true;
       const detail = data !== null && typeof data.detail === "string" ? data.detail : "";
-      fail(detail === "" ? "The answer could not be finished." : detail);
-      renderFacts([], traceId);
+      fail(turn, detail === "" ? "The answer could not be finished." : detail);
+      failedFacts(turn, traceId);
     }
   });
   if (!ended) {
-    fail("The answer stopped before it was complete: the stream ended without it.");
-    renderFacts([], traceId);
+    fail(turn, "The answer stopped before it was complete: the stream ended without it.");
+    failedFacts(turn, traceId);
   }
 }
 
 // Shows the answer event, or says that it cannot be read. Its shape is checked first,
 // and a fault while building it is caught too, so a reader is never told that the
 // connection broke when it was the answer that could not be read. True when it is shown.
-function showAnswer(data) {
+function showAnswer(turn, data) {
   if (!isAnswer(data)) {
-    fail(UNREADABLE_ANSWER);
+    fail(turn, UNREADABLE_ANSWER);
     return false;
   }
   try {
-    renderAnswer(data);
+    renderAnswer(turn, data);
   } catch (error) {
     console.error(error);
-    fail(UNREADABLE_ANSWER);
+    fail(turn, UNREADABLE_ANSWER);
     return false;
   }
   const from = cacheHit(data) === null ? "" : " It came from the cache.";
-  say(
-    data.answered
-      ? `The answer is complete. It cites ${plural(data.sources.length, "source", "sources")}.${from}`
-      : `Not an answer: the assistant declined, or its reply did not come to a proper end.${from}`,
-  );
+  let words = `The answer is complete. It cites ${plural(data.sources.length, "source", "sources")}.`;
+  if (!data.answered) {
+    words = isDecline(data)
+      ? "Not in the handbook: the assistant declined instead of guessing."
+      : "Not an answer: the reply was withheld or did not come to a proper end.";
+  }
+  say(`${words}${from}`);
   return true;
 }
 
-function stopped() {
+function stopped(turn) {
   // Stop can be pressed in the moment after the answer or an error event arrived and
   // before the stream closed. The request had ended by then, and its outcome stands.
-  if (page.answer.children.length > 0 || page.failure.textContent !== "") {
+  if (turn.body.children.length > 0 || !turn.error.hidden) {
     return;
   }
-  const partial = page.stream.textContent !== "";
-  page.stream.classList.toggle("unfinished", partial);
-  say(
-    partial
-      ? "Stopped. The text above is only what arrived before that."
-      : "Stopped before the model wrote anything.",
-  );
+  const partial = turn.stream.textContent !== "";
+  turn.stream.classList.toggle("unfinished", partial);
+  const words = partial
+    ? "Stopped. The text above is only what arrived before that."
+    : "Stopped before the model wrote anything.";
+  turn.note.textContent = words;
+  turn.note.hidden = false;
+  label(turn, "Stopped");
+  say(words);
 }
 
 // ---- What the search found ------------------------------------------------------------
 
 // The search for the question, run beside the answer. It costs no request to the model.
-// A search that comes back after the next question was asked is dropped.
-let searches = 0;
-
-async function search(question) {
-  const mine = ++searches;
-  page.searchArea.hidden = false;
-  page.searchCount.textContent = "";
-  page.searchState.textContent = "Searching.";
-  page.passages.replaceChildren();
+// Each turn has its own, so a search that comes back late fills the turn it was run for.
+async function search(turn, question) {
+  turn.searchFold.hidden = false;
+  turn.searchCount.textContent = "";
+  turn.searchState.textContent = "Searching.";
+  turn.passages.replaceChildren();
+  turn.found.textContent = "searching";
   let response;
   let body;
   try {
@@ -793,32 +1183,25 @@ async function search(question) {
     body = await response.json().catch(() => null);
   } catch (error) {
     console.error(error);
-    if (mine === searches) {
-      page.searchState.textContent = "The search failed. The service could not be reached.";
-    }
-    return;
-  }
-  if (mine !== searches) {
+    turn.searchState.textContent = "The search failed. The service could not be reached.";
+    turn.found.textContent = "failed";
     return;
   }
   if (response.ok && isObject(body) && Array.isArray(body.results)) {
-    renderPassages(body.results.filter(isObject));
+    renderPassages(turn, body.results.filter(isObject));
   } else {
     const words = refusalInWords(response.status, body, response.headers.get("Retry-After"));
-    page.searchState.textContent = `The search failed. ${words}`;
+    turn.searchState.textContent = `The search failed. ${words}`;
+    turn.found.textContent = "failed";
   }
 }
 
-function renderPassages(results) {
-  page.searchCount.textContent = `(${plural(results.length, "passage", "passages")})`;
-  page.searchState.textContent = results.length === 0 ? "The search found nothing." : "";
-  page.passages.replaceChildren(
-    ...results.map((result) => {
-      const rank = shown(result.rank);
-      const score = Number.isFinite(result.score) ? result.score.toFixed(3) : "unknown";
-      return passageItem(`${rank}.`, `found passage ${rank}`, result, `Score ${score}`);
-    }),
-  );
+function renderPassages(turn, results) {
+  const count = plural(results.length, "passage", "passages");
+  turn.searchCount.textContent = ` ${count}`;
+  turn.found.textContent = results.length === 0 ? "nothing found" : `${count} found`;
+  turn.searchState.textContent = results.length === 0 ? "The search found nothing." : "";
+  turn.passages.replaceChildren(...results.map(passageItem));
 }
 
 // ---- Wiring ---------------------------------------------------------------------------
@@ -827,42 +1210,51 @@ function showCount() {
   page.count.textContent = `${page.question.value.length} of ${page.question.maxLength} characters`;
 }
 
+// Asks a question, unless one is being answered or there is none. True when it is asked.
 function start(question) {
   if (current !== null) {
     say("An answer is still being written. Stop it first, or wait for it.");
-    return;
+    return false;
   }
   if (question === "") {
     say("Type a question first.");
     page.question.focus();
-    return;
+    return false;
   }
   ask(question);
+  return true;
+}
+
+// Asks the question in the box, and empties the box once the question is on its way: the
+// conversation shows it as it was asked. A question over the limit is not sent: the box
+// holds no more than that, so only a script could have put it there.
+function askFromBox() {
+  if (page.question.value.length > page.question.maxLength) {
+    say(`The question is longer than ${page.question.maxLength} characters.`);
+    return;
+  }
+  if (start(page.question.value.trim())) {
+    page.question.value = "";
+    showCount();
+  }
 }
 
 page.form.addEventListener("submit", (event) => {
   event.preventDefault();
-  start(page.question.value.trim());
+  askFromBox();
 });
 
 // Asking from the keyboard without leaving the box.
 page.question.addEventListener("keydown", (event) => {
   if (isAskKey(event)) {
     event.preventDefault();
-    start(page.question.value.trim());
+    askFromBox();
   }
 });
 
-// An example question is put in the box, so the reader sees what was asked, and asked.
+// An example question is asked as it is, and shows in the conversation like any other.
 for (const example of page.examples) {
-  example.addEventListener("click", () => {
-    const question = example.textContent.trim();
-    if (current === null) {
-      page.question.value = question;
-      showCount();
-    }
-    start(question);
-  });
+  example.addEventListener("click", () => start(example.textContent.trim()));
 }
 
 page.stop.addEventListener("click", () => {
@@ -878,6 +1270,7 @@ page.newConversation.addEventListener("click", () => {
     say("An answer is still being written. Stop it first, or wait for it.");
     return;
   }
+  clearThread();
   forget();
   say("A new conversation: the next question is asked by itself.");
   page.question.focus();
@@ -885,3 +1278,4 @@ page.newConversation.addEventListener("click", () => {
 
 page.question.addEventListener("input", showCount);
 showCount();
+setBusy(false);

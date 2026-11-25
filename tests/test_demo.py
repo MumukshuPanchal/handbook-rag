@@ -37,6 +37,12 @@ from handbook_rag.index.indexer import index_chunks
 from tests.support import FakeEmbedder, FakeSparseEncoder, make_chunk
 
 GOLDEN = Path(__file__).parents[1] / "evals" / "golden" / "questions.jsonl"
+# The page's header leads to the README's sections on how the system works and how it is
+# measured, in the project's own repository.
+REPOSITORY = "https://github.com/MumukshuPanchal/handbook-rag"
+README_LINKS = [f"{REPOSITORY}#how-it-works", f"{REPOSITORY}#results"]
+# The example questions on the page: answerable ones, and one the handbook does not answer.
+EXAMPLES = 4
 
 
 def application(settings: Settings | None = None) -> FastAPI:
@@ -225,6 +231,7 @@ class Markup(HTMLParser):
         self.elements: list[tuple[str, dict[str, str | None]]] = []
         self.inline_script = ""
         self.examples: list[str] = []
+        self.example_attributes: list[dict[str, str | None]] = []
         self.paragraphs: dict[str, str] = {}
         self._inside: str | None = None
 
@@ -236,6 +243,7 @@ class Markup(HTMLParser):
         elif tag == "button" and "example" in (attributes.get("class") or "").split():
             self._inside = "example"
             self.examples.append("")
+            self.example_attributes.append(attributes)
         elif tag == "p" and attributes.get("id"):
             self._inside = f"p#{attributes['id']}"
             self.paragraphs[str(attributes["id"])] = ""
@@ -275,26 +283,65 @@ def test_the_page_has_no_inline_script_or_style_and_loads_only_its_two_files() -
     for tag, attributes in markup.elements:
         assert "style" not in attributes, tag
         assert [name for name in attributes if name.startswith("on")] == [], tag
-    # Nothing else loads anything, or sends a form anywhere.
-    assert not {"img", "iframe", "frame", "object", "embed", "base"} & set(tags)
+    # Nothing else loads anything, or sends a form anywhere. The icons are drawn in the
+    # page's own markup, so the parts of an inline SVG that can fetch a file are refused too.
+    loaders = {"img", "iframe", "frame", "object", "embed", "base", "use", "image", "feimage"}
+    assert not (loaders | {"foreignobject"}) & set(tags)
     loading = {"src", "srcset", "data", "poster", "action", "formaction", "background"}
     for tag, attributes in markup.elements:
         if tag != "script":
             assert not loading & set(attributes), tag
+        if tag not in ("a", "link"):
+            assert not {"href", "xlink:href"} & set(attributes), tag
     assert [attrs for tag, attrs in markup.elements if attrs.get("http-equiv")] == []
-    # The page's one link of its own leads to the API's documentation, on this server.
-    assert [attrs.get("href") for tag, attrs in markup.elements if tag == "a"] == ["/docs"]
+    # The page's own links: two to the project's README, which leave the page in a new tab
+    # and tell the page they lead to nothing about it, and one to the API's documentation,
+    # on this server. No other.
+    links = [attrs for tag, attrs in markup.elements if tag == "a"]
+    assert [attrs.get("href") for attrs in links] == [*README_LINKS, "/docs"]
+    for attrs in links[: len(README_LINKS)]:
+        assert attrs.get("target") == "_blank"
+        assert attrs.get("rel") == "noopener noreferrer"
 
 
-def test_the_three_example_questions_are_real_questions_of_the_golden_set() -> None:
+def test_the_example_questions_are_real_questions_of_the_golden_set() -> None:
+    """Each example is a question of the golden set, word for word, of the type it shows.
+
+    The one marked as the decline is a question the handbook does not answer, and the page
+    says so next to it, so that a visitor sees a decline on purpose. Every other example
+    is answerable.
+    """
     rows = [json.loads(line) for line in GOLDEN.read_text(encoding="utf-8").splitlines()]
     golden = {row["question"]: row for row in rows}
-    examples = [text.strip() for text in page().examples]
+    markup = page()
+    examples = [text.strip() for text in markup.examples]
+    marked = [
+        "example-decline" in (attrs.get("class") or "").split()
+        for attrs in markup.example_attributes
+    ]
 
-    assert len(examples) == len(set(examples)) == 3
-    for example in examples:
+    assert len(examples) == len(set(examples)) == EXAMPLES
+    assert marked.count(True) == 1, "one example shows a decline"
+    for example, decline in zip(examples, marked, strict=True):
         assert example in golden, example
-        assert golden[example]["type"] == "answerable", example
+        assert golden[example]["type"] == ("unanswerable" if decline else "answerable"), example
+    (decline_attributes,) = [
+        attrs for attrs, decline in zip(markup.example_attributes, marked, strict=True) if decline
+    ]
+    note = str(decline_attributes.get("aria-describedby"))
+    assert "not in the handbook" in markup.paragraphs[note]
+
+
+def test_the_links_in_the_header_lead_to_sections_the_readme_has() -> None:
+    readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+    headings = {
+        re.sub(r"[^a-z0-9 -]", "", line.lstrip("#").strip().lower()).replace(" ", "-")
+        for line in readme.splitlines()
+        if line.startswith("## ")
+    }
+
+    for link in README_LINKS:
+        assert link.removeprefix(f"{REPOSITORY}#") in headings, link
 
 
 def test_the_page_tells_the_reader_the_length_limit_before_they_reach_it() -> None:
@@ -307,15 +354,41 @@ def test_the_page_tells_the_reader_the_length_limit_before_they_reach_it() -> No
 
 
 def test_the_hint_tells_the_keys_that_ask_and_the_script_listens_for_them() -> None:
+    """Enter asks, as in any chat box; Shift+Enter starts a new line; Ctrl+Enter and
+    Cmd+Enter ask too. An Enter that ends a composition with an input method asks nothing.
+
+    What each key does, and that an empty question, one over the limit, or one asked while
+    an answer is being written is not sent, is run in tests/test_demo_behaviour.py.
+    """
     markup = page()
     (box,) = [attrs for tag, attrs in markup.elements if tag == "textarea"]
-    script = static("demo.js")
+    keys = body_of("isAskKey")
 
-    assert "Ctrl+Enter" in markup.paragraphs["question-hint"]
-    assert "Cmd+Enter" in markup.paragraphs["question-hint"]
-    assert box["aria-keyshortcuts"] == "Control+Enter Meta+Enter"
-    assert 'event.key === "Enter" && (event.ctrlKey || event.metaKey)' in script
-    assert 'page.question.addEventListener("keydown"' in script
+    assert "Enter asks" in markup.paragraphs["question-hint"]
+    assert "Shift+Enter starts a new line" in markup.paragraphs["question-hint"]
+    assert box["aria-keyshortcuts"] == "Enter Control+Enter Meta+Enter"
+    assert 'event.key === "Enter"' in keys
+    assert "!event.shiftKey" in keys
+    assert "!event.isComposing" in keys
+    assert "event.keyCode !== 229" in keys
+    assert 'page.question.addEventListener("keydown"' in static("demo.js")
+
+
+def test_the_stop_button_is_hidden_until_an_answer_is_being_written() -> None:
+    by_id = {attrs["id"]: attrs for _, attrs in page().elements if attrs.get("id")}
+
+    assert "hidden" in by_id["stop"], "hidden before the script runs, too"
+    assert "page.stop.hidden = !busy;" in body_of("setBusy")
+
+
+def test_the_steps_beside_the_welcome_and_folded_on_a_phone_are_the_same() -> None:
+    html = static("demo.html")
+    steps = re.findall(r'<ol class="steps">(.*?)</ol>', html, re.DOTALL)
+
+    assert len(steps) == 2
+    assert steps[0] == steps[1]
+    assert "The handbook is searched" in steps[0].split("</li>")[0], "the search comes first"
+    assert '<details class="how-fold">' in html
 
 
 def test_the_question_has_a_label_and_the_state_of_the_request_is_announced() -> None:
@@ -328,10 +401,19 @@ def test_the_question_has_a_label_and_the_state_of_the_request_is_announced() ->
     assert labelled == ["question"]
     assert by_id["status"][1].get("role") == "status", "the state of the request"
     assert by_id["failure"][1].get("role") == "alert", "a failure, in words"
-    # The streamed text would be read piece by piece. The status line says that the model
-    # is writing, and when the answer is complete.
-    assert "aria-live" not in by_id["stream"][1]
+    # These two are the page's only regions that announce. The streamed text, which the
+    # script puts in each turn, would be read piece by piece: the status line says that
+    # the model is writing, and when the answer is complete. So no element of the page is
+    # a live region, and the script makes none, by attribute or by role.
+    announcing = {"status", "alert", "log", "marquee", "timer"}
+    assert {
+        str(attrs.get("id")) for _, attrs in markup.elements if attrs.get("role") in announcing
+    } == {"status", "failure"}
     assert [attrs["id"] for _, attrs in markup.elements if attrs.get("aria-live")] == []
+    assert "output" not in [tag for tag, _ in markup.elements], "an output element announces"
+    script = static("demo.js")
+    assert "aria-live" not in script
+    assert not re.search(r"\.role\b", script)
 
 
 def test_every_element_the_script_looks_up_is_on_the_page() -> None:
@@ -341,7 +423,7 @@ def test_every_element_the_script_looks_up_is_on_the_page() -> None:
 
     assert len(looked_up) > 10, "the script looks its elements up by id"
     assert looked_up <= ids, f"not on the page: {sorted(looked_up - ids)}"
-    assert len(markup.examples) == 3, 'the script looks for "button.example"'
+    assert len(markup.examples) == EXAMPLES, 'the script looks for "button.example"'
 
 
 # The script's source. It is read whole, comments and strings included: a line that looks
@@ -497,6 +579,8 @@ def test_the_one_function_that_makes_a_link_checks_the_address_first() -> None:
     assert body.count("createElement") == 1
     assert 'link.target = "_blank";' in body
     assert 'link.rel = "noopener noreferrer";' in body
+    # The whole address is the link's title, so whoever points at the link sees it.
+    assert "link.title = url;" in body
 
 
 # An answer that came from the answer cache (ADR 0020).
@@ -506,6 +590,13 @@ def body_of(name: str) -> str:
     source = static("demo.js")
     span = function_body(source, name)
     return source[span.start : span.stop]
+
+
+def body_of_constant(name: str) -> str:
+    """A top-level constant of the script: its declaration to the semicolon that ends it."""
+    source = static("demo.js")
+    start = source.index(f"\nconst {name} =")
+    return source[start : source.index(";\n", start) + 1]
 
 
 def test_a_cached_answer_names_the_question_it_was_written_for_as_text() -> None:
@@ -519,8 +610,15 @@ def test_a_cached_answer_names_the_question_it_was_written_for_as_text() -> None
     assert 'note.append(make("p", "", line));' in render
     assert 'make("p", "cached-label", "From the cache")' in render
     assert ".cached {" in static("demo.css")
-    # The search beside the answer is the new question's, not the one the answer was written from.
-    assert "An answer that came from the cache ran no search" in static("demo.html")
+    # The search beside the answer is the new question's, not the one the answer was written
+    # from. Each turn has its own fold of found passages, which the script builds, so the
+    # words that say so are the script's and are put in every fold.
+    assert "An answer that came from the cache ran no search" in body_of_constant("SEARCH_HINT")
+    assert "SEARCH_HINT);" in body_of("addTurn")
+    # The badge under the answer says it came from the cache, and from which tier.
+    badges = body_of("answerBadges")
+    assert '"From the cache"' in badges
+    assert 'hit.tier === "exact" ? "exact match" : "matched by meaning"' in badges
 
 
 def test_the_page_reads_the_fields_the_api_sends_for_a_cached_answer() -> None:
@@ -547,13 +645,14 @@ def test_the_question_searched_for_is_shown_as_text_when_it_is_not_the_one_asked
     # A follow-up that could not be rewritten says so: it was searched for as typed.
     assert 'searched.outcome === "failed" || searched.outcome === "unusable"' in line
     assert "as you typed it" in line
-    # Set as text, like everything else that comes from the API.
-    assert "page.searched.textContent = line;" in show
+    # Set as text, like everything else that comes from the API, in the line of its own
+    # turn: each turn has one, made empty and hidden with the turn.
+    assert "turn.searchedLine.textContent = line;" in show
     assert 'event.name === "searched"' in body_of("readAnswer")
     # A follow-up that the service did not rewrite at all says so too.
     assert 'followUp && searched.outcome === "not_asked"' in line
     assert "this service did not rewrite the follow-up" in line
-    assert "showSearched(searched, followUp);" in body_of("readAnswer")
+    assert "showSearched(turn, searched, followUp);" in body_of("readAnswer")
 
 
 def test_the_page_reads_the_fields_the_api_sends_for_the_question_searched_for() -> None:
@@ -592,7 +691,12 @@ def test_a_new_conversation_can_be_started_and_the_page_says_what_is_sent() -> N
     ids = {attrs["id"] for _, attrs in markup.elements if attrs.get("id")}
     html = static("demo.html")
 
-    assert {"conversation-area", "conversation", "new-conversation", "searched"} <= ids
+    assert {"conversation-area", "conversation", "new-conversation"} <= ids
     assert "Only questions are sent, never answers." in html
     assert "reloading it starts a new conversation" in html
     assert "conversation.length = 0;" in body_of("forget")
+    # The line about the question searched for belongs to each turn, which the script
+    # builds: it is not an element of the page's markup any more.
+    turn = body_of("addTurn")
+    assert 'turn.searchedLine = make("p", "searched");' in turn
+    assert "turn.searchedLine.hidden = true;" in turn

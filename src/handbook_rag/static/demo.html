@@ -9,73 +9,107 @@
 <script type="module" src="/static/demo.js"></script>
 </head>
 <body>
-<header>
-  <h1>Handbook assistant</h1>
-  <p>Ask a question about the GitLab handbook. The answer is written by a language model from the passages a search finds, and cites them by number.</p>
-  <p>Everything in an answer is shown as plain text. An address the model writes is not a link: the only links are the pages of the sources.</p>
+<header class="site-header">
+  <div class="site-header-inner">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+        <rect class="brand-tile" width="32" height="32" rx="9"/>
+        <path class="brand-page" d="M8 10.2c2.9-1 5.6-.7 7.6.9v11.6c-2-1.5-4.7-1.8-7.6-.9z"/>
+        <path class="brand-page" d="M24 10.2c-2.9-1-5.6-.7-7.6.9v11.6c2-1.5 4.7-1.8 7.6-.9z"/>
+      </svg>
+      <div class="brand-text">
+        <h1>Handbook assistant</h1>
+        <p class="tagline">Answers from the public GitLab handbook that cite the passages they rest on.</p>
+      </div>
+    </div>
+    <nav class="site-nav" aria-label="About this project">
+      <a href="https://github.com/MumukshuPanchal/handbook-rag#how-it-works" target="_blank" rel="noopener noreferrer">How it works<span class="visually-hidden"> (opens in a new tab)</span></a>
+      <a href="https://github.com/MumukshuPanchal/handbook-rag#results" target="_blank" rel="noopener noreferrer">How it is measured<span class="visually-hidden"> (opens in a new tab)</span></a>
+    </nav>
+  </div>
 </header>
 
-<main>
-  <noscript><p class="failure">This page needs JavaScript to ask a question.</p></noscript>
+<main class="app">
+  <noscript><p class="noscript">This page needs JavaScript to ask a question.</p></noscript>
 
-  <form id="ask-form" class="ask">
-    <label for="question">Your question</label>
-    <p id="question-hint" class="hint">Up to 500 characters. Enter starts a new line; Ctrl+Enter, or Cmd+Enter on a Mac, asks.</p>
-    <textarea id="question" name="query" rows="3" maxlength="500" aria-describedby="question-hint question-count" aria-keyshortcuts="Control+Enter Meta+Enter"></textarea>
-    <p id="question-count" class="hint">0 of 500 characters</p>
-    <div class="buttons">
-      <button type="submit" id="ask" aria-disabled="false">Ask</button>
-      <button type="button" id="stop" aria-disabled="true">Stop the answer</button>
+  <section id="welcome" class="welcome" aria-labelledby="welcome-heading">
+    <div class="welcome-main">
+      <p class="eyebrow">Search, then an answer with citations</p>
+      <h2 id="welcome-heading">What would you like to know about the GitLab handbook?</h2>
+      <p class="lede">The answer is written by a language model from the passages a search finds, and cites them by number. Point at a number, or press it, to see its source.</p>
+      <h3 id="examples-heading" class="label">Try one of these</h3>
+      <ul class="examples" aria-labelledby="examples-heading">
+        <li><button type="button" class="example" aria-disabled="false">How many weeks of parental leave do I get in the US?</button></li>
+        <li><button type="button" class="example" aria-disabled="false">Which personal VPN does GitLab recommend for team members?</button></li>
+        <li><button type="button" class="example" aria-disabled="false">How many days of paid annual leave do UK team members get?</button></li>
+        <li><button type="button" class="example example-decline" aria-disabled="false" aria-describedby="decline-example-note">How many weeks of paid parental leave does GitHub give its employees?</button></li>
+      </ul>
+      <p id="decline-example-note" class="hint example-note">The last one is not in the handbook: ask it to see the assistant decline instead of guessing.</p>
+      <p class="plain-text-note">Everything in an answer is shown as plain text. An address the model writes is not a link: the only links are the pages of the sources.</p>
+    </div>
+
+    <!-- The same steps twice: beside the welcome on a larger screen, and folded away on a
+         phone, where the question box should be in reach. One of the two is not
+         displayed, so a screen reader meets them once. A test holds them to the same words. -->
+    <aside class="how" aria-labelledby="how-heading">
+      <h3 id="how-heading">What happens when you ask</h3>
+      <ol class="steps">
+        <li><span><strong>The handbook is searched</strong> by meaning and by keyword, and the two lists are merged.</span></li>
+        <li><span><strong>A model writes the answer</strong> from the passages found, with a number after each statement. Code checks that every number names a passage that was sent.</span></li>
+        <li><span><strong>Or it declines</strong> with one fixed sentence when the passages do not hold the answer.</span></li>
+        <li><span><strong>A follow-up is rewritten first.</strong> With earlier questions, one request to the model turns "and in Finland?" into a question that stands alone.</span></li>
+        <li><span><strong>A stored answer</strong> is served again without a request, and names the question it was written for.</span></li>
+      </ol>
+    </aside>
+    <details class="how-fold">
+      <summary>What happens when you ask</summary>
+      <ol class="steps">
+        <li><span><strong>The handbook is searched</strong> by meaning and by keyword, and the two lists are merged.</span></li>
+        <li><span><strong>A model writes the answer</strong> from the passages found, with a number after each statement. Code checks that every number names a passage that was sent.</span></li>
+        <li><span><strong>Or it declines</strong> with one fixed sentence when the passages do not hold the answer.</span></li>
+        <li><span><strong>A follow-up is rewritten first.</strong> With earlier questions, one request to the model turns "and in Finland?" into a question that stands alone.</span></li>
+        <li><span><strong>A stored answer</strong> is served again without a request, and names the question it was written for.</span></li>
+      </ol>
+    </details>
+  </section>
+
+  <h2 id="turns-heading" class="visually-hidden">Conversation</h2>
+  <ol id="turns" class="turns" aria-labelledby="turns-heading"></ol>
+
+  <p id="failure" class="visually-hidden" role="alert"></p>
+
+  <form id="ask-form" class="composer" aria-label="Ask a question">
+    <div class="composer-inner">
+      <div class="context-bar">
+        <details id="conversation-area" class="context" hidden>
+          <summary><span class="on-wide">Sent with your next question: </span><span class="on-narrow" aria-hidden="true">Sends </span><span id="conversation-count">no earlier question</span></summary>
+          <div class="context-body">
+            <p class="hint">The questions asked so far, as they were searched for. The latest are sent with your next question, so that a follow-up such as "and in Finland?" can be rewritten into a question that stands alone, with one more request to the model. Only questions are sent, never answers. They are kept on this page only: reloading it starts a new conversation.</p>
+            <ol id="conversation" class="context-list"></ol>
+          </div>
+        </details>
+        <button type="button" id="new-conversation" class="ghost new" hidden><span class="on-wide">Start a new conversation</span><span class="on-narrow" aria-hidden="true">New</span></button>
+      </div>
+
+      <label for="question" class="visually-hidden">Your question</label>
+      <div class="field">
+        <textarea id="question" name="query" rows="2" maxlength="500" placeholder="Ask about the GitLab handbook" aria-describedby="question-hint question-count" aria-keyshortcuts="Enter Control+Enter Meta+Enter"></textarea>
+        <div class="field-actions">
+          <button type="button" id="stop" class="stop" hidden><svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="4" y="4" width="8" height="8" rx="1.5"/></svg><span class="button-label">Stop<span class="visually-hidden"> the answer</span></span></button>
+          <button type="submit" id="ask" class="send" aria-disabled="false"><span class="button-label">Ask</span><svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></button>
+        </div>
+      </div>
+
+      <div class="composer-meta">
+        <p id="question-hint" class="hint">Enter asks; Shift+Enter starts a new line. Up to 500 characters.</p>
+        <p id="question-count" class="hint count">0 of 500 characters</p>
+        <p id="status" class="status" role="status"></p>
+      </div>
     </div>
   </form>
-
-  <section class="examples" aria-labelledby="examples-heading">
-    <h2 id="examples-heading">Or ask one of these</h2>
-    <ul>
-      <li><button type="button" class="example" aria-disabled="false">How many weeks of parental leave do I get in the US?</button></li>
-      <li><button type="button" class="example" aria-disabled="false">Which personal VPN does GitLab recommend for team members?</button></li>
-      <li><button type="button" class="example" aria-disabled="false">How many days of paid annual leave do UK team members get?</button></li>
-    </ul>
-  </section>
-
-  <section id="conversation-area" class="conversation" aria-labelledby="conversation-heading" hidden>
-    <h2 id="conversation-heading">This conversation</h2>
-    <p class="hint">The questions asked so far, as they were searched for. The latest are sent with your next question, so that a follow-up such as "and in Finland?" can be rewritten into a question that stands alone, with one more request to the model. Only questions are sent, never answers. They are kept on this page only: reloading it starts a new conversation.</p>
-    <ol id="conversation" class="conversation-list"></ol>
-    <button type="button" id="new-conversation">Start a new conversation</button>
-  </section>
-
-  <p id="status" class="status" role="status"></p>
-
-  <div class="results">
-    <section id="answer-area" class="answer-area" aria-labelledby="answer-heading" hidden>
-      <h2 id="answer-heading">Answer</h2>
-      <p id="searched" class="searched" hidden></p>
-      <div id="stream" class="stream"></div>
-      <div id="answer"></div>
-      <div id="failure" class="failure" role="alert"></div>
-      <section id="sources-area" aria-labelledby="sources-heading" hidden>
-        <h3 id="sources-heading">Sources</h3>
-        <ol id="sources" class="sources"></ol>
-      </section>
-      <section id="facts-area" aria-labelledby="facts-heading" hidden>
-        <h3 id="facts-heading">About this request</h3>
-        <dl id="facts" class="facts"></dl>
-      </section>
-    </section>
-
-    <aside id="search-area" class="search-area" aria-label="What the search found" hidden>
-      <details>
-        <summary>What the search found <span id="search-count"></span></summary>
-        <p class="hint">The passages <code>POST /search</code> returns for the question that was searched for, best first: for a follow-up, the question it was rewritten to. The answer runs this search before the model writes, and with the default settings it takes as many passages, so these are the passages the model was given. An answer that came from the cache ran no search: it was written earlier, from the passages found then for the question it names. Compare them with the sources the answer cites. This search costs no request to the model.</p>
-        <p id="search-state"></p>
-        <ol id="passages" class="sources"></ol>
-      </details>
-    </aside>
-  </div>
 </main>
 
-<footer>
+<footer class="site-footer">
   <p>For this machine only. The service has no login, and every question asked here uses the answer model's allowance, unless the service holds a stored answer for it, and a follow-up uses one more request to be rewritten. The API's own documentation is at <a href="/docs">/docs</a>.</p>
 </footer>
 </body>

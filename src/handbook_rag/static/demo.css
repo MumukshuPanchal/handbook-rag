@@ -1,323 +1,942 @@
-/* The demo page's style. Plain and readable: the system's own fonts, nothing loaded
-   from elsewhere, and colours that follow the reader's light or dark setting. */
+/* The demo page's style. The system's own fonts, nothing loaded from elsewhere, no
+   image: the few icons are shapes drawn here or in the page's markup. Colours follow the
+   reader's light or dark setting, and motion stops for a reader who asks for less. */
+
+/* ---- Tokens ------------------------------------------------------------------------ */
 
 :root {
   color-scheme: light dark;
-  --text: #1f2328;
-  --muted: #59636e;
-  --background: #ffffff;
-  --surface: #f6f8fa;
-  --border: #d1d9e0;
-  --accent: #0b57d0;
-  --mark: #fff1b8;
-  --failure: #a40e26;
-  --failure-surface: #ffebe9;
-  --decline: #7d4e00;
-  --decline-surface: #fff8c5;
+
+  /* Colour. Each pair of text and background below meets WCAG AA for its size, and the
+     question box's edge stands out from what is around it by 3:1 at least. */
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --border: #e0e3e8;
+  --border-strong: #c3c9d2;
+  --field-border: #858c97;
+  --text: #1a1d23;
+  --muted: #555d6b;
+  --accent: #4f46e5;
+  --accent-strong: #4338ca;
+  --accent-text: #ffffff;
+  --accent-soft: #eef0fe;
+  --accent-border: #c5c9f6;
+  --ring: rgb(79 70 229 / 35%);
+  --bubble: #e7e9fd;
+  --mark: #fff6d6;
+  --cache: #0b6b5d;
+  --cache-soft: #e6f6f2;
+  --cache-border: #b3e0d5;
+  --notice-ink: #334155;
+  --notice-soft: #f3f5f8;
+  --notice-border: #d3d9e1;
+  --danger: #b0202f;
+  --danger-soft: #fdf1f2;
+  --danger-border: #f0c0c6;
+  --warn: #874600;
+  --warn-soft: #fff5e1;
+  --warn-border: #efd19b;
+  --shimmer: #e4e7ec;
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 6%), 0 1px 3px rgb(15 23 42 / 5%);
+  --shadow-md: 0 10px 28px -8px rgb(15 23 42 / 16%), 0 2px 6px rgb(15 23 42 / 6%);
+
+  /* Type: a scale of steps around a 16-pixel base. */
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.8125rem;
+  --fs-md: 0.875rem;
+  --fs-lg: 1.0625rem;
+  --fs-xl: 1.25rem;
+  --fs-2xl: clamp(1.5rem, 1.1rem + 1.6vw, 2.125rem);
+
+  /* Space: one rhythm of quarter steps. */
+  --s1: 0.25rem;
+  --s2: 0.5rem;
+  --s3: 0.75rem;
+  --s4: 1rem;
+  --s5: 1.5rem;
+  --s6: 2rem;
+  --s7: 3rem;
+
+  --radius-sm: 0.5rem;
+  --radius: 0.875rem;
+  --pill: 999px;
+  --page: 72rem;
+  --side: 21rem;
+  --gap: 2rem;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --text: #e6edf3;
-    --muted: #9198a1;
-    --background: #0d1117;
-    --surface: #161b22;
-    --border: #3d444d;
-    --accent: #7cacf8;
-    --mark: #3d3410;
-    --failure: #ffa198;
-    --failure-surface: #3c1618;
-    --decline: #e3b341;
-    --decline-surface: #2e2510;
+    --bg: #0e1015;
+    --surface: #161920;
+    --surface-2: #1e222a;
+    --border: #2a2f39;
+    --border-strong: #3d4450;
+    --field-border: #6b7381;
+    --text: #e8eaef;
+    --muted: #a0a8b5;
+    --accent: #a5b0fb;
+    --accent-strong: #c3cafd;
+    --accent-text: #12142b;
+    --accent-soft: #1f2347;
+    --accent-border: #3d4489;
+    --ring: rgb(165 176 251 / 38%);
+    --bubble: #262b4d;
+    --mark: #362f12;
+    --cache: #72d9c4;
+    --cache-soft: #102b27;
+    --cache-border: #1f4e46;
+    --notice-ink: #d2d8e2;
+    --notice-soft: #1a1e26;
+    --notice-border: #313846;
+    --danger: #ff9ca8;
+    --danger-soft: #2b1519;
+    --danger-border: #5c2631;
+    --warn: #f3bd6e;
+    --warn-soft: #2a2011;
+    --warn-border: #5b4421;
+    --shimmer: #282d37;
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-md: 0 12px 30px -10px rgb(0 0 0 / 60%), 0 2px 6px rgb(0 0 0 / 35%);
   }
 }
+
+/* ---- Base -------------------------------------------------------------------------- */
 
 /* The hidden attribute wins over any display rule below. */
 [hidden] {
   display: none !important;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
-  background: var(--background);
+  background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font);
   font-size: 1rem;
-  line-height: 1.5;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-header,
-main,
-footer {
-  max-width: 72rem;
-  margin: 0 auto;
-  padding: 0 1rem;
-}
-
-h1 {
-  font-size: 1.75rem;
-  margin: 1.5rem 0 0.5rem;
-}
-
-h2 {
-  font-size: 1.25rem;
-  margin: 1.5rem 0 0.5rem;
-}
-
-h3 {
-  font-size: 1.05rem;
-  margin: 1.25rem 0 0.5rem;
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
 }
 
 a {
   color: var(--accent);
+  text-underline-offset: 0.18em;
+}
+
+a:hover {
+  color: var(--accent-strong);
 }
 
 code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--mono);
   font-size: 0.9em;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+button[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* A focus that can always be seen, for keyboard users. */
 :focus-visible {
-  outline: 3px solid var(--accent);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-
-.hint,
-.source-headings,
-.source-address,
-.address,
-footer {
-  color: var(--muted);
+  border-radius: 0.25rem;
 }
 
 .hint {
-  margin: 0.25rem 0;
-  font-size: 0.9rem;
+  color: var(--muted);
+  font-size: var(--fs-xs);
 }
 
-label {
-  display: block;
-  font-weight: 600;
+/* Read by a screen reader, not shown. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
-textarea {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 48rem;
-  padding: 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 0.375rem;
-  background: var(--background);
-  color: var(--text);
-  font: inherit;
-}
+/* ---- Header ------------------------------------------------------------------------ */
 
-button {
-  padding: 0.4rem 0.9rem;
-  border: 1px solid var(--border);
-  border-radius: 0.375rem;
+.site-header {
+  border-bottom: 1px solid var(--border);
   background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  cursor: pointer;
 }
 
-button[type="submit"] {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--background);
-  font-weight: 600;
-}
-
-button[aria-disabled="true"] {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.buttons {
+.site-header-inner {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3) var(--s5);
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: var(--s3) var(--s4);
 }
 
-.examples ul {
+.brand {
   display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-width: 0;
+}
+
+.brand-mark {
+  flex: none;
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.brand-tile {
+  fill: var(--accent);
+}
+
+.brand-page {
+  fill: var(--accent-text);
+}
+
+h1 {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.tagline {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+
+.site-nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--pill);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+/* An arrow that says the link leaves the page. Not read out: the link says it in words. */
+.site-nav a::after {
+  content: "\2197";
+  content: "\2197" / "";
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.site-nav a:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* ---- Layout ------------------------------------------------------------------------ */
+
+.app {
+  display: flex;
+  flex: 1;
   flex-direction: column;
-  gap: 0.4rem;
+  width: 100%;
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: var(--s5) var(--s4) 0;
+}
+
+.noscript {
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* ---- Welcome ----------------------------------------------------------------------- */
+
+.welcome {
+  display: grid;
+  gap: var(--s5) var(--gap);
+  padding-bottom: var(--s5);
+}
+
+.eyebrow {
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.welcome h2 {
+  max-width: 34ch;
+  margin: var(--s2) 0 var(--s3);
+  font-size: var(--fs-2xl);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.lede {
+  max-width: 40rem;
+  color: var(--muted);
+  font-size: var(--fs-lg);
+}
+
+.label {
+  margin: var(--s5) 0 var(--s2);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.examples {
+  display: grid;
+  gap: var(--s2);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.examples button {
-  text-align: left;
-}
-
-/* The questions of the conversation, as they were searched for, and the question an
-   answer searched for when it is not the one asked. */
-.conversation-list {
-  margin: 0 0 0.5rem;
-  padding-left: 1.5rem;
-  overflow-wrap: anywhere;
-}
-
-.searched {
-  margin: 0 0 0.75rem;
-  padding: 0.5rem 0.75rem;
-  border-left: 4px solid var(--accent);
-  background: var(--surface);
-  overflow-wrap: anywhere;
-}
-
-.status {
-  min-height: 1.5em;
-  margin: 1rem 0;
-  font-weight: 600;
-}
-
-/* The answer, and what the search found beside it on a wide screen. */
-.results {
-  display: grid;
-  gap: 0 2rem;
-}
-
-@media (min-width: 60rem) {
-  .results {
-    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+@media (min-width: 40rem) {
+  .examples {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-.stream,
-.answer-text,
-.passage-text {
+.example {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  width: 100%;
+  height: 100%;
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  font-size: var(--fs-md);
+  line-height: 1.45;
+  text-align: left;
+}
+
+/* A dot before each example; a ring before the one the handbook does not answer. */
+.example::before {
+  content: "";
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-top: 0.4em;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.example-decline::before {
+  border: 2px solid var(--muted);
+  background: transparent;
+}
+
+.example:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.example-note {
+  margin-top: var(--s2);
+}
+
+.plain-text-note {
+  max-width: 40rem;
+  margin-top: var(--s4);
+  padding-left: var(--s3);
+  border-left: 2px solid var(--border-strong);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.how {
+  padding: var(--s4) var(--s5) var(--s5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.how h3 {
+  margin-bottom: var(--s4);
+  font-size: var(--fs-md);
+  font-weight: 700;
+}
+
+.steps {
+  display: grid;
+  gap: var(--s3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.steps li {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  gap: var(--s3);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  counter-increment: step;
+}
+
+/* The list is numbered already for a screen reader, so the drawn number is not read. */
+.steps li::before {
+  content: counter(step);
+  content: counter(step) / "";
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
+
+.steps strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* The same steps, folded away: shown on a phone only, in place of the card. */
+.how-fold {
+  display: none;
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.how-fold > summary {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.how-fold > .steps {
+  margin-top: var(--s3);
+}
+
+/* Words for a larger screen and their shorter form for a phone. The longer stays in what
+   a screen reader reads; the shorter is only shown. */
+.on-narrow {
+  display: none;
+}
+
+/* ---- The conversation -------------------------------------------------------------- */
+
+.turns {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.turn {
+  display: grid;
+  grid-template-areas:
+    "asked"
+    "answer"
+    "sources";
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--s3);
+  scroll-margin-top: var(--s4);
+}
+
+/* The latest turn takes the height of the window above the question box at least, so
+   that a new question can be brought to the top and its answer grows below it in view. */
+.turn:last-child {
+  min-height: calc(100vh - 16rem);
+  min-height: calc(100dvh - 16rem);
+}
+
+.turn-asked {
+  display: flex;
+  grid-area: asked;
+  justify-content: flex-end;
+}
+
+.bubble {
+  max-width: min(36rem, 88%);
+  padding: var(--s2) var(--s4);
+  border-radius: 1.125rem 1.125rem 0.375rem;
+  background: var(--bubble);
+  font-size: var(--fs-lg);
+  line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.stream.unfinished {
-  padding-left: 0.75rem;
-  border-left: 4px dashed var(--muted);
+/* The answer card. */
+.answer-card {
+  grid-area: answer;
+  min-width: 0;
+  padding: var(--s4) var(--s5) var(--s5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 
-.answer-text {
-  margin: 0;
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s3);
 }
 
-/* A reply that is not an answer looks different from one that is. */
-.decline {
-  padding: 0.75rem 1rem;
-  border-left: 4px solid var(--decline);
-  background: var(--decline-surface);
+/* The assistant's mark: a small tile in the accent colour with three lines of text drawn
+   on it, the last one short. */
+.card-mark {
+  position: relative;
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 0.375rem;
+  background: var(--accent);
 }
 
-.decline-label {
-  margin: 0 0 0.25rem;
-  color: var(--decline);
+.card-mark::before,
+.card-mark::after {
+  content: "";
+  position: absolute;
+  left: 0.3rem;
+  height: 0.125rem;
+  border-radius: 0.0625rem;
+  background: var(--accent-text);
+}
+
+.card-mark::before {
+  top: 0.34rem;
+  right: 0.3rem;
+  box-shadow: 0 0.22rem 0 var(--accent-text);
+}
+
+.card-mark::after {
+  top: 0.78rem;
+  width: 0.38rem;
+}
+
+.ended-declined .card-mark,
+.ended-reply .card-mark {
+  background: var(--notice-ink);
+}
+
+.ended-failed .card-mark {
+  background: var(--danger);
+}
+
+.ended-stopped .card-mark {
+  background: var(--muted);
+}
+
+.card-title {
+  color: var(--muted);
+  font-size: var(--fs-xs);
   font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.card-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.card-progress::before {
+  content: "";
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.answer-text,
+.stream {
+  font-size: var(--fs-lg);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A caret at the end of the text while it is being written. */
+.stream.streaming::after {
+  content: "";
+  display: inline-block;
+  width: 0.55em;
+  height: 1.1em;
+  margin-left: 0.1em;
+  border-radius: 1px;
+  background: var(--accent);
+  vertical-align: -0.15em;
+}
+
+.stream.unfinished {
+  padding-left: var(--s3);
+  border-left: 3px dashed var(--border-strong);
+}
+
+/* Placeholders where the text and the sources will be. */
+.pending {
+  display: grid;
+  gap: 0.6rem;
+  padding: var(--s1) 0 var(--s2);
+}
+
+.skeleton-line {
+  display: block;
+  height: 0.7rem;
+  border-radius: var(--pill);
+  background: var(--shimmer);
+}
+
+.pending .skeleton-line:nth-child(1) {
+  width: 92%;
+}
+
+.pending .skeleton-line:nth-child(2) {
+  width: 78%;
+}
+
+.pending .skeleton-line:nth-child(3) {
+  width: 55%;
+}
+
+/* The numbers in an answer, which lead to its sources. */
+.cite {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  margin: 0 0.1rem 0 0.2rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: 0.12em;
+}
+
+.cite:hover,
+.cite.linked {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+/* The question searched for, when it is not the one typed. */
+.searched {
+  display: flex;
+  gap: var(--s2);
+  margin-bottom: var(--s3);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+
+.searched::before {
+  content: "\21B3";
+  content: "\21B3" / "";
+  flex: none;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* A follow-up searched for as typed: the reader should know it may find little. */
+.searched.searched-as-typed {
+  border-color: var(--warn-border);
+  background: var(--warn-soft);
+}
+
+.searched.searched-as-typed::before {
+  content: "!";
+  content: "!" / "";
+  color: var(--warn);
 }
 
 /* An answer that came from the cache says so above its text. */
 .cached {
-  margin: 0 0 0.75rem;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--accent);
-  background: var(--surface);
+  margin-bottom: var(--s3);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--cache-border);
+  border-radius: var(--radius-sm);
+  background: var(--cache-soft);
+  font-size: var(--fs-md);
   overflow-wrap: anywhere;
 }
 
 .cached p {
-  margin: 0.25rem 0 0;
+  margin-top: var(--s1);
 }
 
 .cached .cached-label {
   margin: 0;
-  color: var(--accent);
+  color: var(--cache);
   font-weight: 700;
 }
 
-/* Kept in the page when empty, so that a screen reader hears it when it fills. */
-.failure:not(:empty) {
-  margin: 1rem 0;
-  padding: 0.75rem 1rem;
-  border-left: 4px solid var(--failure);
-  background: var(--failure-surface);
-  color: var(--failure);
+/* A reply that is not an answer: a calm notice, not a failure. */
+.notice {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  column-gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--notice-border);
+  border-radius: var(--radius-sm);
+  background: var(--notice-soft);
+  color: var(--notice-ink);
+}
+
+.notice > * {
+  grid-column: 2;
+}
+
+.notice::before,
+.error-card::before {
+  content: "i";
+  content: "i" / "";
+  display: grid;
+  grid-row: 1 / span 3;
+  grid-column: 1;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: var(--notice-ink);
+  color: var(--notice-soft);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: var(--fs-md);
+  font-style: italic;
+  font-weight: 700;
+}
+
+.notice-title,
+.error-title {
+  font-weight: 700;
+}
+
+.notice .answer-text {
+  margin: var(--s1) 0;
+  color: var(--text);
+}
+
+.notice-why {
+  font-size: var(--fs-sm);
+}
+
+/* A failure: what happened, and what to do. */
+.error-card {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  column-gap: var(--s3);
+  row-gap: var(--s1);
+  margin-top: var(--s3);
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+}
+
+.error-card > * {
+  grid-column: 2;
+}
+
+.error-card::before {
+  content: "!";
+  content: "!" / "";
+  background: var(--danger);
+  color: var(--danger-soft);
+  font-family: var(--font);
+  font-style: normal;
+}
+
+.error-title {
+  color: var(--danger);
+}
+
+.error-text {
+  overflow-wrap: anywhere;
+}
+
+.again {
+  justify-self: start;
+  margin-top: var(--s2);
+  padding: 0.3rem 0.85rem;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--pill);
+  background: var(--surface);
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 
-.cite {
-  min-width: 1.75rem;
-  margin: 0 0.1rem 0 0.2rem;
-  padding: 0 0.3rem;
-  border-color: var(--accent);
-  color: var(--accent);
-  font-size: 0.8rem;
-  line-height: 1.4;
-  vertical-align: 0.15em;
+.again:hover {
+  border-color: var(--danger);
 }
 
-.sources {
+.turn-note {
+  margin-top: var(--s3);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+
+/* How the answer was made: badges, and the details on request. */
+.made {
+  margin-top: var(--s4);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--border);
+}
+
+.made-title {
+  margin-bottom: var(--s2);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.source {
-  margin: 0 0 0.75rem;
-  padding: 0.5rem 0.75rem;
+.badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+  max-width: 100%;
+  padding: 0.2rem 0.6rem;
   border: 1px solid var(--border);
-  border-radius: 0.375rem;
+  border-radius: var(--pill);
+  background: var(--surface-2);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
 }
 
-.source.marked {
-  border-color: var(--accent);
-  background: var(--mark);
-}
-
-.source-title {
-  margin: 0;
-  font-weight: 600;
-}
-
-.source-number {
+.badge-label {
   color: var(--muted);
 }
 
-.source-headings {
-  margin: 0.15rem 0;
-  font-size: 0.9rem;
-}
-
-/* Where a source's link leads, written out, since its title can say anything. */
-.source-address {
-  margin: 0.15rem 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.8rem;
+.badge-value {
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
-.passage summary {
-  color: var(--accent);
-  font-size: 0.9rem;
-  cursor: pointer;
+.badge-cache {
+  border-color: var(--cache-border);
+  background: var(--cache-soft);
 }
 
-.passage-text {
-  margin: 0.5rem 0 0;
-  padding: 0.5rem;
-  background: var(--surface);
-  font-size: 0.9rem;
+.badge-cache .badge-label,
+.badge-cache .badge-value {
+  color: var(--cache);
+}
+
+.badge-warn {
+  border-color: var(--warn-border);
+  background: var(--warn-soft);
+}
+
+.badge-warn .badge-label,
+.badge-warn .badge-value {
+  color: var(--warn);
+}
+
+.facts-fold,
+.search-fold,
+.passage {
+  font-size: var(--fs-sm);
+}
+
+.facts-fold > summary,
+.passage > summary {
+  width: fit-content;
+  margin-top: var(--s2);
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .facts {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
-  gap: 0.25rem 1rem;
-  margin: 0;
+  gap: var(--s1) var(--s4);
+  margin: var(--s2) 0 0;
+  padding: var(--s3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
 }
 
 .facts dt {
@@ -330,30 +949,694 @@ button[aria-disabled="true"] {
 }
 
 .copy {
+  margin-left: var(--s1);
   padding: 0 0.5rem;
-  font-size: 0.85rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--pill);
+  background: var(--surface);
+  font-size: var(--fs-xs);
 }
 
-/* Only the panel's own heading: a passage folded away inside it keeps the small one. */
-.search-area > details > summary {
-  font-size: 1.25rem;
+/* ---- Sources ----------------------------------------------------------------------- */
+
+.turn-sources {
+  display: flex;
+  flex-direction: column;
+  grid-area: sources;
+  gap: var(--s4);
+  min-width: 0;
+}
+
+.side-title,
+.search-fold > summary {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.side-title {
+  margin-bottom: var(--s2);
+}
+
+.side-count {
+  margin-left: var(--s2);
+  padding: 0 0.45rem;
+  border-radius: var(--pill);
+  background: var(--surface-2);
+  color: var(--muted);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.side-count:empty {
+  display: none;
+}
+
+.source-cards,
+.passages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.source-card {
+  padding: var(--s3) var(--s4) var(--s3) var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.source-card.linked {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.source-card.marked {
+  border-color: var(--accent);
+  background: var(--mark);
+}
+
+.source-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+}
+
+.source-number {
+  display: grid;
+  flex: none;
+  place-items: center;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 0.375rem;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
+
+.source-card.linked .source-number,
+.source-card.marked .source-number {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.source-path {
+  min-width: 0;
+  font-size: var(--fs-md);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.source-path a {
+  color: var(--text);
   font-weight: 600;
-  margin: 1.5rem 0 0.5rem;
+  text-decoration-color: var(--border-strong);
+}
+
+.source-path a:hover {
+  color: var(--accent);
+  text-decoration-color: currentcolor;
+}
+
+/* The headings above the passage, after the page's title, as a breadcrumb. */
+.crumb {
+  color: var(--muted);
+}
+
+.crumb::before {
+  content: " \203A  ";
+  content: " \203A  " / " ";
+  white-space: pre;
+}
+
+.source-snippet,
+.source-card .source-address,
+.source-card .passage {
+  margin-left: 2.25rem;
+}
+
+.source-snippet {
+  display: -webkit-box;
+  margin-top: var(--s2);
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+/* Where a source's link leads, since its title can say anything: the host and the path
+   in brief, quiet, on one line. The whole address is the link's title and is written out
+   in the fold with the passage. */
+.source-address {
+  margin-top: var(--s1);
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.passage-address {
+  margin-top: var(--s2);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  overflow-wrap: anywhere;
+}
+
+.address {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.passage-text {
+  margin-top: var(--s2);
+  padding: var(--s3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sources-none {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.source-card.placeholder {
+  display: grid;
+  gap: var(--s2);
+  box-shadow: none;
+}
+
+.source-card.placeholder .skeleton-line:nth-child(1) {
+  width: 70%;
+}
+
+.source-card.placeholder .skeleton-line:nth-child(2) {
+  width: 90%;
+  height: 0.55rem;
+}
+
+/* What the search found, folded away under the sources. */
+.search-fold {
+  padding: var(--s3) var(--s4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.search-fold > summary {
   cursor: pointer;
 }
 
-footer {
-  margin-top: 3rem;
-  padding-bottom: 2rem;
-  font-size: 0.9rem;
+.search-fold > .hint {
+  margin: var(--s2) 0;
 }
 
-/* Read by a screen reader, not shown. */
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
+.search-state:empty {
+  display: none;
+}
+
+.passage-item {
+  padding-top: var(--s2);
+  border-top: 1px solid var(--border);
+}
+
+.passage-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.passage-rank {
+  color: var(--muted);
+}
+
+.passage-headings {
+  color: var(--muted);
+}
+
+/* ---- The question box -------------------------------------------------------------- */
+
+.composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: auto;
+  padding: var(--s5) 0 calc(var(--s3) + env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, transparent, var(--bg) var(--s5));
+}
+
+.context-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+.context-bar:has(> :not([hidden])) {
+  margin-bottom: var(--s2);
+}
+
+.context {
+  flex: 1 1 16rem;
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+
+.context > summary {
+  width: fit-content;
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--pill);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.context-body {
+  margin-top: var(--s2);
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.context-list {
+  margin: var(--s2) 0 0;
+  padding-left: var(--s5);
+  overflow-wrap: anywhere;
+}
+
+.ghost {
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--pill);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.ghost:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.field {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s2);
+  padding: var(--s2) var(--s2) var(--s2) var(--s4);
+  border: 1px solid var(--field-border);
+  border-radius: 1rem;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+/* The box draws its own focus ring, around the field and its buttons. */
+.field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring), var(--shadow-md);
+}
+
+textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 3.2rem;
+  max-height: 12rem;
+  padding: var(--s2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  line-height: 1.5;
+  resize: none;
+  field-sizing: content;
+}
+
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+textarea:focus-visible {
+  outline: none;
+}
+
+.field-actions {
+  display: flex;
+  flex: none;
+  gap: var(--s2);
+}
+
+.send,
+.stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 2.5rem;
+  padding: 0 var(--s4);
+  border-radius: 0.75rem;
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.send {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.send:not([aria-disabled="true"]):hover {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+}
+
+.stop {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.icon {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+}
+
+.send .icon {
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.stop .icon {
+  fill: currentcolor;
+}
+
+/* While an answer is being written, the stop button shows beside Ask, and Ask shows a
+   ring in place of its arrow. */
+.stop {
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+.busy .send[aria-disabled="true"] {
+  opacity: 0.75;
+}
+
+.busy .send .icon {
+  display: none;
+}
+
+.busy .send::after {
+  content: "";
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 2px solid currentcolor;
+  border-right-color: transparent;
+  border-radius: 50%;
+}
+
+.composer-meta {
+  display: grid;
+  grid-template-areas:
+    "hint count"
+    "status status";
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 var(--s4);
+  margin-top: var(--s2);
+  padding: 0 var(--s1);
+}
+
+#question-hint {
+  grid-area: hint;
+}
+
+.count {
+  grid-area: count;
+}
+
+.count {
+  font-variant-numeric: tabular-nums;
+}
+
+.status {
+  grid-area: status;
+  min-height: 1.4em;
+  margin-top: var(--s1);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+/* ---- Footer ------------------------------------------------------------------------ */
+
+.site-footer {
+  width: 100%;
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: var(--s3) var(--s4) var(--s5);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+/* ---- Wide screens: the sources beside the conversation ----------------------------- */
+
+@media (min-width: 64rem) {
+  .welcome {
+    grid-template-columns: minmax(0, 1fr) var(--side);
+    align-items: start;
+  }
+
+  .turn {
+    grid-template-areas:
+      "asked ."
+      "answer sources";
+    grid-template-columns: minmax(0, 1fr) var(--side);
+    column-gap: var(--gap);
+    align-items: start;
+  }
+
+  /* The question box, and the fade above it, cover the conversation's column only: the
+     sources beside it scroll free. */
+  .composer,
+  .site-footer p {
+    margin-right: calc(var(--side) + var(--gap));
+  }
+}
+
+/* ---- Narrow screens ---------------------------------------------------------------- */
+
+@media (max-width: 30rem) {
+  .answer-card {
+    padding: var(--s3) var(--s4) var(--s4);
+  }
+
+  .bubble {
+    max-width: 92%;
+  }
+
+  .site-nav {
+    width: 100%;
+  }
+
+  /* The question box keeps to a few lines: the buttons show their icons, and their names
+     are read out; the keys that ask are still the box's description, read out, but a
+     phone has no Ctrl key to show them for. */
+  .send,
+  .stop {
+    justify-content: center;
+    width: 2.5rem;
+    padding: 0;
+  }
+
+  .button-label,
+  #question-hint {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* The dock keeps to a few lines: the two controls in one row, the box, then the status
+     and the count in one line, the status cut short if it runs long. */
+  .composer {
+    padding-top: var(--s3);
+    background: linear-gradient(to bottom, transparent, var(--bg) var(--s3));
+  }
+
+  .context-bar {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  .context {
+    flex: 0 1 auto;
+  }
+
+  .context > summary,
+  .ghost {
+    padding: 0.2rem 0.65rem;
+    font-size: var(--fs-xs);
+  }
+
+  .on-narrow {
+    display: inline;
+  }
+
+  .on-wide {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .new::before {
+    content: "+ ";
+    content: "+ " / "";
+    font-weight: 700;
+  }
+
+  .composer-meta {
+    grid-template-areas: "status count";
+    margin-top: var(--s1);
+  }
+
+  .status {
+    margin-top: 0;
+    overflow: hidden;
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .site-header-inner {
+    padding: var(--s2) var(--s4);
+  }
+
+  .site-nav a {
+    padding: 0.2rem 0.6rem;
+    font-size: var(--fs-xs);
+  }
+}
+
+@media (max-width: 40rem) {
+  .how {
+    display: none;
+  }
+
+  .how-fold {
+    display: block;
+  }
+}
+
+/* ---- Motion, for readers who have not asked for less ------------------------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  .turn {
+    animation: rise 220ms ease-out;
+  }
+
+  .stream.streaming::after {
+    animation: blink 1s steps(2, start) infinite;
+  }
+
+  .skeleton-line {
+    background: linear-gradient(90deg, var(--shimmer) 25%, var(--surface-2) 50%, var(--shimmer) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+
+  .card-progress::before {
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+
+  .busy .send::after {
+    animation: turn 0.8s linear infinite;
+  }
+
+  .example,
+  .cite,
+  .source-card,
+  .badge,
+  .site-nav a,
+  .ghost,
+  .send,
+  .field {
+    transition:
+      background-color 150ms ease,
+      border-color 150ms ease,
+      box-shadow 150ms ease,
+      color 150ms ease,
+      transform 150ms ease;
+  }
+
+  .example:hover {
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes turn {
+  to {
+    transform: rotate(1turn);
+  }
 }

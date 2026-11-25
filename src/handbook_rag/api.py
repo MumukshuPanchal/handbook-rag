@@ -268,6 +268,26 @@ class AnswerSegment(BaseModel):
     )
 
 
+class CheckNote(BaseModel):
+    """A check of the reply in code that fired, and what it did to the reply."""
+
+    check: Literal["address_in_closing_line", "cites_nothing", "mostly_a_copy"] = Field(
+        description=(
+            "Which check: a closing line that cites nothing held a web or email address; "
+            "the reply cited no passage; most of the reply repeats its passages word for word."
+        )
+    )
+    action: Literal["dropped_line", "declined", "marked"] = Field(
+        description=(
+            "What it did: left that closing line out, declined in place of the reply, or "
+            "left the reply as it was and marked it."
+        )
+    )
+    note: str = Field(
+        description="What to tell the reader, in fixed words. Show it with the answer."
+    )
+
+
 class Usage(BaseModel):
     """The tokens of the request to the model."""
 
@@ -358,6 +378,13 @@ class AskResponse(BaseModel):
     segments: list[AnswerSegment] = Field(description="The answer in order, piece by piece.")
     sources: list[Source] = Field(
         description="The cited passages, numbered as in the answer. Empty when it is not an answer."
+    )
+    checks: list[CheckNote] = Field(
+        description=(
+            "The checks of the reply in code that fired, in the order they were made. The "
+            "answer is the reply as they left it, so show each note with it. Empty when "
+            "none fired."
+        )
     )
     model: str = Field(description="The model that wrote the reply.")
     stop_reason: str = Field(
@@ -451,7 +478,7 @@ ASK_STREAM_EXAMPLE = (
     '"sources":[{"number":1,"doc_id":"people/leave.md","title":"Leave",'
     '"url":"https://handbook.example.com/handbook/people/leave/","section":"people",'
     '"heading_path":["Parental leave"],"text":"New parents get sixteen weeks of paid leave."}],'
-    '"model":"gemini-3.5-flash-lite","stop_reason":"end_turn",'
+    '"checks":[],"model":"gemini-3.5-flash-lite","stop_reason":"end_turn",'
     '"usage":{"input_tokens":1200,"output_tokens":20},"requests":1,"fallback":false,'
     '"took_ms":1500.0,"first_text_ms":1300.0,"trace_id":null,"cached":null,'
     '"searched_for":{"asked":"How many weeks of parental leave do new parents get?",'
@@ -527,6 +554,12 @@ def _respond(
             for segment in answer.segments
         ],
         sources=[Source.from_chunk(number, chunk) for number, chunk in enumerate(sources, 1)],
+        checks=[
+            CheckNote.model_validate(
+                {"check": check.name, "action": check.action, "note": check.note}
+            )
+            for check in answer.checks
+        ],
         model=answer.model,
         stop_reason=answer.stop_reason,
         usage=Usage(

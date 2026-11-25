@@ -13,7 +13,7 @@ import uuid
 from typing import Final
 
 from handbook_rag.cache.verify import Verification
-from handbook_rag.generate.base import holds_the_decline, plain_words
+from handbook_rag.generate.base import holds_the_decline, holds_the_gap_form, plain_words
 from handbook_rag.generate.models import Answer
 
 ANSWER_CACHE_VERSION = 2
@@ -32,6 +32,14 @@ judgement.
 2. An answer that says in plain words that something is not in the handbook is no
    candidate of the second tier (:func:`says_something_is_missing`). Entries written
    before had no such mark.
+
+Not raised for version 2 of the answering instructions (issue 66). Two rules changed with
+it: the fixed form for a part of the question the passages do not answer keeps an answer
+from the second tier as a decline in part does, and a reply that a check in code changed
+is not kept at all. Neither can make an entry written before wrong, or servable where it
+was not: the instructions of the current version are part of the collection's name
+(``wiring.describe_answer_cache``), so the cache of version 2 starts empty, and the
+entries of version 1 are never served by it.
 """
 
 DECIDED_BY: Final = "entails_min"
@@ -43,7 +51,8 @@ directions, and a test holds this to the saved run the default threshold comes f
 DECLINE: Final = "decline"
 """The reply is not an answer: the model declined."""
 DECLINES_IN_PART: Final = "declines_in_part"
-"""An answer that holds the fixed sentence of a decline for part of the question."""
+"""An answer that holds the fixed sentence of a decline, or the fixed form for a part the
+passages do not answer (``prompt.GAP_FORM``), for part of the question."""
 SAYS_SOMETHING_IS_MISSING: Final = "says_something_is_missing"
 """An answer that says in words of its own that something is not in the handbook."""
 CITES_NOTHING: Final = "cites_nothing"
@@ -181,12 +190,16 @@ def storable(answer: Answer) -> bool:
       happens while an index is empty or half built, and it must not outlive that.
     - A reply with no text.
     - An answer that came from the cache itself.
+    - A reply that a check in code changed or marked (``generate/checks.py``). The model
+      wrote it from passages that may hold planted text, and a new answer to the same
+      question is checked again, where a stored one would be served as it was.
 
     A decline the model wrote is a whole reply, and is kept. A failure raises before
     there is a reply, so nothing of it ever arrives here.
     """
     return (
         answer.cached is None
+        and not answer.checks
         and not answer.fallback
         and answer.requests >= 1
         and answer.stop_reason == "end_turn"
@@ -217,9 +230,10 @@ def says_something_is_missing(answer: Answer) -> bool:
       handbook is silent on the amount", is not recognised, and its answer is a
       candidate like any other.
 
-    A fixed form for "this part is not in the handbook" in the answering instructions
-    would let this be exact. That changes the instructions, so the answers would have to
-    be measured again (ADR 0020).
+    Version 2 of the answering instructions gives the model one fixed form for this
+    (``prompt.GAP_FORM``), which :func:`kept_from_the_second_tier` finds by its words
+    alone, before this list is asked. The list stays for the answers that do not use the
+    form: those of version 1, and a model that words the gap in its own way all the same.
     """
     said = f" {plain_words(answer.text)} "
     return any(f" {phrase} " in said for phrase in MISSING_PHRASES)
@@ -234,8 +248,9 @@ def kept_from_the_second_tier(answer: Answer) -> str | None:
       measurement were both a stored decline served to a question the handbook answers
       (``docs/evaluation.md``). The reader is then told the handbook lacks something it
       holds, and nothing in the reply shows it.
-    - **An answer that holds the fixed sentence of a decline** for part of the question.
-      No reply of the saved answer run does.
+    - **An answer that holds the fixed sentence of a decline**, or the fixed form for a
+      part the passages do not answer, for part of the question. No reply of the saved
+      answer run holds either.
     - **An answer that says in plain words that something is missing**
       (:func:`says_something_is_missing`): what the model writes when part is missing.
     - **An answer that cites no passage.** It rests on nothing a reader can check, which
@@ -246,7 +261,7 @@ def kept_from_the_second_tier(answer: Answer) -> str | None:
     """
     if not answer.answered:
         return DECLINE
-    if holds_the_decline(answer.segments):
+    if holds_the_decline(answer.segments) or holds_the_gap_form(answer.segments):
         return DECLINES_IN_PART
     if says_something_is_missing(answer):
         return SAYS_SOMETHING_IS_MISSING

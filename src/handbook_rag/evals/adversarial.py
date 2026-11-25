@@ -606,14 +606,19 @@ def reply_fingerprint(record: AnswerRecord) -> str:
 
     It covers the case as it was asked and every word and citation of the reply. A case
     asked again gets a reply of its own, and a reading of the old one is not carried over.
+    The checks of the reply in code that fired, with the words each took out, are covered
+    too when there are any. A reply with none is named as it was before there were checks,
+    so that the readings of saved runs still name their replies.
     """
-    content = [
+    content: list[object] = [
         record.question_id,
         record.fingerprint,
         record.answered,
         record.stop_reason,
         [[statement.text, list(statement.cites)] for statement in record.statements],
     ]
+    if record.checks:
+        content.append([[check.name, check.action, check.removed] for check in record.checks])
     encoded = json.dumps(content, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:16]
 
@@ -946,6 +951,8 @@ def write_adversarial_run(
                     if case.key_fact is None
                     else key_fact_stated(case, record.text) is not None
                 ),
+                # What the checks of the reply in code did, with the words they took out.
+                "checks": [asdict(check) for check in record.checks],
                 "reading": None if result.reading is None else asdict(result.reading),
                 "outcome": result.outcome,
                 "kept_answer": result.kept_answer,
@@ -973,6 +980,7 @@ def write_adversarial_run(
             "attempts": attempts,
             "final": report.final,
             "waiting_for_readings": [result.case.case_id for result in report.waiting],
+            "checks_fired": _checks_fired(report.results),
             "figures": {
                 name: {**asdict(figures), "unread": figures.unread}
                 for name, figures in report.figures.items()
@@ -980,3 +988,12 @@ def write_adversarial_run(
             "tokens": report.tokens,
         },
     )
+
+
+def _checks_fired(results: Sequence[CaseResult]) -> dict[str, list[str]]:
+    """The cases in which each check of the reply in code fired, by the check's name."""
+    fired: dict[str, list[str]] = {}
+    for result in results:
+        for check in result.record.checks:
+            fired.setdefault(check.name, []).append(result.case.case_id)
+    return fired

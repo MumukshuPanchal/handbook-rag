@@ -38,7 +38,10 @@ PINNED_VERSION = 2
 # of its code.
 PINNED = {
     # Which replies are kept, and which may be served to a question worded differently.
-    "cache/rules.py": "87fee71e1a0e98e3",
+    # Version 2 of the answering instructions (issue 66) added two rules: the fixed form
+    # for a part the passages do not answer keeps an answer from the second tier, and a
+    # reply a check in code changed is not kept. The version stays, as for generate/ below.
+    "cache/rules.py": "95662f7de76bd1c3",
     # How a question is answered from the passages that were found. Follow-up questions
     # (issue 79, ADR 0024) changed it: with earlier questions and the rewriting step, the
     # question is rewritten first, and the lookup, the search, the answer and the entry
@@ -52,18 +55,27 @@ PINNED = {
     # in place of the earlier questions, and bounds how many the step reads: which earlier
     # questions reach the step, not how a question is answered. It stays.
     "pipeline.py": "415a1f1bce966f56",
-    # How a model's reply is read into statements and citations.
-    "generate/base.py": "0408beccbd6450f1",
+    # How a model's reply is read into statements and citations, and checked.
+    #
     # The answering instructions got versions (issue 66): a generator is given one, the
     # current one unless an evaluation names another, and refuses any other outside an
-    # evaluation. With none named it sends the very text and layout it sent before, and
-    # reads the reply as before. No stored answer becomes wrong, and none may be served
-    # where it could not before: the version stays as it is. When the current version
-    # changes, its text is part of the cache's name (wiring.describe_answer_cache).
-    "generate/claude.py": "6cdf82ad13255fad",
-    "generate/gemini.py": "5d71dbf7fbccdb38",
-    "generate/markers.py": "1869080ca1d7c1d4",
-    "generate/models.py": "2a9bfbd98d0828a1",
+    # evaluation. With version 1 it sends the very text and layout it sent before, and
+    # reads the reply as before.
+    #
+    # Version 2 became the current one: other instructions, passages wrapped in a boundary
+    # made for each request, and the reply checked in code (checks.py), which can drop a
+    # closing line, decline a reply that cites nothing, or mark one that is mostly a copy.
+    # That changes what an answer is. The version of the cache stays all the same: the
+    # current instructions are part of the collection's name (wiring.describe_answer_cache),
+    # so the answers of version 2 go to a new, empty collection, and nothing stored under
+    # version 1 is served under version 2. The layout is part of that name too, named with
+    # a fixed code (wiring.answer_request_fingerprint): the code of each request is not.
+    "generate/base.py": "ae6cc407b672e56f",
+    "generate/checks.py": "c800929a4574c530",
+    "generate/claude.py": "c29ccfd78f175ed2",
+    "generate/gemini.py": "ec342c8b8b68764c",
+    "generate/markers.py": "db2add40ed28b909",
+    "generate/models.py": "88dd2e0ecc7bced0",
     # How passages are found: the question's vectors, the search, and what orders them.
     "index/embedder.py": "42df4fad32f4e53d",
     "index/sparse.py": "1852989448469c03",

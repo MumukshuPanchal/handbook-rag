@@ -256,6 +256,11 @@ def record_answer(span: Span, answer: "Answer") -> None:
     repeat personal or confidential details from the question.
     """
     span.set_attribute(f"{ATTRIBUTE_PREFIX}.answered", answer.answered)
+    if answer.checks:
+        # Which checks of the reply in code fired, by name: never the words they took out.
+        span.set_attribute(
+            f"{ATTRIBUTE_PREFIX}.reply_checks", tuple(check.name for check in answer.checks)
+        )
     if _record_content:
         span.set_attribute(f"{ATTRIBUTE_PREFIX}.answer.text", answer.text_with_markers)
 

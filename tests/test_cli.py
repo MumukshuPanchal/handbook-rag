@@ -27,7 +27,7 @@ from handbook_rag.evals.judge_v2 import SUPPORT_INSTRUCTIONS_V2
 from handbook_rag.evals.judging import Criterion
 from handbook_rag.evals.support import SUPPORT, SUPPORT_V2
 from handbook_rag.generate.base import GenerationError, Generator, is_answered
-from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
+from handbook_rag.generate.models import Answer, Citation, ReplyCheck, Segment, TokenUsage
 from handbook_rag.generate.prompt import CURRENT_INSTRUCTIONS, NOT_FOUND_MESSAGE
 from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.store import QdrantVectorStore, ScoredChunk, VectorStoreError
@@ -997,6 +997,36 @@ def test_ask_prints_the_answer_its_sources_and_the_cost(
     assert "fallback" not in result.output
 
 
+def test_ask_prints_the_note_of_each_check_of_the_reply_under_the_answer(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    class Checked(CannedGenerator):
+        def generate(
+            self,
+            question: str,
+            chunks: Sequence[Chunk],
+            *,
+            on_text: Callable[[str], None] | None = None,
+        ) -> Answer:
+            written = super().generate(question, chunks, on_text=on_text)
+            dropped = ReplyCheck(
+                "address_in_closing_line", "dropped_line", "A closing line was left out.", "x.org/a"
+            )
+            return dataclasses.replace(written, checks=(dropped,))
+
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: Checked())
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
+
+    assert result.exit_code == 0, result.output
+    answer_at = result.output.index("Sixteen weeks of paid leave.")
+    note_at = result.output.index("Note: A closing line was left out.")
+    assert answer_at < note_at < result.output.index("Sources")
+    # The words a check took out are never shown.
+    assert "x.org/a" not in result.output
+
+
 def test_ask_reports_a_generation_failure_clearly(
     monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
 ) -> None:
@@ -1358,7 +1388,11 @@ def test_eval_answers_asks_every_question_once_and_writes_the_run(
     run_dir = tmp_path / "runs" / "baseline"
     assert len((run_dir / "answers.jsonl").read_text().splitlines()) == 2
     summary = json.loads((run_dir / "summary.json").read_text())
-    assert summary["description"] == "Answers by gemini-3.5-flash-lite from 5 passages."
+    assert (
+        summary["description"]
+        == "Answers by gemini-3.5-flash-lite from 5 passages under the answering instructions "
+        "of version 2."
+    )
     assert summary["config"]["answer_model"] == "gemini-3.5-flash-lite"
     assert summary["config"]["retrieval_mode"] == "hybrid"
     assert summary["attempts"] == 2
@@ -1590,7 +1624,11 @@ def test_eval_answers_describes_the_run_by_the_passages_it_really_gave(
     assert runner.invoke(app, answer_run).exit_code == 0
 
     summary = json.loads((tmp_path / "runs" / "current" / "summary.json").read_text())
-    assert summary["description"] == "Answers by gemini-3.5-flash-lite from 1 passages."
+    assert (
+        summary["description"]
+        == "Answers by gemini-3.5-flash-lite from 1 passages under the answering instructions "
+        "of version 2."
+    )
     assert summary["config"]["answer_context_chunks"] == 1
 
 
@@ -1645,7 +1683,8 @@ def test_answer_runs_can_be_compared_and_tabled_like_retrieval_runs(
         "| Run | What it is | Questions | Right call (95% interval) | Declines"
     )
     assert rows[2].startswith(
-        "| baseline | Answers by gemini-3.5-flash-lite from 5 passages. | 2 | 1.000"
+        "| baseline | Answers by gemini-3.5-flash-lite from 5 passages under the answering "
+        "instructions of version 2. | 2 | 1.000"
     )
     assert "| 1.000 |" in rows[2]
     assert "| 0.000 |" in rows[3]
@@ -2014,7 +2053,11 @@ def test_eval_support_judges_the_saved_answers_and_adds_the_score_to_the_run(
     assert summary["judges"]["supported"]["check"] is None
     assert set(summary["judges"]) == {"supported"}
     # What the answer stage recorded is kept as it was.
-    assert summary["description"] == "Answers by gemini-3.5-flash-lite from 5 passages."
+    assert (
+        summary["description"]
+        == "Answers by gemini-3.5-flash-lite from 5 passages under the answering instructions "
+        "of version 2."
+    )
     assert summary["attempts"] == 2
     rows = {
         row["prompt_id"]: row["grade"]
@@ -2201,7 +2244,11 @@ def test_eval_support_leaves_no_old_scores_standing_when_no_saved_reply_still_co
     assert summary["metrics"] == {}
     assert (summary["questions_scored"], summary["questions_not_asked"]) == (0, 2)
     assert "judges" not in summary
-    assert summary["description"] == "Answers by gemini-3.5-flash-lite from 5 passages."
+    assert (
+        summary["description"]
+        == "Answers by gemini-3.5-flash-lite from 5 passages under the answering instructions "
+        "of version 2."
+    )
 
 
 def test_eval_support_quotes_only_a_whole_check_that_exists(
@@ -2279,7 +2326,11 @@ def test_a_restart_that_then_fails_does_not_leave_the_old_judged_score_standing(
     assert all("supported" not in row["grade"] for row in rows)
     # What the answer stage measured is still there.
     assert summary["metrics"]["right_call"]["mean"] == 1.0
-    assert summary["description"] == "Answers by gemini-3.5-flash-lite from 5 passages."
+    assert (
+        summary["description"]
+        == "Answers by gemini-3.5-flash-lite from 5 passages under the answering instructions "
+        "of version 2."
+    )
 
 
 def test_restarting_the_answer_run_discards_the_verdicts_on_its_replies(
@@ -2911,7 +2962,8 @@ def test_after_version_2_has_judged_a_run_its_scores_are_still_version_1s(
     # ... and so is what the table of runs and the comparison of two runs read from it.
     assert table.exit_code == 0, table.output
     assert (
-        "| baseline | Answers by gemini-3.5-flash-lite from 5 passages. | 2 | "
+        "| baseline | Answers by gemini-3.5-flash-lite from 5 passages under the answering "
+        "instructions of version 2. | 2 | "
         "1.000 (1.000 to 1.000) |" in table.output
     )
     assert compared.exit_code == 0, compared.output
@@ -3397,8 +3449,8 @@ def test_eval_adversarial_asks_each_case_once_and_writes_what_code_decided(
     assert summary["figures"]["all"]["held"] is None
     assert summary["attempts"] == 3
     assert summary["description"] == (
-        "Adversarial cases answered by gemini-3.5-flash-lite: 2 with a planted instruction, "
-        "1 outside the handbook."
+        "Adversarial cases answered by gemini-3.5-flash-lite under the answering instructions "
+        "of version 2: 2 with a planted instruction, 1 outside the handbook."
     )
     assert summary["instruction_canaries"] == list(INSTRUCTION_CANARIES)
 
@@ -3918,30 +3970,27 @@ def test_an_evaluation_refuses_instructions_of_a_version_that_does_not_exist(
 def test_eval_adversarial_does_not_go_on_with_a_run_made_with_other_instructions(
     monkeypatch: pytest.MonkeyPatch, adversarial_run: dict[str, Any]
 ) -> None:
-    from types import MappingProxyType
-
-    from handbook_rag.generate import markers, prompt
-
     model = AdversarialModel()
     monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
     assert runner.invoke(app, adversarial_run["command"]).exit_code == 0
-    # Another version beside the current one, as an earlier one stands beside a later one.
-    other = max(prompt.SYSTEM_PROMPTS) + 1
-    for module in (prompt, wiring):
-        monkeypatch.setattr(
-            module, "SYSTEM_PROMPTS", MappingProxyType({**prompt.SYSTEM_PROMPTS, other: "Other."})
-        )
-    monkeypatch.setattr(
-        wiring,
-        "MARKER_SYSTEM_PROMPTS",
-        MappingProxyType({**markers.MARKER_SYSTEM_PROMPTS, other: markers.MARKER_SYSTEM_PROMPT}),
-    )
 
-    result = runner.invoke(app, [*adversarial_run["command"], "--instructions", str(other)])
+    # The old instructions are another system, and their hash and number say so.
+    result = runner.invoke(app, [*adversarial_run["command"], "--instructions", "1"])
 
     assert result.exit_code == 1
-    assert "made with other settings (instructions_version)" in result.output
+    assert "made with other settings (instructions, instructions_version)" in result.output
     assert model.built_with == [{"attempts": 1, "instructions": CURRENT_INSTRUCTIONS}]
+
+    # Under its own name, a run of the old instructions is built with them.
+    other = runner.invoke(
+        app, [*adversarial_run["command"], "--instructions", "1", "--variant", "old"]
+    )
+    assert other.exit_code == 0, other.output
+    assert model.built_with[-1] == {"attempts": 1, "instructions": 1}
+    assert "instructions version 1, kept for comparison: the assistant uses 2" in other.output
+    summary = json.loads((adversarial_run["run_dir"].parent / "old" / "summary.json").read_text())
+    assert "instructions_version" not in summary["config"]
+    assert summary["description"].startswith("Adversarial cases answered by gemini-3.5-flash-lite:")
 
 
 class Counted(CannedGenerator):
@@ -4393,6 +4442,7 @@ MEASURES = {
     "eval-correct": [],
     "eval-adversarial": [],
     "eval-limits": [],
+    "eval-reply-checks": ["--run", "runs/none"],
     "eval-follow-ups": [],
     "eval-gate": [],
     "eval-cache": [],

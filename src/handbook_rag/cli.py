@@ -20,7 +20,14 @@ from handbook_rag.cache.answers import AnswerCache
 from handbook_rag.cache.store import QdrantAnswerStore, answer_collections
 from handbook_rag.cache.verify import Verification, VerifierError
 from handbook_rag.config import Settings, get_settings
-from handbook_rag.evals import adversarial, cache_pairs, cache_replies, follow_ups, limit_questions
+from handbook_rag.evals import (
+    adversarial,
+    cache_pairs,
+    cache_replies,
+    follow_ups,
+    limit_questions,
+    reply_checks,
+)
 from handbook_rag.evals import answers as answer_runs
 from handbook_rag.evals.agreement import measure_agreement
 from handbook_rag.evals.cache_report import report_lines
@@ -79,6 +86,7 @@ from handbook_rag.evals.two_passage import (
     reading_of,
 )
 from handbook_rag.generate.base import GenerationError, plain_words
+from handbook_rag.generate.checks import CHECKS, COPY_MIN_WORDS
 from handbook_rag.generate.models import Answer, CacheHit
 from handbook_rag.generate.pricing import cost_usd
 from handbook_rag.generate.prompt import CURRENT_INSTRUCTIONS, known_instructions
@@ -2255,6 +2263,85 @@ def _echo_adversarial_figures(report: adversarial.AdversarialReport) -> None:
         _echo_estimate("Kept its answer", injected.kept)
 
 
+@app.command(name="eval-reply-checks")
+@measures
+def eval_reply_checks(
+    run: Annotated[
+        Path,
+        typer.Option(
+            help=(
+                "A saved run: an answer run (answers.jsonl) or an adversarial run (replies.jsonl)."
+            )
+        ),
+    ],
+    cases: Annotated[
+        Path,
+        typer.Option(
+            help=(
+                "The adversarial cases, for the planted text of an adversarial run's "
+                "passages. Not read for an answer run."
+            )
+        ),
+    ] = adversarial.CASES_PATH,
+) -> None:
+    """Try the checks of a reply in code on the replies a run has saved. No request.
+
+    Each saved reply is checked as a reply is checked when it is written, with the
+    passages it was given, planted text included. What each check would do is printed;
+    nothing is written.
+    """
+    settings = get_settings()
+    replies_file = run / adversarial.REPLIES_FILE
+    try:
+        is_adversarial = replies_file.is_file()
+        path = replies_file if is_adversarial else run / answer_runs.ANSWERS_FILE
+        records = answer_runs.load_records(path)
+        if not records:
+            raise SavedRunError(f"{run} holds no saved reply.")
+        chunks = {chunk.chunk_id: chunk for chunk in build_corpus(settings).chunks}
+        planted: dict[str, list[Chunk]] = {}
+        if is_adversarial:
+            loaded = adversarial.load_cases(cases)
+            current = adversarial.replies_to_current_cases(loaded, records)
+            canaries = adversarial.instruction_canaries(
+                wiring.answer_instructions(settings, CURRENT_INSTRUCTIONS)
+            )
+            planted = {
+                case.case_id: adversarial.planted_passages(case, chunks, canaries)
+                for case in loaded
+                if case.injected and case.case_id in current
+            }
+        tried = [
+            reply_checks.try_checks(record, reply_checks.given_passages(record, chunks, planted))
+            for record in records.values()
+        ]
+    except (DatasetError, CorpusError, SavedRunError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    answers = [t for t in tried if t.record.answered]
+    typer.echo(f"Reply checks tried on: {run}")
+    typer.echo(f"  replies      {len(tried)}, of which {len(answers)} are answers")
+    fired: dict[str, int] = dict.fromkeys(CHECKS, 0)
+    for item in tried:
+        for check in item.checked.checks:
+            fired[check.name] += 1
+            removed = check.removed.replace("\n", " ")
+            shown = f"  {removed[:100]!r}" if removed else ""
+            typer.echo(f"  {item.reply_to:<30} {check.name:<24} {check.action:<13}{shown}")
+    typer.echo(
+        "  fired        "
+        + ", ".join(f"{name} {count}" for name, count in fired.items())
+        + f"; replies changed or marked: {sum(bool(t.checked.checks) for t in tried)}"
+    )
+    long = [
+        (t.reply_to, len(plain_words(t.record.text).split()))
+        for t in answers
+        if len(plain_words(t.record.text).split()) >= COPY_MIN_WORDS
+    ]
+    typer.echo(f"  long answers {len(long)} of {COPY_MIN_WORDS} words or more: {long}")
+
+
 @app.command(name="eval-limits")
 @measures
 def eval_limits(
@@ -3171,6 +3258,9 @@ def ask(
                 typer.echo(f"trace {traced}", err=True)
             raise typer.Exit(code=1) from error
     typer.echo("")
+    # What the checks of the reply in code did, right under the reply they changed.
+    for check in answer.checks:
+        typer.echo(f"\nNote: {check.note}")
 
     # A reply that is not an answer lists no sources, even if the model attached one to it.
     if answer.answered and answer.sources:

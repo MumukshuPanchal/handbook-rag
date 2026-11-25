@@ -5,6 +5,7 @@ fail if our code and the SDK disagree about the shape of a response. The tests t
 send requests are in ``tests/live``.
 """
 
+import re
 from collections.abc import Iterator
 from typing import Any, cast
 
@@ -17,8 +18,9 @@ from google.genai import errors, types
 
 from handbook_rag.generate.base import FailureReason, GenerationError
 from handbook_rag.generate.gemini import GeminiGenerator
-from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT
-from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
+from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT, MARKER_SYSTEM_PROMPTS
+from handbook_rag.generate.prompt import CURRENT_INSTRUCTIONS, NOT_FOUND_MESSAGE
+from handbook_rag.measuring import measuring_the_model
 from tests.support import make_chunk
 
 LEAVE = make_chunk("New parents get sixteen weeks of paid leave.", heading_path=("Parental leave",))
@@ -88,8 +90,15 @@ class FakeClient:
         self.models = FakeModels(pieces, error=error)
 
 
-def generator_for(client: FakeClient) -> GeminiGenerator:
-    return GeminiGenerator(cast(genai.Client, client), model=MODEL, max_tokens=4000)
+def generator_for(
+    client: FakeClient, *, instructions: int = CURRENT_INSTRUCTIONS
+) -> GeminiGenerator:
+    """A generator on a stand-in client. Instructions other than the current ones are built
+    inside the measuring switch, as only an evaluation may build them."""
+    with measuring_the_model():
+        return GeminiGenerator(
+            cast(genai.Client, client), model=MODEL, max_tokens=4000, instructions=instructions
+        )
 
 
 def api_error(code: int, status: str, details: object = None, message: str = "It failed.") -> Any:
@@ -179,15 +188,42 @@ def test_request_carries_the_instructions_model_limit_and_numbered_passages() ->
 
     (call,) = client.models.calls
     assert call["model"] == MODEL
-    assert call["config"].system_instruction == MARKER_SYSTEM_PROMPT
+    assert call["config"].system_instruction == MARKER_SYSTEM_PROMPTS[CURRENT_INSTRUCTIONS]
     assert call["config"].max_output_tokens == 4000
     # One question, one request: the SDK must not send follow-up requests by itself.
     assert call["config"].automatic_continuation is False
     prompt = call["contents"]
-    assert '<search_result number="1">' in prompt
-    assert '<search_result number="2">' in prompt
+    # Each passage between two lines that hold the request's own boundary code.
+    boundary = re.fullmatch(r"Boundary code: ([0-9a-f]{32})", prompt.split("\n")[0])
+    assert boundary is not None
+    code = boundary.group(1)
+    assert f"BEGIN SEARCH RESULT 1 {code}\nTitle: {LEAVE.context_header}\n{LEAVE.text}\n" in prompt
+    assert f"END SEARCH RESULT 2 {code}" in prompt
     assert prompt.index(LEAVE.text) < prompt.index(EXPENSES.text)
-    assert prompt.endswith("Question: How long is parental leave?")
+    assert prompt.endswith(f"QUESTION {code}\nHow long is parental leave?")
+
+
+def test_each_request_gets_a_boundary_code_of_its_own() -> None:
+    client = FakeClient(answer_pieces("Sixteen weeks [1]."))
+    generator = generator_for(client)
+
+    generator.generate("q", [LEAVE])
+    client.models._pieces = answer_pieces("Sixteen weeks [1].")
+    generator.generate("q", [LEAVE])
+
+    first, second = (call["contents"].split("\n")[0] for call in client.models.calls)
+    assert first != second
+
+
+def test_a_generator_of_version_1_sends_the_first_instructions_and_layout() -> None:
+    client = FakeClient(answer_pieces("Sixteen weeks [1]."))
+
+    generator_for(client, instructions=1).generate("How long is parental leave?", [LEAVE])
+
+    (call,) = client.models.calls
+    assert call["config"].system_instruction == MARKER_SYSTEM_PROMPT
+    assert '<search_result number="1">' in call["contents"]
+    assert call["contents"].endswith("Question: How long is parental leave?")
 
 
 def test_text_is_passed_on_as_it_arrives_without_the_markers() -> None:
@@ -373,7 +409,8 @@ def test_a_question_the_api_blocked_is_not_an_answer() -> None:
 def test_a_marker_that_names_no_passage_is_not_a_citation() -> None:
     client = FakeClient(answer_pieces("Everyone gets a company car [7]."))
 
-    answer = generator_for(client).generate("q", [LEAVE, EXPENSES])
+    # Under instructions without checks: a checked reply that cites nothing is declined.
+    answer = generator_for(client, instructions=1).generate("q", [LEAVE, EXPENSES])
 
     assert answer.sources == ()
     assert answer.text == "Everyone gets a company car [7]."  # left visible, not hidden

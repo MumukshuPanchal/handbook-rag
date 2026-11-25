@@ -15,7 +15,13 @@ from anthropic.types import Message
 
 from handbook_rag.generate.base import FailureReason, GenerationError
 from handbook_rag.generate.claude import ClaudeGenerator
-from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE, SYSTEM_PROMPT
+from handbook_rag.generate.prompt import (
+    CURRENT_INSTRUCTIONS,
+    NOT_FOUND_MESSAGE,
+    SYSTEM_PROMPT,
+    SYSTEM_PROMPTS,
+)
+from handbook_rag.measuring import measuring_the_model
 from tests.support import make_chunk
 
 LEAVE = make_chunk("New parents get sixteen weeks of paid leave.", heading_path=("Parental leave",))
@@ -99,11 +105,20 @@ class FakeClient:
         self.messages = FakeMessages(outcome)
 
 
-def generator_for(outcome: Message | BaseException) -> tuple[ClaudeGenerator, FakeMessages]:
+def generator_for(
+    outcome: Message | BaseException, *, instructions: int = CURRENT_INSTRUCTIONS
+) -> tuple[ClaudeGenerator, FakeMessages]:
+    """A generator on a stand-in client. Instructions other than the current ones are built
+    inside the measuring switch, as only an evaluation may build them."""
     client = FakeClient(outcome)
-    generator = ClaudeGenerator(
-        cast(anthropic.Anthropic, client), model="claude-haiku-5-5", max_tokens=4000, effort="low"
-    )
+    with measuring_the_model():
+        generator = ClaudeGenerator(
+            cast(anthropic.Anthropic, client),
+            model="claude-haiku-5-5",
+            max_tokens=4000,
+            effort="low",
+            instructions=instructions,
+        )
     return generator, client.messages
 
 
@@ -155,7 +170,7 @@ def test_request_carries_the_instructions_model_and_search_results() -> None:
     (request,) = messages.requests
     assert request["model"] == "claude-haiku-5-5"
     assert request["max_tokens"] == 4000
-    assert request["system"] == SYSTEM_PROMPT
+    assert request["system"] == SYSTEM_PROMPTS[CURRENT_INSTRUCTIONS]
     assert request["output_config"] == {"effort": "low"}
     (user_message,) = request["messages"]
     assert user_message["role"] == "user"
@@ -167,8 +182,16 @@ def test_request_carries_the_instructions_model_and_search_results() -> None:
     assert user_message["content"][-1]["text"] == "What do parents get?"
 
 
-def test_text_is_passed_on_as_it_arrives() -> None:
-    generator, _ = generator_for(CITED_ANSWER)
+def test_the_first_instructions_are_sent_by_a_generator_of_version_1() -> None:
+    generator, messages = generator_for(CITED_ANSWER, instructions=1)
+
+    generator.generate("What do parents get?", [LEAVE, EXPENSES])
+
+    assert messages.requests[0]["system"] == SYSTEM_PROMPT
+
+
+def test_text_is_passed_on_as_it_arrives_under_instructions_without_checks() -> None:
+    generator, _ = generator_for(CITED_ANSWER, instructions=1)
     received: list[str] = []
 
     answer = generator.generate("q", [LEAVE, EXPENSES], on_text=received.append)
@@ -177,6 +200,34 @@ def test_text_is_passed_on_as_it_arrives() -> None:
     assert "".join(received) == answer.text
     assert answer.seconds_to_first_text is not None
     assert answer.seconds >= answer.seconds_to_first_text
+    assert answer.checks == ()
+
+
+def test_a_checked_reply_is_passed_on_whole_once_it_is_checked() -> None:
+    # The API says what a text cites only in its final message, so nothing is passed on
+    # before the checks, which could take part of it back.
+    generator, _ = generator_for(CITED_ANSWER)
+    received: list[str] = []
+
+    answer = generator.generate("q", [LEAVE, EXPENSES], on_text=received.append)
+
+    assert received == [answer.text]
+    assert answer.seconds_to_first_text is not None
+    assert answer.checks == ()
+
+
+def test_a_checked_reply_that_cites_nothing_is_declined_with_a_note() -> None:
+    uncited = message([{"type": "text", "text": "Sixteen weeks."}])
+    generator, _ = generator_for(uncited)
+    received: list[str] = []
+
+    answer = generator.generate("q", [LEAVE], on_text=received.append)
+
+    assert (answer.text, answer.answered) == (NOT_FOUND_MESSAGE, False)
+    assert [(c.name, c.action, c.removed) for c in answer.checks] == [
+        ("cites_nothing", "declined", "Sixteen weeks.")
+    ]
+    assert received == [NOT_FOUND_MESSAGE]
 
 
 def test_usage_model_and_stop_reason_come_from_the_response() -> None:
@@ -401,15 +452,19 @@ def test_a_connection_that_fails_in_the_middle_of_the_stream_is_a_clear_error(
     error: BaseException, expected: str, reason: FailureReason, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Once the stream is open, the SDK passes the HTTP library's own error on unchanged.
-    generator, messages = generator_for(CITED_ANSWER)
-    monkeypatch.setattr(messages, "stream", lambda **_request: BreakingStream(CITED_ANSWER, error))
-    received: list[str] = []
+    for instructions, passed_on in ((1, ["New parents get"]), (CURRENT_INSTRUCTIONS, [])):
+        generator, messages = generator_for(CITED_ANSWER, instructions=instructions)
+        monkeypatch.setattr(
+            messages, "stream", lambda **_request: BreakingStream(CITED_ANSWER, error)
+        )
+        received: list[str] = []
 
-    with pytest.raises(GenerationError, match=expected) as raised:
-        generator.generate("q", [LEAVE], on_text=received.append)
-    assert raised.value.reason == reason
-    assert raised.value.__cause__ is error
-    assert received == ["New parents get"]
+        with pytest.raises(GenerationError, match=expected) as raised:
+            generator.generate("q", [LEAVE], on_text=received.append)
+        assert raised.value.reason == reason
+        assert raised.value.__cause__ is error
+        # A checked reply had passed nothing on, so asking again sends nothing twice.
+        assert received == passed_on
 
 
 def test_the_generator_names_the_model_it_asks_for() -> None:

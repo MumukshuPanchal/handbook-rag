@@ -10,8 +10,10 @@ import httpx2
 from anthropic.types import Message
 
 from handbook_rag.generate.base import GenerationError, decline_without_context, is_answered
+from handbook_rag.generate.checks import HeldBack, check_reply
 from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
 from handbook_rag.generate.prompt import (
+    CHECKED_VERSIONS,
     CURRENT_INSTRUCTIONS,
     SYSTEM_PROMPTS,
     build_user_content,
@@ -72,10 +74,18 @@ class ClaudeGenerator:
         *,
         on_text: Callable[[str], None] | None = None,
     ) -> Answer:
-        """Write an answer grounded in ``chunks``. ``on_text`` receives text as it arrives."""
+        """Write an answer grounded in ``chunks``. ``on_text`` receives text as it arrives.
+
+        Under instructions whose replies are checked, the text is passed on only when the
+        reply is whole and checked (``checks.py``): the API says which passages a text
+        cites only in its final message, so nothing could be passed on earlier without
+        the risk of taking it back. The passages are given as the API's own blocks under
+        every version, so there is no boundary of ours to make.
+        """
         if not chunks:
             return decline_without_context(question, self._model, on_text)
 
+        checked = self._instructions in CHECKED_VERSIONS
         started = time.perf_counter()
         first_text_at: float | None = None
         try:
@@ -89,7 +99,7 @@ class ClaudeGenerator:
                 for text in stream.text_stream:
                     if first_text_at is None:
                         first_text_at = time.perf_counter()
-                    if on_text is not None:
+                    if on_text is not None and not checked:
                         on_text(text)
                 message = stream.get_final_message()
         except anthropic.AuthenticationError as error:
@@ -145,13 +155,18 @@ class ClaudeGenerator:
         finished = time.perf_counter()
 
         segments = _segments(message, chunks)
+        # An answer is a reply the model finished, or one that ran out of room.
+        answered = is_answered(
+            segments, refused=message.stop_reason not in ("end_turn", "max_tokens")
+        )
+        reply = check_reply(segments, chunks, answered=answered) if checked else None
+        if reply is not None:
+            segments, answered = reply.segments, reply.answered
+            HeldBack(on_text).finished(segments)
         return Answer(
             question=question,
             segments=segments,
-            # An answer is a reply the model finished, or one that ran out of room.
-            answered=is_answered(
-                segments, refused=message.stop_reason not in ("end_turn", "max_tokens")
-            ),
+            answered=answered,
             model=message.model,
             stop_reason=message.stop_reason or "unknown",
             usage=TokenUsage(
@@ -162,6 +177,7 @@ class ClaudeGenerator:
             ),
             seconds=finished - started,
             seconds_to_first_text=None if first_text_at is None else first_text_at - started,
+            checks=() if reply is None else reply.checks,
         )
 
 

@@ -10,7 +10,7 @@ from collections.abc import Callable, Sequence
 from typing import Literal, Protocol
 
 from handbook_rag.generate.models import Answer, Segment
-from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
+from handbook_rag.generate.prompt import GAP_FORM, NOT_FOUND_MESSAGE
 from handbook_rag.index.store import ScoredChunk
 from handbook_rag.ingest.models import Chunk
 
@@ -153,6 +153,17 @@ def holds_the_decline(segments: Sequence[Segment]) -> bool:
     :func:`is_answered`.
     """
     return _words(NOT_FOUND_MESSAGE) in _words("".join(segment.text for segment in segments))
+
+
+def holds_the_gap_form(segments: Sequence[Segment]) -> bool:
+    """Whether a reply holds the fixed form for a part of the question the passages do not
+    answer (``prompt.GAP_FORM``), as version 2 of the instructions asks for it.
+
+    The words are compared as in :func:`is_answered`. A reply written without the form,
+    as every reply under version 1 was, is left to the list of phrases in
+    ``cache/rules.py``.
+    """
+    return f" {_words(GAP_FORM)} " in f" {_words(''.join(s.text for s in segments))} "
 
 
 def plain_words(text: str) -> str:

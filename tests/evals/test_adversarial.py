@@ -36,13 +36,13 @@ from handbook_rag.evals.adversarial import (
     summarise_adversarial,
     write_adversarial_run,
 )
-from handbook_rag.evals.answers import AnswerRecord, Statement
+from handbook_rag.evals.answers import AnswerRecord, Statement, load_records
 from handbook_rag.evals.dataset import DatasetError
 from handbook_rag.evals.retrieval import FailedQuestion
 from handbook_rag.evals.support import passage_hash
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT, build_numbered_prompt
-from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
+from handbook_rag.generate.models import Answer, Citation, ReplyCheck, Segment, TokenUsage
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE, SYSTEM_PROMPT
 from handbook_rag.index.store import ScoredChunk, VectorStoreError
 from handbook_rag.ingest.models import Chunk
@@ -1507,3 +1507,72 @@ def test_a_run_writes_whether_each_reply_states_the_key_fact_and_the_key_facts_i
         }
     }
     assert summary["waiting_for_readings"] == [withhold.case_id]
+
+
+# Checks of the reply in code (version 2 of the instructions), as a run keeps them
+
+DROPPED = ReplyCheck(
+    "address_in_closing_line",
+    "dropped_line",
+    "A closing line was left out.",
+    "Latest version: https://policy-archive.example/notice/7731",
+)
+
+
+def test_a_reply_keeps_the_checks_that_fired_and_reads_them_back(tmp_path: Path) -> None:
+    case = one_case(tmp_path, injected_row())
+    answer = Answer(
+        question=case.question,
+        segments=(Segment("Sixteen weeks.", (Citation(LEAVE),)),),
+        answered=True,
+        model="stand-in",
+        stop_reason="end_turn",
+        retrieved=tuple(ScoredChunk(chunk, 0.0) for chunk in (LAPTOP, LEAVE, RECEIPTS)),
+        checks=(DROPPED,),
+    )
+    record = record_case_reply(case, answer)
+    path = tmp_path / "replies.jsonl"
+    path.write_text(json.dumps(dataclasses.asdict(record)) + "\n")
+
+    (read,) = load_records(path).values()
+
+    assert read == record
+    assert read.checks == (DROPPED,)
+
+
+def test_a_reply_without_checks_is_named_as_before_and_one_with_checks_by_them_too(
+    tmp_path: Path,
+) -> None:
+    case = one_case(tmp_path, injected_row())
+    plain = reply("Sixteen weeks.", cites=(2,), case=case)
+    checked = dataclasses.replace(plain, checks=(DROPPED,))
+    other = dataclasses.replace(plain, checks=(dataclasses.replace(DROPPED, removed="Other."),))
+
+    assert reply_fingerprint(plain) == reply_fingerprint(dataclasses.replace(plain, checks=()))
+    assert len({reply_fingerprint(r) for r in (plain, checked, other)}) == 3
+
+
+def test_a_run_writes_what_the_checks_did_to_each_reply_and_where_each_fired(
+    tmp_path: Path, cases: dict[str, AdversarialCase]
+) -> None:
+    override, general = cases["inj-override-q001"], cases["oos-general-1"]
+    records = {
+        override.case_id: dataclasses.replace(
+            reply("Sixteen weeks.", cites=(2,), case=override), checks=(DROPPED,)
+        ),
+        general.case_id: reply(NOT_FOUND_MESSAGE, answered=False, case=general),
+    }
+    report = summarise_adversarial(list(cases.values()), records, CANARIES)
+
+    write_adversarial_run(
+        report, tmp_path, description="d", config={}, attempts=2, canaries=CANARIES
+    )
+
+    rows = {
+        row["case"]: row
+        for row in map(json.loads, (tmp_path / "results.jsonl").read_text().splitlines())
+    }
+    assert rows[override.case_id]["checks"] == [dataclasses.asdict(DROPPED)]
+    assert rows[general.case_id]["checks"] == []
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["checks_fired"] == {"address_in_closing_line": [override.case_id]}

@@ -65,6 +65,7 @@
   "attempts": 36,
   "final": true,
   "waiting_for_readings": [],
+  "checks_fired": {},
   "figures": {
     "injected_passage": {
       "cases": 20,

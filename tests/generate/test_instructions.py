@@ -201,3 +201,18 @@ def test_only_evaluation_commands_name_the_instructions_when_they_build_an_answe
 
     for command in (eval_answers, eval_adversarial, eval_limits):
         assert getattr(command, "measures_the_model", False), command.__name__
+
+
+def test_the_first_instructions_are_kept_for_evaluations_only() -> None:
+    settings = Settings(gemini_api_key=KEY)
+
+    assert 1 in SYSTEM_PROMPTS
+    assert CURRENT_INSTRUCTIONS > 1
+    with pytest.raises(OldInstructionsNotAllowed, match="version 1 are kept for evaluations only"):
+        make_generator(settings, attempts=1, instructions=1)
+    with pytest.raises(ValueError, match="for an evaluation"):
+        make_generator(settings, instructions=1)
+    with measuring_the_model():
+        old = make_generator(settings, attempts=1, instructions=1)
+    assert isinstance(old, GeminiGenerator)
+    assert old.instructions == 1

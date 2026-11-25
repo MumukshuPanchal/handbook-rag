@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import itertools
 import json
 import logging
@@ -50,7 +51,7 @@ from handbook_rag.api import (
 from handbook_rag.cli import app as cli
 from handbook_rag.config import Settings
 from handbook_rag.generate.base import GenerationError, Generator
-from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
+from handbook_rag.generate.models import Answer, Citation, ReplyCheck, Segment, TokenUsage
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
 from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.indexer import index_chunks
@@ -677,6 +678,8 @@ def test_ask_numbers_the_sources_in_the_order_the_answer_first_cites_them() -> N
             {"text": " Ask the People team.", "sources": []},
         ],
         "sources": [{"number": 1, **LAPTOP_SOURCE}, {"number": 2, **LEAVE_SOURCE}],
+        # No check of the reply in code fired.
+        "checks": [],
         "model": "stand-in-model-002",
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 1200, "output_tokens": 40},
@@ -693,6 +696,38 @@ def test_ask_numbers_the_sources_in_the_order_the_answer_first_cites_them() -> N
     ((asked, chunks),) = model.asked
     assert asked == QUESTION
     assert [chunk.text for chunk in chunks] == [LEAVE, LAPTOP], "ranked as the search found them"
+
+
+class Checked(Writing):
+    """Writes as the stand-in does, then reports that a check of the reply dropped a line."""
+
+    def generate(
+        self,
+        question: str,
+        chunks: Sequence[Chunk],
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Answer:
+        written = super().generate(question, chunks, on_text=on_text)
+        dropped = ReplyCheck("address_in_closing_line", "dropped_line", "A line was left out.", "x")
+        return dataclasses.replace(written, checks=(dropped,))
+
+
+def test_an_answer_carries_the_note_of_each_check_that_fired_and_never_the_words_taken_out() -> (
+    None
+):
+    with TestClient(answering(Checked(("Sixteen weeks.", (0,))))) as client:
+        response = client.post("/ask", json={"query": QUESTION})
+
+    assert response.status_code == 200
+    assert response.json()["checks"] == [
+        {
+            "check": "address_in_closing_line",
+            "action": "dropped_line",
+            "note": "A line was left out.",
+        }
+    ]
+    assert '"x"' not in response.text
 
 
 def test_a_reply_that_is_not_an_answer_lists_no_sources_and_carries_no_markers() -> None:
@@ -795,7 +830,7 @@ def test_a_stream_sends_each_piece_as_it_is_written_then_the_answer_byte_for_byt
             '"url":"https://handbook.example.com/handbook/people/leave/","section":"people",'
             '"heading_path":["Parental leave"],'
             '"text":"New parents get sixteen weeks of paid leave."}],'
-            '"model":"stand-in-model-002","stop_reason":"end_turn",'
+            '"checks":[],"model":"stand-in-model-002","stop_reason":"end_turn",'
             '"usage":{"input_tokens":1200,"output_tokens":40},"requests":1,"fallback":false,'
             '"took_ms":2000.0,"first_text_ms":1000.0,"trace_id":null,"cached":null,'
             f'"searched_for":{NOT_ASKED_JSON}}}\n\n'
@@ -1374,6 +1409,7 @@ def test_the_api_documents_both_forms_of_an_answer_and_why_it_may_be_refused(
         "answered",
         "segments",
         "sources",
+        "checks",
         "model",
         "stop_reason",
         "usage",

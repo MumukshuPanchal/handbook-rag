@@ -25,7 +25,11 @@ from handbook_rag.evals.judging import Criterion, Judge, JudgedCase
 from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
-from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPTS, build_numbered_prompt
+from handbook_rag.generate.markers import (
+    BOUNDARY_HEX_DIGITS,
+    MARKER_SYSTEM_PROMPTS,
+    numbered_prompt,
+)
 from handbook_rag.generate.prompt import (
     CURRENT_INSTRUCTIONS,
     SYSTEM_PROMPTS,
@@ -75,6 +79,7 @@ VERIFIER_DEVICE = "cpu"
 # to name that layout by (answer_request_fingerprint). The first passage holds the tags
 # the layouts wrap passages in, so that a change to how those are made harmless shows.
 _SAMPLE_QUESTION = "A question?"
+_SAMPLE_BOUNDARY = "0" * BOUNDARY_HEX_DIGITS
 _SAMPLE_PASSAGES = (
     Chunk(
         chunk_id="sample-1",
@@ -235,16 +240,26 @@ def answer_cache_commit(settings: Settings) -> str:
     return collection_slug(settings.handbook_commit[:8])
 
 
-def answer_request_fingerprint(settings: Settings) -> str:
+def answer_request_fingerprint(settings: Settings, instructions: int = CURRENT_INSTRUCTIONS) -> str:
     """A short hash of how a request to the answer model is laid out, apart from its instructions.
 
-    It covers the tags passages are wrapped in, their numbering and how their own text
-    is kept from closing a tag, for the provider the settings name. An answer written
-    from a request laid out another way is an answer of another system.
+    It covers what passages are wrapped in, their numbering and how their own text is
+    kept from closing what wraps them, for the provider the settings name and the
+    version of the instructions. An answer written from a request laid out another way
+    is an answer of another system.
+
+    A layout with a boundary made for each request is named with a fixed code of the same
+    length (:data:`_SAMPLE_BOUNDARY`). The code of a request differs every time, and would
+    give the cache's collection a new name for every question.
     """
     laid_out: object
     if settings.answer_model.startswith("gemini-"):
-        laid_out = build_numbered_prompt(_SAMPLE_QUESTION, _SAMPLE_PASSAGES)
+        laid_out = numbered_prompt(
+            _SAMPLE_QUESTION,
+            _SAMPLE_PASSAGES,
+            instructions=known_instructions(instructions),
+            boundary=_SAMPLE_BOUNDARY,
+        )
     else:
         laid_out = build_user_content(_SAMPLE_QUESTION, _SAMPLE_PASSAGES)
     encoded = json.dumps(laid_out, sort_keys=True, ensure_ascii=False).encode("utf-8")

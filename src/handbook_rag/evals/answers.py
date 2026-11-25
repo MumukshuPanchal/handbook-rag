@@ -38,7 +38,7 @@ from handbook_rag.evals.stage import (
     write_json,
 )
 from handbook_rag.generate.base import GenerationError
-from handbook_rag.generate.models import Answer
+from handbook_rag.generate.models import Answer, ReplyCheck
 from handbook_rag.index.store import VectorStoreError
 from handbook_rag.ingest.models import Chunk, Document
 
@@ -107,6 +107,10 @@ class AnswerRecord:
     output_tokens: int
     seconds: float
     seconds_to_first_text: float | None = None
+    checks: tuple[ReplyCheck, ...] = ()
+    """The checks of the reply in code that fired (``generate/checks.py``). The
+    statements are the reply as they left it, and each check keeps the words it took
+    out. A reply saved before there were checks has none."""
 
     @property
     def text(self) -> str:
@@ -198,6 +202,7 @@ def record_reply(
         output_tokens=answer.usage.output_tokens,
         seconds=answer.seconds,
         seconds_to_first_text=answer.seconds_to_first_text,
+        checks=answer.checks,
     )
 
 
@@ -443,6 +448,7 @@ def _records(rows: Sequence[tuple[int, dict[str, Any]]], path: Path) -> dict[str
                         Statement(statement["text"], tuple(statement["cites"]))
                         for statement in row["statements"]
                     ),
+                    "checks": tuple(ReplyCheck(**check) for check in row.get("checks", ())),
                 }
             )
         except (KeyError, TypeError) as error:

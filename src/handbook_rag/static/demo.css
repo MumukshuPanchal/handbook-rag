@@ -721,6 +721,13 @@ h1 {
   color: var(--warn);
 }
 
+/* What a check of the reply in code did to it, under the reply's text. */
+.check-note {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* An answer that came from the cache says so above its text. */
 .cached {
   margin-bottom: var(--s3);

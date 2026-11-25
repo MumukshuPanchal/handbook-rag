@@ -20,7 +20,7 @@ from handbook_rag.config import Settings, get_settings
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
-from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
+from handbook_rag.generate.models import Answer, Citation, ReplyCheck, Segment, TokenUsage
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import QdrantVectorStore, ScoredChunk, VectorStoreError
 from handbook_rag.ingest.models import Chunk
@@ -673,3 +673,22 @@ def test_a_failed_answer_is_traced_as_failed_and_still_reports_its_trace(
     (call,) = [span for span in sent if span.name == "chat stand-in-model"]
     assert call.status.status_code is StatusCode.ERROR
     assert f"trace {format(root.context.trace_id, '032x')}" in result.output
+
+
+def test_the_checks_of_a_reply_that_fired_are_named_on_its_span_and_nothing_they_took_out(
+    spans: InMemorySpanExporter,
+) -> None:
+    dropped = ReplyCheck("address_in_closing_line", "dropped_line", "A note.", "https://x.org/a")
+    checked = Answer("q", (Segment("Sixteen weeks."),), True, "m", "end_turn", checks=(dropped,))
+    plain = Answer("q", (Segment("Sixteen weeks."),), True, "m", "end_turn")
+
+    for answer in (checked, plain):
+        with tracing.stage("answer") as span:
+            tracing.record_answer(span, answer)
+
+    first, second = spans.get_finished_spans()
+    assert first.attributes is not None
+    assert second.attributes is not None
+    assert first.attributes["handbook_rag.reply_checks"] == ("address_in_closing_line",)
+    assert "handbook_rag.reply_checks" not in second.attributes
+    assert "x.org" not in everything_recorded(spans.get_finished_spans())

@@ -16,13 +16,10 @@ from google import genai
 from google.genai import errors, types
 
 from handbook_rag.generate.base import GenerationError, decline_without_context, is_answered
-from handbook_rag.generate.markers import (
-    MARKER_SYSTEM_PROMPTS,
-    MarkerParser,
-    build_numbered_prompt,
-)
+from handbook_rag.generate.checks import HeldBack, check_reply
+from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPTS, MarkerParser, numbered_prompt
 from handbook_rag.generate.models import Answer, TokenUsage
-from handbook_rag.generate.prompt import CURRENT_INSTRUCTIONS, known_instructions
+from handbook_rag.generate.prompt import CHECKED_VERSIONS, CURRENT_INSTRUCTIONS, known_instructions
 from handbook_rag.ingest.models import Chunk
 from handbook_rag.measuring import refuse_old_instructions
 
@@ -101,10 +98,17 @@ class GeminiGenerator:
         *,
         on_text: Callable[[str], None] | None = None,
     ) -> Answer:
-        """Write an answer grounded in ``chunks``. ``on_text`` receives text as it arrives."""
+        """Write an answer grounded in ``chunks``. ``on_text`` receives text as it arrives.
+
+        Under instructions whose replies are checked, text is passed on once a citation
+        follows it, and the rest after the checks (``checks.py``), so that nothing passed
+        on is ever taken back.
+        """
         if not chunks:
             return decline_without_context(question, self._model, on_text)
 
+        checked = self._instructions in CHECKED_VERSIONS
+        held = HeldBack(on_text)
         parser = MarkerParser(chunks)
         started = time.perf_counter()
         first_text_at: float | None = None
@@ -116,7 +120,7 @@ class GeminiGenerator:
         blocked = False
         # Built before the request, so that a mistake in our own settings is never
         # reported as a reply that could not be read.
-        prompt = build_numbered_prompt(question, chunks)
+        prompt = numbered_prompt(question, chunks, instructions=self._instructions)
         config = types.GenerateContentConfig(
             system_instruction=MARKER_SYSTEM_PROMPTS[self._instructions],
             max_output_tokens=self._max_tokens,
@@ -136,7 +140,11 @@ class GeminiGenerator:
                 if text:
                     if first_text_at is None:
                         first_text_at = time.perf_counter()
-                    _pass_on(parser.feed(text), on_text)
+                    shown = parser.feed(text)
+                    if checked:
+                        held.closed_so_far(parser.segments)
+                    else:
+                        _pass_on(shown, on_text)
                 candidate = piece.candidates[0] if piece.candidates else None
                 if candidate is not None and candidate.finish_reason is not None:
                     finish = candidate.finish_reason
@@ -156,20 +164,28 @@ class GeminiGenerator:
             raise GenerationError(
                 "The Gemini API sent a reply that could not be read. Try again."
             ) from error
-        _pass_on(parser.finish(), on_text)
+        rest = parser.finish()
         finished = time.perf_counter()
 
         withheld = blocked or finish in _WITHHELD
         segments = parser.segments
+        answered = is_answered(segments, refused=withheld or finish not in _ANSWER_ENDINGS)
+        reply = check_reply(segments, chunks, answered=answered) if checked else None
+        if reply is None:
+            _pass_on(rest, on_text)
+        else:
+            segments, answered = reply.segments, reply.answered
+            held.finished(segments)
         return Answer(
             question=question,
             segments=segments,
-            answered=is_answered(segments, refused=withheld or finish not in _ANSWER_ENDINGS),
+            answered=answered,
             model=served_by or self._model,
             stop_reason=_stop_reason(finish, withheld=withheld),
             usage=_usage(usage),
             seconds=finished - started,
             seconds_to_first_text=None if first_text_at is None else first_text_at - started,
+            checks=() if reply is None else reply.checks,
         )
 
     def _explain(self, error: errors.APIError) -> GenerationError:

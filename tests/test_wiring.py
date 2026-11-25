@@ -27,12 +27,17 @@ from handbook_rag.evals.judge import (
 )
 from handbook_rag.evals.judging import Criterion
 from handbook_rag.evals.support import SUPPORT
+from handbook_rag.generate import markers
 from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
-from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT, build_numbered_prompt
+from handbook_rag.generate.markers import (
+    MARKER_SYSTEM_PROMPT,
+    MARKER_SYSTEM_PROMPTS,
+    build_numbered_prompt,
+)
 from handbook_rag.generate.models import Answer, Segment
-from handbook_rag.generate.prompt import CURRENT_INSTRUCTIONS, SYSTEM_PROMPT
+from handbook_rag.generate.prompt import CURRENT_INSTRUCTIONS, SYSTEM_PROMPT, SYSTEM_PROMPTS
 from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.store import QdrantVectorStore
 from handbook_rag.wiring import (
@@ -327,8 +332,12 @@ def test_a_run_records_what_decides_how_an_answer_looks() -> None:
         "answer_context_chunks": 5,
         "citations": "numbered markers",
         "instructions": described["instructions"],
+        "instructions_version": CURRENT_INSTRUCTIONS,
     }
     assert len(str(described["instructions"])) == 16
+    # Under version 1, exactly what every run saved before there were versions holds.
+    first = describe_generation(Settings(), 1)
+    assert set(first) == set(described) - {"instructions_version"}
 
 
 def test_reworded_instructions_are_recorded_as_a_different_system(
@@ -357,8 +366,10 @@ def test_the_instructions_of_the_answer_model_are_those_its_generator_sends() ->
     gemini, claude = Settings(), Settings(answer_model=CLAUDE)
 
     # A Gemini model cites by numbered markers, and is told how to write them.
-    assert wiring.answer_instructions(gemini) == MARKER_SYSTEM_PROMPT
-    assert wiring.answer_instructions(claude) == SYSTEM_PROMPT
+    assert wiring.answer_instructions(gemini) == MARKER_SYSTEM_PROMPTS[CURRENT_INSTRUCTIONS]
+    assert wiring.answer_instructions(claude) == SYSTEM_PROMPTS[CURRENT_INSTRUCTIONS]
+    assert wiring.answer_instructions(gemini, 1) == MARKER_SYSTEM_PROMPT
+    assert wiring.answer_instructions(claude, 1) == SYSTEM_PROMPT
     # What is recorded with a run is a hash of exactly these.
     for settings in (gemini, claude):
         expected = hashlib.sha256(wiring.answer_instructions(settings).encode("utf-8"))
@@ -618,7 +629,7 @@ def test_other_instructions_another_layout_of_the_request_or_a_new_version_give_
         )
         assert renamed() == (False, True), "the instructions a Claude model is given"
     with monkeypatch.context() as patch:
-        patch.setattr(wiring, "build_numbered_prompt", lambda question, chunks: "laid out anew")
+        patch.setattr(wiring, "numbered_prompt", lambda question, chunks, **_: "laid out anew")
         assert renamed() == (True, False)
     with monkeypatch.context() as patch:
         patch.setattr(wiring, "build_user_content", lambda question, chunks: ["laid out anew"])
@@ -640,6 +651,26 @@ def test_the_layout_of_a_request_is_named_from_the_text_a_model_would_be_sent() 
     assert answer_request_fingerprint(Settings()) != (
         answer_request_fingerprint(Settings(answer_model=CLAUDE))
     )
+
+
+def test_a_layout_with_a_boundary_is_named_by_a_fixed_code_and_not_by_a_request_s() -> None:
+    """The code of a request is new each time. In the cache's name it would start a new
+    collection for every question, so the layout is named with a fixed code."""
+    settings = Settings()
+    named = answer_request_fingerprint(settings)
+
+    assert all(answer_request_fingerprint(settings) == named for _ in range(3))
+    assert answer_cache_collection(settings) == answer_cache_collection(settings)
+    sample = markers.numbered_prompt(
+        wiring._SAMPLE_QUESTION,
+        wiring._SAMPLE_PASSAGES,
+        instructions=CURRENT_INSTRUCTIONS,
+        boundary=wiring._SAMPLE_BOUNDARY,
+    )
+    expected = hashlib.sha256(json.dumps(sample, sort_keys=True, ensure_ascii=False).encode())
+    assert named == expected.hexdigest()[:16]
+    # Each version names its own layout.
+    assert answer_request_fingerprint(settings, 1) != named
 
 
 def stores() -> QdrantVectorStore:

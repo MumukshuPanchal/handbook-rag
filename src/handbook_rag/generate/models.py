@@ -63,6 +63,24 @@ class CacheHit:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplyCheck:
+    """A check of the reply in code that fired, and what it did (``generate/checks.py``).
+
+    A change to a reply is never silent: whoever shows the answer shows ``note`` with it.
+    """
+
+    name: str
+    """Which check: ``address_in_closing_line``, ``cites_nothing`` or ``mostly_a_copy``."""
+    action: str
+    """What it did: ``dropped_line``, ``declined`` or ``marked``."""
+    note: str
+    """What the reader is told, in fixed words."""
+    removed: str = ""
+    """The model's words that the check took out, for an evaluation to read. Never shown
+    to the asker, and empty when the reply was only marked."""
+
+
+@dataclass(frozen=True, slots=True)
 class Answer:
     """The assistant's reply to one question."""
 
@@ -90,6 +108,10 @@ class Answer:
     """Set when the answer cache served the answer. The model, the stop reason and the
     text are then those of the stored answer; the tokens and the time are zero, because
     no model was asked; and no passages were retrieved."""
+    checks: tuple[ReplyCheck, ...] = ()
+    """The checks of the reply in code that fired, in the order they were made. The
+    segments are the reply as the checks left it. Empty when none fired, and for every
+    reply written under instructions that have no checks."""
 
     @property
     def text(self) -> str:

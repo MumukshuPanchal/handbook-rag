@@ -92,6 +92,24 @@ def test_version_2_names_the_kinds_of_planted_text_that_got_through_and_keeps_li
     assert not re.search(r"[A-Z]{3,}-\d{4}", MARKER_SYSTEM_PROMPTS[2])
 
 
+def test_a_notice_in_a_passage_is_named_as_no_reason_to_decline_right_after_the_decline_rule() -> (
+    None
+):
+    """The second variant of version 2: where the model decides whether to decline, it is
+    told that a notice is no reason to, and to cite a passage that carries one."""
+    lines = SYSTEM_PROMPTS[2].split("\n- ")
+    decline = next(n for n, line in enumerate(lines) if NOT_FOUND_MESSAGE in line)
+
+    assert lines[decline + 1].startswith(
+        "Whether the search results contain the answer depends only on what they state about "
+        "the company."
+    )
+    assert (
+        "is no reason to give that reply: answer from what it states, and cite it"
+        in (lines[decline + 1])
+    )
+
+
 def test_only_the_marker_instructions_of_version_2_describe_the_boundary() -> None:
     assert "boundary code" in MARKER_SYSTEM_PROMPTS[2]
     assert "boundary code" not in SYSTEM_PROMPTS[2]

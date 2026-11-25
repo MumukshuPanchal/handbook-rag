@@ -2663,21 +2663,40 @@ def test_a_check_of_another_version_that_no_judge_of_today_made_is_still_not_con
     judge = FakeJudge()
     monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
     assert runner.invoke(app, [*judged_run["judge"], "--variant", "baseline"]).exit_code == 0
-    # The model is changed since. The check is then of no judge the code builds today, and
-    # the rule that settings must match is what refuses it.
+    assert (
+        runner.invoke(app, [*judged_run["judge"], "--judge-version", "2", "--variant", "v2"])
+    ).exit_code == 0
+    kept = {
+        variant: (judged_run["checks"] / variant / "judgements.jsonl").read_text()
+        for variant in ("baseline", "v2")
+    }
+    asked = len(judge.asked)
+    # The model is changed since. Each check is then of no judge the code builds today, and
+    # the version its settings record is what refuses it, to continue it and to restart it.
     monkeypatch.setenv("HANDBOOK_RAG_JUDGE_MODEL", "gemini-9-judge")
     get_settings.cache_clear()
+    second_on_first = [*judged_run["judge"], "--judge-version", "2", "--variant", "baseline"]
+    first_on_second = [*judged_run["judge"], "--variant", "v2"]
 
-    refused = runner.invoke(
-        app, [*judged_run["judge"], "--judge-version", "2", "--variant", "baseline"]
-    )
+    for command, held, asked_for in (
+        (second_on_first, 1, 2),
+        ([*second_on_first, "--restart"], 1, 2),
+        (first_on_second, 2, 1),
+        ([*first_on_second, "--restart"], 2, 1),
+    ):
+        refused = runner.invoke(app, command)
 
-    assert refused.exit_code == 1
-    assert (
-        "was made with other settings (judge_instructions, judge_model, judge_request, "
-        "judge_version)" in refused.output
-    )
-    assert len(judge.asked) == 2
+        assert refused.exit_code == 1, command
+        assert f"holds a check of version {held} of a judge, not of version {asked_for}" in (
+            refused.output
+        ), command
+    # Nothing of either check was discarded, and nothing was asked.
+    for variant, judgements in kept.items():
+        assert (judged_run["checks"] / variant / "judgements.jsonl").read_text() == judgements
+    assert len(judge.asked) == asked
+    # A check of the version asked for is still restarted as asked, under the new model.
+    restarted = runner.invoke(app, [*judged_run["judge"], "--variant", "baseline", "--restart"])
+    assert restarted.exit_code == 0, restarted.output
 
 
 # The files in which version 1 of the support judge keeps its verdicts on an answer run,

@@ -43,6 +43,14 @@ BASELINE_LINE = "- **Version 2's score of the `baseline` answers.**"
 
 # How version 2 writes down the limits it found, at the end of its reason.
 NAMED = re.compile(r"\(Limits the judge named: (.*)\)$")
+# The answers of the first labelled set in which version 2 counts as left out a limit that
+# the question itself names, and the words of the question that name it: its two false
+# alarms on real answers, and a copy. A test checks them against the files.
+QUESTION_NAMES_THE_LIMIT = {
+    "q062": "people manager",
+    "q131": "production environment",
+    "b09-v1": "Ireland",
+}
 # The misses of version 2 in which it found the limit, and still called the statement
 # supported: the words of the limit that its reason holds. A test checks them against the
 # run, and that no other miss's reason holds its limit.

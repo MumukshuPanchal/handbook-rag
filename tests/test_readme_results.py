@@ -524,11 +524,23 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
     ]
     assert set(unclear) <= set(real)
     assert f"**The {in_words(len(faulted))} statements it faults in those answers.**" in section
-    assert f"For each of the other {in_words(len(only))}, its reason names a limit" in section
+    assert f"Each of the other {in_words(len(only))} it faults for a limit left out" in section
+    # What the questions, the instructions and the verdicts say of the three: the two
+    # labelled supported are those whose question names the very limit, and the third is
+    # passed in a copy of its answer (held against the files in test_limit_documents.py).
+    labelled_supported = sorted(
+        key[0] for key in only if limit_runs.first_set_statement(key)["expected"] == "supported"
+    )
+    assert labelled_supported == sorted(
+        case
+        for case in limit_runs.QUESTION_NAMES_THE_LIMIT
+        if limit_runs.first_set()[case]["kind"] == "real"
+    )
     assert (
-        f"call {in_words(labels['supported'])} of the {in_words(len(only))} supported, as both "
-        f"readers did, and the third unclear"
+        f"In `{labelled_supported[0]}` and `{labelled_supported[1]}` the question names the very "
+        "limit"
     ) in section
+    assert f"The third, `{unclear[0]}`, is labelled unclear, and version 2 passes" in section
     expected = {
         "An answer can give a rule from its passage": [
             LIMITS_ISSUE,
@@ -558,6 +570,7 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
             three(second["recall"]["high"]),
             SECOND,
             FIRST,
+            SECOND,
         ],
         "- **On the first labelled answers version 2 is worse than version 1**": [
             SECOND,
@@ -567,8 +580,14 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
             f"{on_first['kappa']:.3f}",
         ],
         limit_runs.BASELINE_LINE: baseline_line_numbers(),
-        "- **The four statements it faults in those answers.**": [FIRST, SECOND, FIRST],
-        "- **Version 1 stays the judge of every published score, also at the next": [
+        "- **The four statements it faults in those answers.**": [
+            FIRST,
+            FIRST,
+            SECOND,
+            SECOND,
+            FIRST,
+        ],
+        "- **Version 1 stays the judge of every score in the results tables": [
             FIRST,
             HARDENING_ISSUE,
             SECOND,
@@ -579,7 +598,7 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
     assert_numbers(section, expected)
 
     # And once more under Limitations, with what is not fixed.
-    limitation = line_starting(readme(), "- **Answers that leave out a limit or an exception are")
+    limitation = line_starting(readme(), "- **How often answers leave out a limit or an exception")
     supported = summary("answers/baseline")["metrics"]["supported"]
     by_version_1 = {row["case"]: row for row in limit_runs.rows(limit_runs.BASELINE_VERDICTS[1])}
     # Each real answer the readers split on is one that the judge passed, so counting it
@@ -615,9 +634,12 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
         )
         assert len(check["false_alarm_statements"]) == check["false_alarms"]
     assert "false alarms on real answers where version 1 raised" in limitation
-    # The decision, as the runs left it: version 1 gives every published score, and version
+    # The decision, as the runs left it: version 1 gives every score of the results tables and
     # 2 is kept beside it for one fault.
-    assert "So version 1 stays the judge of every published score" in limitation
+    assert (
+        "So version 1 stays the judge of every score in the results tables and in a run's summary"
+        in limitation
+    )
     assert (
         f"in the saved answers version 2 faults {in_words(len(only))} statements for it, of "
         f"which the labels call {in_words(labels['supported'])} supported and leave the third "
@@ -625,7 +647,7 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
     ) in limitation
     assert "its score is reported beside version 1's, never in its place" in section
     assert "the plan changed when these runs came in" in section
-    assert "are measured, and not fixed.**" in limitation
+    assert "is not measured, and none is fixed.**" in limitation
     assert f"with {in_words(len(second['false_alarms']))} false alarm in" in limitation
     assert f"The {in_words(len(real))} real cases stay labelled unclear" in limitation
     assert "The answers are not changed" in limitation
@@ -649,7 +671,7 @@ def test_the_readme_gives_version_2s_score_of_the_baseline_answers() -> None:
 def test_the_control_is_the_committed_control_run() -> None:
     run = summary("judge-correct/references")
     same = run["agreement"]["same_decision"]
-    line = line_starting(readme(), "- **A control for the second judge.**")
+    line = line_starting(readme(), "- **A control for the judge of correctness.**")
 
     assert run["answers_judged"] == run["answers_labelled"]
     assert numbers(line) == [str(run["answers_labelled"]), str(hits(same)), *interval_numbers(same)]

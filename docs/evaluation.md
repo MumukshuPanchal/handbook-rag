@@ -425,7 +425,7 @@ make eval-support-v2        # the baseline answers judged by version 2, with the
 
 ### The labelled set
 
-[`evals/judge/limits/`](../evals/judge/limits/README.md) holds 120 answers on 40 passages, three for each: one keeps the limit, one leaves it out, and one leaves out something that does not limit the rule, so that a judge which faults every omission is not rewarded. One model session wrote and labelled them. Three reader sessions labelled them again from the passage and the rubric alone, without seeing those labels. The two labellings agree on 196 of 197 statements, and the one they split on is labelled `unclear` and left out. So a check compares 196 statements: 39 that leave a limit out and 157 that are supported. No person has read the set. [Its card](../evals/judge/limits/README.md) says how it was made and where the rubric leaves room.
+[`evals/judge/limits/`](../evals/judge/limits/README.md) holds 120 answers on 40 passages, three for each: one keeps the limit, one leaves it out, and one leaves out something that does not limit the rule, so that a judge which faults every omission is not rewarded. One model session wrote and labelled them. Three reader sessions labelled them again from the passage and the rubric alone, without seeing those labels, by the account of how they were briefed. The two labellings agree on 196 of 197 statements, and the one they split on is labelled `unclear` and left out. So a check compares 196 statements: 39 that leave a limit out and 157 that are supported. No person has read the set. [Its card](../evals/judge/limits/README.md) says how it was made and where the rubric leaves room.
 
 ### Version 2 of the judge
 
@@ -437,7 +437,7 @@ Version 2 differs from version 1 in what it is told and in the shape of its repl
 
 It is still one request for each answer, and it reads an answer in the same blocks as version 1. Its settings record its version and its own hashes of its instructions and of the layout of its requests, so neither version continues a run or a check of the other.
 
-It was written after the result of version 1 on this set was known, by a session that was not shown the set's answers. The repository does not record what else that session read. The set's card, which sorts the answers by the same seven kinds of limit that the instructions of version 2 list, was in the repository then. A check on other answers would show whether the result below carries over.
+Its instructions were written after the result of version 1 on this set was known, without the set's answers in view. They share more with the set's card than its seven kinds of limit: their step 3, which asks for a person, a place, a time, an amount or a case that the answer covers and the passage does not, is the card's own test for building the set, and their list of what may be left out is the card's four kinds of harmless omission. No phrase of four or more words of their check for a limit left out is in a passage, a question or a statement of the set. They were written with the first labelled answers in view: their answers, labels and unclear statements, the planted kinds and the reasons of version 1, and the words that mark a limit in the passages of the real answers. So neither set is a test held out from version 2. On the first set that would favour version 2, and it did no better than version 1 there.
 
 ### The two versions on the set
 
@@ -476,7 +476,7 @@ By kind of limit, the faults that each version caught:
 | `lim-114` | `unless` | unless you are doing so at the request of IT to troubleshoot a technical problem with the laptop | Under no circumstance should you perform your own disk wipe |
 
 - **In two of the misses it found the limit.** In `lim-069` it named the limit, and in `lim-101` its reason quotes it, and both times it called the statement supported.
-- **Its one false alarm** is statement 1 of `lim-086`, a `harmless` answer to "What kinds of changes should product development teams refrain from making?" that gives another rule of its passage. Version 2 called it unsupported for leaving out "Product development teams", though its own instructions say that a limit the question asks about is kept.
+- **Its one false alarm** is statement 1 of `lim-086`, a `harmless` answer to "What kinds of changes should product development teams refrain from making?" that gives another rule of its passage. Version 2 called it unsupported for leaving out "Product development teams", though its own instructions say that a limit the question asks about is kept. The same mistake, a limit that the question itself names counted as left out, is behind its false alarms on the real answers `q062` and `q131` below, and on the copy `b09-v1`.
 
 ### What it costs
 
@@ -487,11 +487,11 @@ By kind of limit, the faults that each version caught:
 | Median time of a verdict | 1.7 s | 2.0 s |
 | Attempts for the 120 answers | 172 | 236 |
 
-Version 2 reads more than twice the input tokens of version 1, because the rubric is in its instructions, here and on the first labelled answers below. It sends the same number of requests, and on the free tier the allowance is counted in requests. Its median verdict was slower here and faster there. Both runs met an overloaded model, and every failed attempt is counted. The runs do not record why an attempt failed, so the difference in attempts is not read as a cost of version 2.
+Version 2 reads more than twice the input tokens of version 1, here and on the first labelled answers below, because its instructions are almost three times as long: version 1 is told 4,062 characters, and version 2 the rubric, 5,550, and the check for a limit left out, 5,737. It sends the same number of requests, and on the free tier the allowance is counted in requests. Its median verdict was slower here and faster there. Both runs met an overloaded model, and every failed attempt is counted. The runs do not record why an attempt failed, so the difference in attempts is not read as a cost of version 2.
 
 ### Version 2 on the first labelled answers
 
-This is the check that version 1 passed before its score was used: the [169 labelled answers](../evals/judge/README.md) of the first set, which are the 129 real answers of the first answer run and 40 copies with one planted fault each. On these answers version 2 must not start faulting good ones.
+This is the check that version 1 passed before its score was used: the [169 labelled answers](../evals/judge/README.md) of the first set, which are the 129 real answers of the first answer run and 40 copies with one planted fault each. On these answers version 2 must not start faulting good ones. It is not a test held out from version 2: its instructions were written with these answers in view, as said above, which would favour it.
 
 | On the first labelled answers | Version 1 | Version 2 |
 |---|---|---|
@@ -519,7 +519,7 @@ This is the check that version 1 passed before its score was used: the [169 labe
 
 - **It missed one planted fault**, the citation of the wrong passage planted in `q027-v1`. Its reason judges the statement by a passage that the statement does not cite.
 - **Its two false alarms are real answers**, `q062` and `q131`. It faulted each for leaving out a limit that its reason names, "As a people manager" and "within the GitLab production environment", where both readers called the statement supported. The one false alarm of version 1, in `q092`, version 2 calls `no_claim`, as labelled.
-- **Two of the six are labelled `unclear`, and count in no figure.** Statement 8 of `q104` is one of the three real answers that the readers split on, and version 2 faults it for a limit that the title of a passage puts on the rule. Statement 2 of `b09-v1` is the same statement as in the real answer `b09`, with the same question and passages, in a copy that differs in another statement's citation. Version 2 faults it in the copy and passes it in `b09`.
+- **Two of the six are labelled `unclear`, and count in no figure.** Statement 8 of `q104` is one of the three real answers that the readers split on, and version 2 faults it because its passage asks for the link in the calendar invite "of the 1:1 meeting". It passes the same statement in the copy `q104-v1`, with the same question and passages. Statement 2 of `b09-v1` is the same statement as in the real answer `b09`, with the same question and passages, in a copy that differs in another statement's citation. Version 2 faults it in the copy and passes it in `b09`.
 
 ### Version 2 on the answers of the `baseline` run
 
@@ -537,12 +537,12 @@ These are the four statements it calls unsupported:
 | `q131` | 2 | `supported` | `supported` | within the GitLab production environment |
 
 - **One is the statement that version 1 faulted too.** In `q064` it cites no passage, and the labels call it unsupported.
-- **The other three are faulted for a limit left out.** The labels call two of them supported, as both readers did, and the third unclear: `q104` is one of the three real answers the readers split on, and version 2 passes the other two. By the labels, version 2 found no fault in these answers that version 1 missed. By its reasons, three answers leave out a limit. On three statements, that is the labels' word against the judge's.
+- **The other three are faulted for a limit left out**, and what the questions, the instructions of version 2 and its verdicts say goes against each fault. In `q062` the question is "What should a people manager set up in Workday before going on an extended absence?": it names the group, and the instructions keep a limit that the question asks about. The reason says that the statement "asserts the rule for everyone". The label, supported by both readers, follows the rubric. In `q131` the question names "GitLab's production environment" and statement 1 names it too; the instructions keep a limit that another statement of the answer gives, and fault a limit once, in the statement that gives the rule. The label is supported, by both readers. `q104` is labelled unclear, one of the three real answers the readers split on, and version 2 passes the same statement in the copy `q104-v1`: its verdict there carries little. It passes the other two real answers the readers split on. By the labels, version 2 found no fault in these answers that version 1 missed. This is what the files say, read in a review by a model session; no person has read them.
 - **The other fault of version 1**, statement 2 of `q092`, which the labels call `no_claim`, version 2 does not raise.
 
 ### Which judge gives the scores
 
-- **Version 1 stays the judge of "supported by its sources".** Every published score is read from its files, and so is every score in an answer run's summary. It will score the next measurement of the answers too.
+- **Version 1 stays the judge of "supported by its sources".** Every score in the results tables is read from its files, and so is every score in an answer run's summary. It will score the next measurement of the answers too.
 - **Version 2 is kept as a second instrument for one fault.** It is the judge to run where the question is whether a limit was left out, and its score is reported beside version 1's, never in its place. The first plan was to judge the next measurement of the answers by version 2, when the instructions change with the hardening against planted instructions ([issue 66](https://github.com/MumukshuPanchal/handbook-rag/issues/66)), and to make it the default there. The plan changed when its runs on the first labelled answers and on the `baseline` answers came in, above ([ADR 0023](adr/0023-a-second-version-of-the-support-judge-for-dropped-limits.md)).
 - **Each version keeps its verdicts on an answer run in files of its own** ([what a run writes](#what-a-run-writes)). Version 2 never reads, continues or discards the files of version 1. `eval-support --judge-version 2` prints version 2's score beside the run's other scores and writes none of the run's own files, and with `--restart` it discards version 2's verdicts alone.
 

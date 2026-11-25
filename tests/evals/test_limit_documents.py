@@ -30,12 +30,14 @@ from typing import Any
 import pytest
 
 from handbook_rag.config import Settings
+from handbook_rag.evals.judge import SUPPORT_INSTRUCTIONS
 from handbook_rag.evals.judge_v2 import HOW_TO_CHECK
+from handbook_rag.evals.judge_v2 import RUBRIC as RUBRIC_TEXT
 from handbook_rag.evals.metrics import Estimate
 from handbook_rag.evals.support import SUPPORT, SUPPORT_V2
 from handbook_rag.wiring import describe_judge
 from tests.evals import limit_runs
-from tests.evals.test_committed_limit_cases import COUNTED_FAULTS, LIMIT_KINDS
+from tests.evals.test_committed_limit_cases import COUNTED_FAULTS, LEFT_OUT, LIMIT_KINDS
 from tests.test_readme_results import (
     anchors,
     assert_numbers,
@@ -72,6 +74,27 @@ DATE = ["2026", "11", "25"]
 A_DAY, MEASURING_AGAIN = "500", "460"
 # The figures of agreement that a table of a check gives, beside kappa.
 AGREEMENT_FIGURES = ("recall", "precision", "same_decision", "same_answer")
+# The step of version 2's check that is the card's test of a limit, and the step of the
+# card's making that states that test.
+TEST_STEP, CARD_STEP = "3", "2"
+# The test, in the words of each.
+TEST_IN_THE_CHECK = (
+    "name a person, a place, a time, an amount or a case that a reader would take the answer "
+    "to cover, and that the passage does not cover"
+)
+TEST_IN_THE_CARD = (
+    "there had to be a case that the rule without its limit covers and the passage does not"
+)
+# What version 2's check says may be left out, as the card's kinds of harmless omission.
+MAY_BE_LEFT_OUT = {
+    "how something is done": "detail",
+    "why it is done": "reason",
+    "an example": "example",
+    "another rule of the passage": "other_rule",
+}
+# The words of the passage of `q104` on which version 2's verdict turns, as its reason quotes
+# them.
+MEETING = "of the 1:1 meeting"
 # What version 2 is told to look for, in the order of its instructions, and the kind of
 # limit of the labelled answers that each is.
 LOOKED_FOR = {
@@ -261,7 +284,149 @@ def test_version_2_is_told_to_look_for_the_seven_kinds_of_limit_of_the_set() -> 
     assert len(listed) == len(LOOKED_FOR)
     assert sorted(LOOKED_FOR.values()) == sorted(LIMIT_KINDS)
     for text in (read(ADR), guide_section()):
-        assert f"the same {in_words(len(LIMIT_KINDS))} kinds of limit" in text
+        assert f"than its {in_words(len(LIMIT_KINDS))} kinds of limit" in text
+    for text in (read(README), read(LIMITS_CARD)):
+        assert f"its {in_words(len(LIMIT_KINDS))} kinds of limit" in text
+
+
+def words_of(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9$']+", text.casefold())
+
+
+def phrases_of_four(text: str) -> set[tuple[str, ...]]:
+    found = words_of(text)
+    return {tuple(found[i : i + 4]) for i in range(len(found) - 3)}
+
+
+def test_what_the_check_of_version_2_shares_with_the_card_of_the_set() -> None:
+    card = read(LIMITS_CARD)
+    steps = dict(re.findall(r"^(\d)\. \*\*(.+?)\*\*", HOW_TO_CHECK, flags=re.MULTILINE))
+    card_steps = dict(re.findall(r"^(\d)\. \*\*(.+?)\*\*", card, flags=re.MULTILINE))
+    in_the_check = " ".join(HOW_TO_CHECK.split())
+
+    # Its step of deciding is the card's own test for building the set.
+    assert steps[TEST_STEP] == "Decide."
+    assert TEST_IN_THE_CHECK in in_the_check
+    assert card_steps[CARD_STEP] == "Making sure a limit is a limit."
+    assert TEST_IN_THE_CARD in card
+    # Its list of what may be left out is the card's four kinds of harmless omission.
+    for words in MAY_BE_LEFT_OUT:
+        assert words in in_the_check, words
+    assert sorted(MAY_BE_LEFT_OUT.values()) == sorted(LEFT_OUT)
+    # And no phrase of four words of the check is in a question or a statement of the set, or
+    # in the words of its passages that the file quotes. The passages themselves are compared
+    # by a slow test in test_committed_limit_cases.py, which needs the handbook.
+    of_the_check = phrases_of_four(HOW_TO_CHECK)
+    for case in limit_runs.cases().values():
+        texts = [case["question"], case["limit"], case.get("left_out", "")]
+        texts += [statement["text"] for statement in case["statements"]]
+        for text in texts:
+            assert not phrases_of_four(text) & of_the_check, (case["case"], text)
+    # The documents say so, in the decision record, the guide, the card and the README.
+    assert f"step {TEST_STEP}, which asks for a person, a place, a time, an amount or a case" in (
+        read(ADR)
+    )
+    assert f"step {TEST_STEP}, which asks for a person" in guide_section()
+    assert f"its test of a limit (step {CARD_STEP} of how it was made)" in card
+    assert "its test of a limit and its kinds of harmless omission" in read(README)
+    for text in (read(ADR), guide_section()):
+        assert "the card's four kinds of harmless omission" in text
+        assert "No phrase of four or more words of their check for a limit left out" in text
+
+
+def test_version_2s_instructions_are_almost_three_times_as_long_as_those_of_version_1() -> None:
+    longer = (len(RUBRIC_TEXT) + len(HOW_TO_CHECK)) / len(SUPPORT_INSTRUCTIONS)
+
+    assert 2.5 < longer < 3
+    for text in (read(README), read(ADR), guide_section()):
+        assert "because its instructions are almost three times as long" in text
+        assert "because the rubric is in its instructions" not in text
+
+
+def test_the_alarms_on_real_answers_count_as_left_out_a_limit_that_the_question_names() -> None:
+    on_second = limit_runs.first_set_check(2)
+    first_set = limit_runs.first_set()
+    text = guide_section()
+    in_the_check = " ".join(HOW_TO_CHECK.split())
+
+    # The instructions keep a limit that the question asks about, or that another statement
+    # gives, and fault a limit once.
+    assert "if the question asks about that very group, place, period or case" in in_the_check
+    assert "or if another statement of the same answer gives it for this rule" in in_the_check
+    assert "Fault a limit once, in the statement that gives the rule it belongs to." in (
+        in_the_check
+    )
+    faulted = {
+        case: number
+        for case, number in on_second["verdicts"]
+        if on_second["verdicts"][(case, number)] == "unsupported"
+        and limit_runs.first_set_statement((case, number))["expected"] in ("supported", "unclear")
+        and case in limit_runs.QUESTION_NAMES_THE_LIMIT
+    }
+    assert sorted(faulted) == sorted(limit_runs.QUESTION_NAMES_THE_LIMIT)
+    for case, words in limit_runs.QUESTION_NAMES_THE_LIMIT.items():
+        named = limit_runs.named_limits(on_second["reasons"][(case, faulted[case])])
+        assert words.casefold() in first_set[case]["question"].casefold(), case
+        assert words.casefold() in named.casefold(), case
+    # The two real ones are labelled supported by both readers; in `q062` the reason says the
+    # statement gives the rule for everyone; in `q131` statement 1 gives the limit too.
+    for case in ("q062", "q131"):
+        readers = limit_runs.first_set_statement((case, faulted[case]))["readers"]
+        assert first_set[case]["kind"] == "real"
+        assert readers["first"] == readers["second"] == "supported"
+    assert "asserts the rule for everyone" in on_second["reasons"][("q062", faulted["q062"])]
+    assert f'"{first_set["q062"]["question"]}"' in text
+    first_of_q131 = limit_runs.first_set_statement(("q131", 1))
+    assert "production environment" in first_of_q131["text"]
+    assert on_second["verdicts"][("q131", 1)] == "supported"
+    assert faulted["q131"] != 1
+    assert 'In `q131` the question names "GitLab\'s production environment" and statement 1' in text
+    assert "GitLab's production environment" in first_set["q131"]["question"]
+    # Said once, where the false alarm on the limit answers is described.
+    assert (
+        "The same mistake, a limit that the question itself names counted as left out, is behind "
+        "its false alarms on the real answers `q062` and `q131` below, and on the copy `b09-v1`."
+    ) in text
+    # `q104`: its reason turns on the passage's words, and the copy is passed.
+    assert f"calendar invite {MEETING}" in on_second["reasons"][("q104", 8)]
+    assert f'the link in the calendar invite "{MEETING}"' in text
+    assert "This is what the files say, read in a review by a model session" in text
+
+
+def test_version_2_decides_the_same_statement_two_ways_in_two_pairs() -> None:
+    on_second = limit_runs.first_set_check(2)
+    first_set = limit_runs.first_set()
+    real = limit_runs.real_unclear_in_the_first_set()
+    pairs = []
+    for copy, answer in first_set.items():
+        original = first_set.get(copy.removesuffix("-v1"))
+        if original is None or original is answer:
+            continue
+        assert original["question"] == answer["question"], copy
+        assert original["passages"] == answer["passages"], copy
+        for ours, theirs in zip(original["statements"], answer["statements"], strict=True):
+            same = (ours["text"], ours["cites"]) == (theirs["text"], theirs["cites"])
+            key, copied = (original["case"], ours["number"]), (copy, theirs["number"])
+            if same and on_second["verdicts"][key] != on_second["verdicts"][copied]:
+                pairs.append((original["case"], copy, ours["number"]))
+    split_on = [
+        (case, s["number"])
+        for case in real
+        for s in first_set[case]["statements"]
+        if s["expected"] == "unclear"
+    ]
+    faulted = [key for key in split_on if on_second["verdicts"][key] == "unsupported"]
+
+    assert sorted(pairs) == [("b09", "b09-v1", 2), ("q104", "q104-v1", 8)]
+    assert (len(faulted), len(split_on)) == (1, 3)
+    for text in (read(ADR), read(LIMITS_CARD)):
+        assert "it decides the same statement two ways in two pairs" in text
+        assert "`b09` and `b09-v1`, `q104` and `q104-v1`" in text
+        assert "It runs at the model's default sampling, and each check was run once." in text
+    assert (
+        f"Of the {in_words(len(split_on))} real answers there on which the readers split, it "
+        f"faults {in_words(len(faulted))}."
+    ) in read(LIMITS_CARD)
 
 
 # The decision record
@@ -382,9 +547,17 @@ def decision_record_numbers() -> dict[str, list[str]]:
         "- **A judge that catches dropped limits and faults no statement": [SECOND, FIRST],
         "- **Faults that a model makes by itself.**": [str(len(first["faults"]))],
         "- **Another author, and a person.**": [str(len(first["faults"]))],
-        "- **A set that did not guide version 2.**": [SECOND, SECOND, FIRST, FIRST, SECOND],
+        "- **A set that did not guide version 2.**": [
+            SECOND,
+            FIRST,
+            TEST_STEP,
+            FIRST,
+            SECOND,
+            SECOND,
+        ],
+        "- **Version 2 is not steady on the answers it is unsure of.**": [SECOND],
         "- **The misses and the false alarms.**": [SECOND],
-        "- Every published score is as it was": [FIRST],
+        "- Every score in the results tables and in a run's summary is as it was": [FIRST],
         "- The next measurement of the answers will be scored by version 1": [
             FIRST,
             SECOND,
@@ -455,8 +628,12 @@ def test_what_the_decision_record_says_in_words_is_what_the_runs_hold() -> None:
     for case, number in disputed():
         assert f"statement {number} of `{case}`" in text
     assert "No person has read the set." in text
-    assert "by a session that was not shown the set's answers" in text
-    assert "The repository does not record what else that session read" in text
+    assert "without the set's answers in view" in text
+    # No sentence says who or what wrote the judge's instructions; who wrote and labelled
+    # the data is said, as the project's documents always say it.
+    assert "by a session" not in text
+    assert "what else that session read" not in text
+    assert "so that check is not held out from version 2 either" in text
     assert "Issue 59 stays open" in text
 
 
@@ -488,7 +665,14 @@ def guide_numbers() -> dict[str, list[str]]:
         "Version 2 differs from version 1": [SECOND, FIRST],
         "- **The whole rubric.**": [FIRST, RUBRIC],
         "It is still one request for each answer": [FIRST],
-        "It was written after the result of version 1": [FIRST, SECOND],
+        "Its instructions were written after the result of version 1": [
+            FIRST,
+            TEST_STEP,
+            FIRST,
+            SECOND,
+            SECOND,
+            FIRST,
+        ],
         "- **Version 2 caught every fault that version 1 caught": [
             SECOND,
             FIRST,
@@ -503,12 +687,22 @@ def guide_numbers() -> dict[str, list[str]]:
             second["false_alarms"][0][0].split("-")[1],
             SECOND,
         ],
-        "Version 2 reads more than twice the input tokens": [SECOND, FIRST, SECOND],
+        "Version 2 reads more than twice the input tokens": [
+            SECOND,
+            FIRST,
+            FIRST,
+            wrote(len(SUPPORT_INSTRUCTIONS)),
+            SECOND,
+            wrote(len(RUBRIC_TEXT)),
+            wrote(len(HOW_TO_CHECK)),
+            SECOND,
+        ],
         "This is the check that version 1 passed": [
             FIRST,
             str(on_first["labelled"]),
             str(sum(case["kind"] == "real" for case in limit_runs.first_set().values())),
             str(sum(case["kind"] != "real" for case in limit_runs.first_set().values())),
+            SECOND,
             SECOND,
         ],
         "- **On these answers version 2 is worse than version 1": [SECOND, FIRST],
@@ -516,12 +710,19 @@ def guide_numbers() -> dict[str, list[str]]:
         "- **Two of the six are labelled `unclear`": [
             str(real_unclear[1]),
             SECOND,
+            *numbers(MEETING),
             str(copy_unclear[1]),
             SECOND,
         ],
         "`make eval-support-v2` judged the": [str(len(baseline)), SECOND, FIRST],
         "- **One is the statement that version 1 faulted too.**": [FIRST],
-        "- **The other three are faulted for a limit left out.**": [SECOND, SECOND, FIRST],
+        "- **The other three are faulted for a limit left out**": [
+            SECOND,
+            FIRST,
+            SECOND,
+            SECOND,
+            FIRST,
+        ],
         "- **The other fault of version 1**": [FIRST, str(other_fault[1]), SECOND],
         '- **Version 1 stays the judge of "supported by its sources".**': [FIRST],
         "- **Each version keeps its verdicts on an answer run in files of its own**": [
@@ -741,11 +942,12 @@ def test_what_the_guide_says_of_the_first_labelled_answers_and_of_the_baseline()
     assert limit_runs.first_set_statement(both_key)["cites"] == []
     assert limit_runs.first_set_statement(both_key)["expected"] == "unsupported"
     assert f"In `{both_key[0]}` it cites no passage, and the labels call it unsupported." in text
-    assert f"**The other {in_words(len(counts['only']))} are faulted for a limit left out.**" in (
+    assert f"**The other {in_words(len(counts['only']))} are faulted for a limit left out**" in (
         text
     )
     assert counts["labels"] == {"supported": 2, "unclear": 1}
-    assert f"The labels call {in_words(counts['labels']['supported'])} of them supported" in text
+    assert "The label, supported by both readers, follows the rubric." in text
+    assert "The label is supported, by both readers." in text
     (unclear_key,) = [
         key
         for key in counts["only"]
@@ -760,7 +962,9 @@ def test_what_the_guide_says_of_the_first_labelled_answers_and_of_the_baseline()
         if s["expected"] == "unclear" and case != unclear_key[0]
     ]
     assert [on_second["verdicts"][key] for key in split_on] == ["supported"] * len(split_on)
-    assert f"version 2 passes the other {in_words(len(split_on))}" in text
+    assert (
+        f"It passes the other {in_words(len(split_on))} real answers the readers split on" in text
+    )
     # The fault of version 1 that version 2 does not raise.
     (other,) = [key for key in limit_runs.baseline_faulted(1) if key not in counts["faulted"]]
     assert limit_runs.first_set_statement(other)["expected"] == "no_claim"
@@ -847,10 +1051,11 @@ def test_the_card_of_the_limit_answers_gives_the_checks_as_the_runs_hold_them() 
     assert_numbers(
         results,
         {
-            "Version 1 is the judge of every published score.": [
+            "Version 1 gives every score in the results tables and in a run's summary.": [
                 FIRST,
                 SECOND,
                 FIRST,
+                CARD_STEP,
                 RECORD,
                 FIRST,
                 str(len(first["in_title"])),
@@ -859,6 +1064,7 @@ def test_the_card_of_the_limit_answers_gives_the_checks_as_the_runs_hold_them() 
                 str(len(second["caught_in_title"])),
                 SECOND,
             ],
+            "Version 2 is not steady on the answers it is unsure of.": [SECOND],
         },
     )
     assert first["caught"] <= second["caught"]
@@ -1009,7 +1215,8 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
 def test_the_architecture_page_names_the_second_version() -> None:
     assert (
         "The first judge has a second version, written for the limit an answer leaves out. It "
-        "keeps its verdicts apart, and no published score is read from them"
+        "keeps its verdicts apart, and no score in the results tables or in a run's summary is "
+        "read from them"
     ) in read(ARCHITECTURE)
 
 

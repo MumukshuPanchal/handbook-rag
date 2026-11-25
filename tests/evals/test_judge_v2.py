@@ -482,6 +482,22 @@ def test_verdicts_of_version_2_record_the_version_and_its_two_hashes() -> None:
     assert (judge_version(first), judge_version(second)) == (1, 2)
     assert judge_version({"judge_version": "2"}) == 1
     assert judge_version({"judge_version": True}) == 1
+    # A truth value is not a version, though Python counts it as a whole number.
+    assert judge_version({"judge_version": False}) == 1
+    assert type(judge_version({"judge_version": True})) is int
+
+
+def test_a_verdict_of_version_2_names_the_model_that_answered() -> None:
+    # The reply says which model wrote it, and that is what the verdict records, as for
+    # version 1: it can differ from the name the request asked for.
+    answered = "gemini-3.5-flash-lite-preview-11-2026"
+
+    judgement = judge_with(FakeClient(response(GOOD_REPLY, model_version=answered))).judge(CASE)
+
+    assert judgement.model == answered != MODEL
+    # A reply that names no model is recorded under the name that was asked for.
+    unnamed = judge_with(FakeClient(response(GOOD_REPLY, model_version=None))).judge(CASE)
+    assert unnamed.model == MODEL
 
 
 def test_the_judge_built_for_version_2_is_version_2() -> None:

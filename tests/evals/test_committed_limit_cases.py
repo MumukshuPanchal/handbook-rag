@@ -8,6 +8,7 @@ file for a judge check.
 
 import json
 import re
+import statistics
 from collections import Counter
 from collections.abc import Iterator, Mapping
 from itertools import pairwise
@@ -19,10 +20,12 @@ import pytest
 from handbook_rag.config import Settings
 from handbook_rag.evals.agreement import Agreement, Pair, measure_agreement
 from handbook_rag.evals.judge import VERDICTS, Judgement, StatementVerdict
+from handbook_rag.evals.judge_v2 import HOW_TO_CHECK
 from handbook_rag.evals.judging import UNCLEAR, labelled_pairs
 from handbook_rag.evals.support import SUPPORT, load_labelled_cases, passage_hash
 from handbook_rag.ingest.build import build_corpus
 from handbook_rag.ingest.models import Chunk
+from tests.test_readme_results import in_words
 
 ROOT = Path(__file__).parents[2]
 CASES = ROOT / "evals" / "judge" / "limits" / "cases.jsonl"
@@ -388,6 +391,18 @@ def test_the_dropped_answers_the_first_reader_doubted_are_listed_with_what_came_
         assert outcome.casefold().startswith(second[case_id]), case_id
     assert sorted(second[case_id] for case_id, _ in listed) == ["supported", *["unsupported"] * 10]
     assert [case_id for case_id, _ in listed if second[case_id] == "supported"] == [SPLIT[0]]
+    # The card counts them in words, three times, and says what the second readers called them.
+    called = Counter(second[case_id] for case_id, _ in listed)
+    text = card()
+    assert f"Listed {in_words(len(listed))} of the 40 as open to dispute" in text
+    assert (
+        f"- **{in_words(len(listed)).capitalize()} `dropped` answers that the first reader" in text
+    )
+    assert f"### The {in_words(len(listed))} `dropped` answers the first reader listed" in text
+    assert (
+        f"The second readers called {in_words(called['unsupported'])} of them unsupported and "
+        f"{in_words(called['supported'])} supported."
+    ) in text
 
 
 def test_every_answer_says_what_it_is_and_why() -> None:
@@ -553,3 +568,161 @@ def test_the_second_labels_in_the_cases_are_the_ones_the_readers_gave() -> None:
         assert row["confidence"] == statement["second_confidence"], case["case"]
         assert row["session"] == case["second_session"], case["case"]
         assert row["reason"].strip(), case["case"]
+
+
+# Numbers of the card that the tests above do not hold. Each is worked out from the file, or,
+# for the size of the handbook, compared with the documents that give it first and, by a slow
+# test, with the snapshot.
+HANDBOOK_SECTIONS = 34
+HANDBOOK_CHUNKS = 38881
+# The two statements whose wording has a slip, as the card names them.
+SLIPS = {("lim-037", 2), ("lim-086", 1)}
+# A question that carries the limit of its `kept` answer, as the card quotes it.
+QUOTED_QUESTION = (
+    "I took three consecutive days of caregiver sick time. Do I have to provide documentation?"
+)
+
+
+def test_the_card_gives_the_lengths_and_the_shapes_of_the_answers() -> None:
+    text = card()
+    mean = {
+        kind: statistics.fmean(
+            len(statement["text"].split())
+            for case in of_kind(kind)
+            for statement in case["statements"]
+        )
+        for kind in KINDS
+    }
+    kept_in = Counter(case["kept_in"] for case in of_kind("kept"))
+    where = Counter(
+        next(statement["number"] for statement in case["statements"] if "change" in statement)
+        for case in of_kind("dropped")
+    )
+
+    assert (
+        f"The statements of a `harmless` answer have {mean['harmless']:.1f} words on average, "
+        f"those of a `kept` answer {mean['kept']:.1f} and those of a `dropped` answer "
+        f"{mean['dropped']:.1f}."
+    ) in text
+    assert (
+        f"In {kept_in['statement']} the limit is in the statement. In {kept_in['question']} it is "
+        "in the question"
+    ) in text
+    assert f'("{QUOTED_QUESTION}")' in text
+    assert [case["kept_in"] for case in of_kind("kept") if case["question"] == QUOTED_QUESTION] == [
+        "question"
+    ]
+    assert sum(where.values()) == len(of_kind("dropped"))
+    assert (
+        f"the first in {where[1]}, the second in {where[2]} and the third in {where[3]}."
+    ) in text
+
+
+def test_the_card_counts_the_unsure_labels_and_the_slips_in_words() -> None:
+    text = card()
+    unsure = [s for _, s in statements() if s["second_confidence"] != "high"]
+
+    assert f"The {in_words(len(unsure))} labels below `high` are listed" in text
+    assert f"The {in_words(len(unsure))} labels that came with less than high confidence:" in text
+    # The two slips: each read as supported, with medium confidence, as the card says.
+    slips = line_starting_with(text, "- **Two statements have a slip in their wording.**")
+    assert f"- **{in_words(len(SLIPS)).capitalize()} statements have a slip" in slips
+    for case_id, number in SLIPS:
+        (statement,) = [
+            s for case, s in statements() if case["case"] == case_id and s["number"] == number
+        ]
+        assert (statement["readers"]["second"], statement["second_confidence"]) == (
+            "supported",
+            "medium",
+        )
+        assert f"`{case_id}`" in slips, case_id
+    assert "Their readers called both supported, with medium confidence." in slips
+
+
+def test_the_card_gives_the_size_of_the_handbook_as_the_other_documents_give_it() -> None:
+    # The snapshot is not in CI: its counts are compared here with the documents that give
+    # them first, and with the snapshot itself by the slow test below.
+    text = card()
+    corpus_record = (ROOT / "docs" / "adr" / "0002-handbook-corpus.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert (
+        f"The passages come from {len(SECTIONS)} of the handbook's {HANDBOOK_SECTIONS} sections:"
+        in text
+    )
+    assert f"across {HANDBOOK_SECTIONS} sections" in corpus_record
+    assert f"The {HANDBOOK_CHUNKS:,} chunks of the snapshot were searched" in text
+    assert f"over the full index of {HANDBOOK_CHUNKS:,} chunks" in readme
+    # No file records how many candidates were read: the card says where the number is from.
+    assert (
+        "By the notes of the making, which are not in the repository, about 70 candidates" in text
+    )
+
+
+def test_the_card_names_the_one_answer_that_leaves_out_two_limits() -> None:
+    ((case,),) = [[c] for c in cases() if c["case"] == "lim-008"]
+    (change,) = [s["change"] for s in case["statements"] if "change" in s]
+
+    assert case["kind"] == "dropped"
+    assert "'new or renewed'" in change
+    assert case["limit"] in change
+    assert (
+        "except the `dropped` answer of `lim-008`, which leaves out two parts of one condition: "
+        '"new or renewed" and the start date.'
+    ) in card()
+
+
+def test_the_card_records_the_labels_a_review_would_dispute_as_the_file_has_them() -> None:
+    by_case = {case["case"]: case for case in cases()}
+    text = line_starting_with(
+        card(), "- **Labels a review would dispute, recorded and not changed.**"
+    )
+    (second_of_083,) = [s for s in by_case["lim-083"]["statements"] if s["number"] == 2]
+
+    assert "new subscriptions" in second_of_083["text"]
+    assert "First Order deals" in by_case["lim-083"]["limit"]
+    assert second_of_083["expected"] == "supported"
+    assert by_case["lim-102"]["statements"][0]["text"].startswith("Submit the request")
+    assert (by_case["lim-038"]["kind"], by_case["lim-038"]["left_out_kind"]) == (
+        "harmless",
+        "detail",
+    )
+    assert (
+        "feature changes that update large datasets in the database"
+        in by_case["lim-038"]["left_out"]
+    )
+    assert by_case["lim-053"]["limit_kind"] == "who"
+    assert f'"{by_case["lim-053"]["limit"]}"' in text
+    for case_id in ("lim-083", "lim-102", "lim-038", "lim-053", "lim-026"):
+        assert f"`{case_id}`" in text, case_id
+
+
+def line_starting_with(text: str, start: str) -> str:
+    (line,) = [line for line in text.splitlines() if line.startswith(start)]
+    return line
+
+
+def phrases_of_four(text: str) -> set[tuple[str, ...]]:
+    found = re.findall(r"[a-z0-9$']+", text.casefold())
+    return {tuple(found[i : i + 4]) for i in range(len(found) - 3)}
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not SNAPSHOT.is_dir(), reason="needs the handbook snapshot in data/handbook")
+def test_the_handbook_has_the_chunks_and_the_sections_the_card_gives(
+    corpus: Mapping[str, Chunk],
+) -> None:
+    assert len(corpus) == HANDBOOK_CHUNKS
+    assert len({chunk.section for chunk in corpus.values()}) == HANDBOOK_SECTIONS
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not SNAPSHOT.is_dir(), reason="needs the handbook snapshot in data/handbook")
+def test_no_phrase_of_four_words_of_version_2s_check_is_in_a_passage_of_the_set(
+    corpus: Mapping[str, Chunk],
+) -> None:
+    of_the_check = phrases_of_four(HOW_TO_CHECK)
+    for case in cases():
+        for passage in case["passages"]:
+            chunk = corpus[passage["chunk_id"]]
+            assert not phrases_of_four(f"{chunk.context_header} {chunk.text}") & of_the_check

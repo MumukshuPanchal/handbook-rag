@@ -1472,9 +1472,15 @@ def _refuse_the_check_of_another_judge(
     sign is enough to refuse. Which version of a judge made a check is told by its
     settings alone, since the hashes in them are what sets one version apart from another.
 
-    One case is not caught: a check of another judge that says nothing in its summary
-    and was made under instructions that judge no longer has. Such a check has lapsed
-    already, since its agreement can no longer be quoted for any judge the code builds.
+    A check whose settings record another version than the one asked for is refused as
+    well, even when no judge the code builds today made it. After the judge's model
+    changes, the settings of every saved check match no judge, and a restart with the
+    other version would discard the check.
+
+    One case is not caught: a check of another criterion's judge that says nothing in its
+    summary and was made under instructions that judge no longer has. Such a check has
+    lapsed already, since its agreement can no longer be quoted for any judge the code
+    builds.
     """
     signs: list[object] = []
     summary = run_dir / "summary.json"
@@ -1504,6 +1510,12 @@ def _refuse_the_check_of_another_judge(
                 f"'{other.name}', not of version {criterion.version}. Give this check another "
                 "--output or --variant."
             )
+    held = None if stored is None else judge_version(stored)
+    if held is not None and held != criterion.version:
+        raise SavedRunError(
+            f"{run_dir} holds a check of version {held} of a judge, not of version "
+            f"{criterion.version}. Give this check another --output or --variant."
+        )
 
 
 def _judge_stopped_badly(run: JudgeRun, max_requests: int | None) -> bool:

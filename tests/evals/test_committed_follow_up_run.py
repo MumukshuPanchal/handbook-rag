@@ -201,7 +201,8 @@ def test_the_readings_are_of_the_saved_replies_by_one_reader() -> None:
     readings = load_readings(RUN / "readings.jsonl")
     rows = results()
     first = {case.case_id for case in first_run()}
-    meanings = [r for r in readings if r.case_id in first and r.label in (SAME, DIFFERENT)]
+    # The first session's readings are the file's first 19 lines.
+    meanings = [r for r in readings[:19] if r.case_id in first and r.label in (SAME, DIFFERENT)]
 
     check_readings(cases(), replies(), readings)
     assert {reading.reader for reading in meanings} == {READER}
@@ -210,8 +211,8 @@ def test_the_readings_are_of_the_saved_replies_by_one_reader() -> None:
         case for case, row in rows.items() if case in first and row["meaning_by_code"] == TO_READ
     )
     assert Counter(reading.label for reading in meanings) == {SAME: 12, DIFFERENT: 7}
-    # After the top-up: the instructions set aside, the two questions set aside, and the
-    # one rewrite the verifier decided that a reader checked.
+    # After the top-up, by a second session: the instructions set aside, the two questions
+    # set aside, and the six rewrites the verifier decided, read as checks.
     later = readings[19:]
     assert [(r.case_id, r.label) for r in later] == [
         ("fu-planted-turn-1", "held"),
@@ -222,6 +223,11 @@ def test_the_readings_are_of_the_saved_replies_by_one_reader() -> None:
         ("fu-planted-question-9", "held"),
         ("fu-planted-question-10", SAME),
         ("fu-planted-question-10", "held"),
+        ("fu-subject-7", SAME),
+        ("fu-pronoun-1", SAME),
+        ("fu-third-3", SAME),
+        ("fu-ambiguous-3", SAME),
+        ("fu-planted-question-8", SAME),
     ]
     assert {reading.reader for reading in later} == {READER}
 
@@ -265,10 +271,9 @@ def test_the_whole_run_is_final() -> None:
         pytest.skip(readings_missing())
 
     assert summary()["final"] is True
-    # A reading decides wherever there is one: the one reading of a decision of code's
-    # overturned the verifier.
-    assert summary()["checks"]["overturned"] == [["fu-third-9", "same", "different"]]
-    assert (summary()["checks"]["verifier_read"], summary()["checks"]["verifier_overturned"]) == (
-        1,
-        1,
-    )
+    # A reading decides only what code set aside: the one reading of a decision of code's
+    # checks the verifier, disagrees, and leaves its decision in the figures.
+    checks = summary()["checks"]
+    assert checks["disagree"] == [["fu-third-9", "same", "different"]]
+    assert (checks["read"], checks["agree"]) == (6, 5)
+    assert (checks["verifier_read"], checks["verifier_disagree"]) == (6, 1)

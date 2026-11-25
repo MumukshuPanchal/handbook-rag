@@ -896,7 +896,6 @@ def test_the_follow_up_section_is_the_committed_run() -> None:
                 str(k["added"]),
                 str(k["decided"]),
                 str(k["set_aside"]),
-                str(k["verifier_overturned"]),
             ],
             "- **A follow-up that leans on an earlier question was rewritten right in": [
                 str(k["leaning_right"]),

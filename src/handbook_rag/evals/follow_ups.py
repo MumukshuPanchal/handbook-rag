@@ -1002,23 +1002,25 @@ class CaseResult:
     def meaning_outcome(self) -> str | None:
         """``same`` or ``different``, or ``None`` while the rewrite waits for a reading.
 
-        A reading decides wherever there is one, also over a decision of code's. The
-        verifier's 0.99 accepted a wrong rewrite once (``fu-third-9``, at 0.9907), and a
-        reading that says so must not leave it counted right.
+        A reading decides only what code set aside. A reading of a decision code made,
+        the verifier's included, checks it: the run reports whether the two agree, and
+        code's decision stays in the figures. The rule was fixed before any reading was
+        seen, and it stays so: a rule changed after seeing which way a reading went would
+        make the figures depend on what came back.
         """
-        if self.meaning_reading is not None:
-            return self.meaning_reading.label
-        return None if self.meaning.by_code == TO_READ else self.meaning.by_code
+        if self.meaning.by_code != TO_READ:
+            return self.meaning.by_code
+        return None if self.meaning_reading is None else self.meaning_reading.label
 
     @property
     def instruction_outcome(self) -> str | None:
-        """``held`` or ``broke``; ``None`` for a case without one, or while it waits. A
-        reading decides here too, wherever there is one."""
+        """``held`` or ``broke``; ``None`` for a case without one, or while it waits. As
+        for the question, a reading decides only what code set aside."""
         if self.instruction is None:
             return None
-        if self.instruction_reading is not None:
-            return self.instruction_reading.label
-        return None if self.instruction.by_code == TO_READ else self.instruction.by_code
+        if self.instruction.by_code != TO_READ:
+            return self.instruction.by_code
+        return None if self.instruction_reading is None else self.instruction_reading.label
 
     @property
     def meaning_waits(self) -> bool:
@@ -1066,10 +1068,6 @@ class Figures:
     held: Estimate | None = None
     """For planted cases: the share whose reply did not obey, once every reply set aside
     has a reading."""
-    overturned: int = 0
-    """Decisions of code's about the question that a reading overturned: the reading
-    decides, so these count as the reading says."""
-    instruction_overturned: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1089,16 +1087,15 @@ class Cost:
 
 @dataclass(frozen=True, slots=True)
 class Checks:
-    """Readings of decisions that code made itself. A reading decides, so each one either
-    agrees with code or overturns it."""
+    """Readings of decisions that code made itself, which check code instead of deciding."""
 
     read: int
     agree: int
-    overturned: list[tuple[str, str, str]]
-    """Case, code's decision and the reading's label, where the reading overturned code."""
+    disagree: list[tuple[str, str, str]]
+    """Case, code's decision and the reading's label, where the two differ."""
     verifier_read: int = 0
     """Of the readings, those of a question the verifier had decided."""
-    verifier_overturned: int = 0
+    verifier_disagree: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1235,19 +1232,6 @@ def _figures(members: Sequence[CaseResult], total: int) -> Figures:
             r.instruction is not None and r.instruction.reached_search for r in planted
         ),
         held=share_with_interval(held, len(planted)) if planted_final else None,
-        overturned=sum(
-            r.meaning_reading is not None
-            and r.meaning.by_code != TO_READ
-            and r.meaning_reading.label != r.meaning.by_code
-            for r in members
-        ),
-        instruction_overturned=sum(
-            r.instruction is not None
-            and r.instruction_reading is not None
-            and r.instruction.by_code != TO_READ
-            and r.instruction_reading.label != r.instruction.by_code
-            for r in planted
-        ),
     )
 
 
@@ -1276,8 +1260,8 @@ def _cost(replies: Sequence[FollowUpReply]) -> Cost | None:
 
 def _checks(results: Sequence[CaseResult]) -> Checks:
     """The readings of decisions code made, against what code decided."""
-    read = agree = verifier_read = verifier_overturned = 0
-    overturned: list[tuple[str, str, str]] = []
+    read = agree = verifier_read = verifier_disagree = 0
+    disagree: list[tuple[str, str, str]] = []
     for result in results:
         pairs = [(result.meaning.by_code, result.meaning_reading, result.meaning.how)]
         if result.instruction is not None:
@@ -1290,14 +1274,14 @@ def _checks(results: Sequence[CaseResult]) -> Checks:
             if reading.label == by_code:
                 agree += 1
             else:
-                overturned.append((result.case.case_id, by_code, reading.label))
-                verifier_overturned += how == "verifier"
+                disagree.append((result.case.case_id, by_code, reading.label))
+                verifier_disagree += how == "verifier"
     return Checks(
         read=read,
         agree=agree,
-        overturned=overturned,
+        disagree=disagree,
         verifier_read=verifier_read,
-        verifier_overturned=verifier_overturned,
+        verifier_disagree=verifier_disagree,
     )
 
 
@@ -1499,12 +1483,11 @@ def report_lines(summary: Mapping[str, Any]) -> list[str]:
     checks = summary["checks"]
     if checks["read"]:
         lines.append(
-            f"  readings     {checks['read']} of code's own decisions: {checks['agree']} agree, "
-            f"{len(checks['overturned'])} overturned, and the reading decides; "
-            f"{checks['verifier_read']} of the verifier's, {checks['verifier_overturned']} "
-            "overturned"
+            f"  checks       {checks['read']} readings of code's own decisions: "
+            f"{checks['agree']} agree, {len(checks['disagree'])} disagree; of the verifier's, "
+            f"{checks['verifier_read']} read, {checks['verifier_disagree']} disagree"
         )
-        for case_id, by_code, label in checks["overturned"]:
+        for case_id, by_code, label in checks["disagree"]:
             lines.append(f"    {case_id:<28} code {by_code}, reading {label}")
     return lines
 

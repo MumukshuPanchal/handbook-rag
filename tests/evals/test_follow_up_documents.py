@@ -108,9 +108,17 @@ TOP_UP_DAY = "25"
 TOP_UP_REQUESTS = 10
 # The days of the two second readings, as the first line of each reader's file names them.
 FIRST_READING_DAY, ADDED_READING_DAY = "24", "25"
-# The verifier's weaker direction for the one rewrite of its own that a reading overturned,
-# as the documents give it; the run's results hold it to four places.
+# The verifier's weaker direction for the one rewrite of its own that a reading checked and
+# disagreed with, as the documents give it; the run's results hold it to four places.
 OVERTURNED_SCORE = "0.9907"
+# That rewrite is a close call too: counted right by the verifier, read as another question
+# by one reader session, and given word for word as the second reading's own second reading.
+VERIFIER_CLOSE_CALLS = {"fu-third-9"}
+# The hours between the two reader sessions of the run, and how many readings of rewrites
+# set aside each wrote, by the account of the session that coordinated the work.
+READER_GAP_HOURS = "13"
+# The readings the first reader session wrote: the first lines of the run's readings file.
+FIRST_SESSION_READINGS = 19
 # The thresholds of the line on waits: within so many seconds, and more than so many.
 QUICK, SLOW = 2, 10
 # The reader's close calls, by its own account to the session that coordinated the work:
@@ -292,9 +300,48 @@ def figures() -> dict[str, Any]:
         "set_aside": sum(result.meaning.by_code == TO_READ for result in report.results),
         "read_same": sum(written[group]["read_same"] for group in KINDS),
         "read_different": sum(written[group]["read_different"] for group in KINDS),
-        "overturned": sum(written[group]["overturned"] for group in KINDS),
         "verifier_read": report.checks.verifier_read,
-        "verifier_overturned": report.checks.verifier_overturned,
+        "verifier_disagree": report.checks.verifier_disagree,
+        "verifier_agree": report.checks.verifier_read - report.checks.verifier_disagree,
+        "readings_total": len(readings),
+        "first_session_readings": FIRST_SESSION_READINGS,
+        "second_session_readings": len(readings) - FIRST_SESSION_READINGS,
+        # The rewrites set aside that each reader session read: the first session's
+        # readings are of first-run cases only, and the second's all came after.
+        "first_session_read": sum(
+            reading.label in (SAME, DIFFERENT)
+            and reading.case_id not in ADDED_AFTER_THE_REVIEW
+            and results[reading.case_id].meaning.by_code == TO_READ
+            for reading in readings[:FIRST_SESSION_READINGS]
+        ),
+        "second_session_read": sum(
+            reading.label in (SAME, DIFFERENT)
+            and results[reading.case_id].meaning.by_code == TO_READ
+            for reading in readings[FIRST_SESSION_READINGS:]
+        ),
+        # Mistakes the step made without a sign, and the close call: none fell back.
+        "silent": sum(
+            result.meaning_outcome == DIFFERENT or result.case.case_id in VERIFIER_CLOSE_CALLS
+            for result in report.results
+        ),
+        "silent_given_back_into": sum(
+            result.rewrite.outcome == "unchanged" and result.case.kind == "points_into_answer"
+            for result in report.results
+        ),
+        "silent_given_back_planted": sum(
+            result.rewrite.outcome == "unchanged" and result.case.group == PLANTED
+            for result in report.results
+        ),
+        "silent_third": sum(
+            result.case.kind == "third_turn"
+            and (result.meaning_outcome == DIFFERENT or result.case.case_id in VERIFIER_CLOSE_CALLS)
+            for result in report.results
+        ),
+        "silent_alone": sum(
+            result.case.group == STANDALONE and result.meaning_outcome == DIFFERENT
+            for result in report.results
+        ),
+        "fell_back": sum(result.rewrite.fell_back for result in report.results),
         "first_verifier": sum(
             result.meaning.how == "verifier"
             for result in report.results
@@ -402,9 +449,13 @@ def figures() -> dict[str, Any]:
         "few_two_places": f"{share_with_interval(smallest_kind, smallest_kind).low:.2f}",
         "all_follow_ups_two_places": f"{all_right.low:.2f}",
         "close": {
-            "follow_low": right_in(FOLLOW_UP) - close(SAME, FOLLOW_UP),
+            "follow_low": right_in(FOLLOW_UP)
+            - close(SAME, FOLLOW_UP)
+            - sum(cases[case].group == FOLLOW_UP for case in VERIFIER_CLOSE_CALLS),
             "follow_high": right_in(FOLLOW_UP) + close(DIFFERENT, FOLLOW_UP),
-            "planted_low": right_in(PLANTED) - close(SAME, PLANTED),
+            "planted_low": right_in(PLANTED)
+            - close(SAME, PLANTED)
+            - sum(cases[case].group == PLANTED for case in VERIFIER_CLOSE_CALLS),
             "planted_high": right_in(PLANTED) + close(DIFFERENT, PLANTED),
         },
         "canaries": canaries,
@@ -423,6 +474,31 @@ def test_the_reader_gave_the_close_calls_the_labels_the_documents_give() -> None
     }
 
     assert {case: labels[case] for case in CLOSE_CALLS} == CLOSE_CALLS
+
+
+def test_each_document_gives_the_close_calls_with_the_labels_they_were_read_with() -> None:
+    different = [case for case, label in CLOSE_CALLS.items() if label == DIFFERENT]
+    same = [case for case, label in CLOSE_CALLS.items() if label == SAME]
+    named = ", ".join(f"`{case}`" for case in same[:-1]) + f" and `{same[-1]}`"
+    for path in (ADR, GUIDE, CARD):
+        line = line_starting(
+            read(path) if path != GUIDE else guide_section(), "- **The close calls.**"
+        )
+        assert f"`{different[0]}`, read different" in line, path.name
+        assert f"{named}, read the same" in line, path.name
+        assert all(f"`{case}`" in line for case in VERIFIER_CLOSE_CALLS), path.name
+
+
+def test_the_card_counts_the_second_readers_hedges() -> None:
+    hedged = [
+        case.case_id
+        for case in load_cases(CASES)
+        if case.second is not None
+        and ("most likely" in case.second.note or "most naturally" in case.second.note)
+    ]
+
+    assert f"The readers' notes hedge for {in_words(len(hedged))} conversations" in read(CARD)
+    assert all(f"`{case}`" in read(CARD) for case in hedged)
 
 
 def test_the_documents_give_the_whole_run_once_it_is_final() -> None:
@@ -464,9 +540,14 @@ def decision_record_numbers() -> dict[str, list[str]]:
             str(k["needs_answer_wrong"]),
         ],
         "- **It asks the model whenever there are earlier turns**": [
+            str(k["silent"]),
             str(k["given_back"]),
             str(k["not_alone_cases"]),
+            str(k["silent_given_back_into"]),
+            str(k["silent_given_back_planted"]),
             str(k["needs_answer_wrong"]),
+            str(k["silent_third"]),
+            str(k["silent_alone"]),
             str(len(TELLTALES)),
             str(k["spared"]),
             str(k["alone_cases"]),
@@ -476,7 +557,11 @@ def decision_record_numbers() -> dict[str, list[str]]:
             str(k["spared"]),
             str(k["cases"]),
         ],
-        "- **A reply is used only if it passes these checks**": [str(k["mirrored"])],
+        "- **A reply is used only if it passes these checks**": [
+            str(k["mirrored"]),
+            str(k["planted"]["held_by_code"] + k["planted"]["read_held"]),
+            str(k["groups"][PLANTED]),
+        ],
         "Code decides what it can be sure of": [
             str(VERIFIED_AT),
             str(k["near_misses"]),
@@ -487,8 +572,8 @@ def decision_record_numbers() -> dict[str, list[str]]:
             str(VERIFIED_AT),
             OVERTURNED_SCORE,
             str(k["verifier_read"]),
-            str(k["verifier_overturned"]),
-            str(k["first_verifier"]),
+            str(k["verifier_agree"]),
+            str(k["verifier_disagree"]),
         ],
         "The verifier errs towards the reader.": [
             str(k["with_a_detail"]),
@@ -509,8 +594,17 @@ def decision_record_numbers() -> dict[str, list[str]]:
             str(k["decided"]),
             str(k["set_aside"]),
             *k["reader"],
+            READER_GAP_HOURS,
+            str(k["first_session_read"]),
+            str(k["second_session_read"]),
             str(k["read_same"]),
             str(k["read_different"]),
+            str(k["readings_total"]),
+            str(k["first_session_readings"]),
+            str(k["second_session_readings"]),
+            str(k["planted"]["instruction_set_aside"]),
+            str(k["verifier_read"]),
+            str(k["verifier_agree"]),
         ],
         "- **How the run came to this.**": [
             str(k["first_cases"]),
@@ -520,7 +614,6 @@ def decision_record_numbers() -> dict[str, list[str]]:
             str(k["mirrored"]),
             str(k["mirrored_planted"]),
             str(k["mirrored_right"]),
-            str(k["mirrored"]),
         ],
         "- **Where a follow-up leans on an earlier question, the step rewrote it right in": [
             str(k["leaning_right"]),
@@ -543,7 +636,8 @@ def decision_record_numbers() -> dict[str, list[str]]:
             str(k["groups"][PLANTED]),
             str(k["planted"]["read_held"]),
         ],
-        "- **The reader's close calls.**": [
+        "- **The close calls.**": [
+            OVERTURNED_SCORE,
             str(close["follow_low"]),
             str(close["follow_high"]),
             str(k["groups"][FOLLOW_UP]),
@@ -633,17 +727,28 @@ def test_what_the_lines_of_the_decision_record_rest_on() -> None:
         for case, result in results.items()
         if result.case.kind == "third_turn" and result.meaning_outcome != SAME
     )
-    assert wrong_third == ["fu-third-4", "fu-third-6", "fu-third-9"]
-    assert "A third turn went wrong three times" in text
+    assert wrong_third == ["fu-third-4", "fu-third-6"]
+    assert "A third turn went wrong twice" in text
     assert "Navan" not in results["fu-third-4"].rewrite.question
-    # The one the verifier took for right, at the score the documents give, and a reading
-    # overturned.
-    overturned = results["fu-third-9"]
-    assert (overturned.meaning.by_code, overturned.meaning.how) == (SAME, "verifier")
-    assert overturned.meaning.score is not None
-    assert f"{overturned.meaning.score:.4f}" == OVERTURNED_SCORE
-    assert overturned.meaning_outcome == DIFFERENT
-    assert report.checks.overturned == [("fu-third-9", SAME, DIFFERENT)]
+    # The close call: the verifier took it for right, at the score the documents give, a
+    # reading disagrees, and the verifier's decision stands, as the rule fixed before the
+    # readings says.
+    close_call = results["fu-third-9"]
+    assert (close_call.meaning.by_code, close_call.meaning.how) == (SAME, "verifier")
+    assert close_call.meaning.score is not None
+    assert f"{close_call.meaning.score:.4f}" == OVERTURNED_SCORE
+    assert close_call.meaning_outcome == SAME
+    assert report.checks.disagree == [("fu-third-9", SAME, DIFFERENT)]
+    second = close_call.case.second
+    assert second is not None
+    assert plain_words(second.standalone[1]) == plain_words(close_call.rewrite.question)
+    assert "**A change of rule, made and reverted.**" in text
+    assert "a rule changed after its result is seen is not a measurement" in text
+    # What the checks refuse, said as it is.
+    assert "The checks refuse those shapes and no others." in text
+    assert "So the evidence about planted instructions is the run, 22 of 22 held" in text
+    # The mistakes without a sign: none fell back.
+    assert k["fell_back"] == 0
     # The one question that stood alone and was changed.
     changed = [
         case
@@ -680,7 +785,7 @@ def test_what_the_lines_of_the_decision_record_rest_on() -> None:
     assert not [reply for reply in replies if reply.text.strip()[:1] in quotes]
     # The model and the reader, and the run linked by its directory.
     assert "with `gemini-3.5-flash-lite` ([the run](../../evals/runs/follow-ups/baseline))" in text
-    assert "read by a reader (`claude-opus-5-5`)" in text
+    assert "read by two reader sessions of the same model (`claude-opus-5-5`)" in text
     # How code decides: right and wrong as they are, and the order of the checks.
     assert (
         "Code decides what it can be sure of: the question came back as it was asked, which "
@@ -699,12 +804,12 @@ def test_the_decision_record_says_what_was_not_done() -> None:
         "is not known.",
         "One run, with one reply for each case, most of it on a night the model was overloaded.",
         "A model's reading is not a person's review.",
-        "A reader of the same model decided the 21 rewrites that code set aside.",
+        "Two reader sessions of the same model decided the 21 rewrites that code set aside.",
         "This record states the choice and its cost, and does not decide it.",
         "No person has read them.",
         "By the account of the session that ran it, the model was overloaded on the night of the "
         "first run.",
-        "They cannot tell a question from an order written as one.",
+        "and an order written as a question all pass.",
     ):
         assert sentence in text, sentence
     assert banned(text) == []
@@ -749,7 +854,6 @@ def result_rows() -> list[list[str]]:
                     str(figure["set_aside"]),
                     str(figure["read_same"]),
                     str(figure["read_different"]),
-                    str(figure["overturned"]),
                     shown(figure["same"]),
                 ]
             )
@@ -839,9 +943,15 @@ def guide_numbers() -> dict[str, list[str]]:
             str(k["follow_given_back"]),
             str(k["set_aside"]),
             *k["reader"],
+            READER_GAP_HOURS,
             str(k["read_same"]),
             str(k["read_different"]),
-            str(k["verifier_overturned"]),
+            str(k["verifier_read"]),
+            str(k["verifier_agree"]),
+            str(k["verifier_disagree"]),
+            str(k["readings_total"]),
+            str(k["first_session_readings"]),
+            str(k["second_session_readings"]),
         ],
         "- **The first run**": [
             str(k["first_cases"]),
@@ -875,7 +985,7 @@ def guide_numbers() -> dict[str, list[str]]:
             str(k["groups"][PLANTED]),
             str(k["planted_right"]),
         ],
-        "- **The reader's close calls.**": [
+        "- **The close calls.**": [
             str(close["follow_low"]),
             str(close["follow_high"]),
             str(k["groups"][FOLLOW_UP]),
@@ -1149,12 +1259,18 @@ def card_numbers() -> dict[str, list[str]]:
             str(VERIFIED_AT),
             OVERTURNED_SCORE,
             str(k["by_verifier"]),
-            str(k["first_verifier"]),
+            str(k["verifier_agree"]),
+            str(k["verifier_disagree"]),
             str(VERIFIED_AT),
         ],
         "Every question that has earlier turns costs one request": [
+            str(k["silent"]),
             str(k["given_back"]),
+            str(k["silent_given_back_into"]),
+            str(k["silent_given_back_planted"]),
             str(k["needs_answer_wrong"]),
+            str(k["silent_third"]),
+            str(k["silent_alone"]),
             RECORD,
         ],
         "Measured on these cases, with no request:": [
@@ -1187,6 +1303,7 @@ def test_every_number_of_the_card_outside_its_results_is_worked_out() -> None:
     # What the lines take for granted.
     assert k["missed_wrong"] == k["missed"]
     assert k["given_back"] == k["follow_given_back"]
+    assert k["verifier_read"] == k["by_verifier"], "every decision of the verifier's is checked"
     assert sum(k["in_file"].values()) == k["cases"]
 
 
@@ -1246,9 +1363,18 @@ def test_the_cards_results_are_the_saved_run() -> None:
                 str(k["decided"]),
                 str(k["set_aside"]),
                 *k["reader"],
+                READER_GAP_HOURS,
+                str(k["first_session_read"]),
+                str(k["second_session_read"]),
                 str(k["read_same"]),
                 str(k["read_different"]),
                 str(planted["instruction_set_aside"]),
+                str(k["verifier_read"]),
+                str(k["verifier_agree"]),
+                str(k["verifier_disagree"]),
+                str(k["readings_total"]),
+                str(k["first_session_readings"]),
+                str(k["second_session_readings"]),
             ],
             "- **Follow-ups rewritten to a question that means an acceptable form": [
                 str(k["follow_right"]),
@@ -1283,17 +1409,20 @@ def test_the_cards_results_are_the_saved_run() -> None:
                 str(k["mirrored"]),
                 str(k["mirrored_right"]),
             ],
-            "- **The readings** decide": [
+            "- **The readings.**": [
                 str(k["set_aside"]),
                 str(planted["instruction_set_aside"]),
+                str(k["verifier_read"]),
+                str(k["verifier_agree"]),
                 OVERTURNED_SCORE,
             ],
-            "- **What the reader found wrong.**": [
+            "- **What the readers found wrong.**": [
                 str(k["read_different"]),
                 str(k["needs_answer"]),
                 str(k["read_different"] - k["needs_answer"]),
             ],
-            "- **The reader's close calls.**": [
+            "- **The close calls.**": [
+                OVERTURNED_SCORE,
                 str(close["follow_low"]),
                 str(close["follow_high"]),
                 str(k["groups"][FOLLOW_UP]),
@@ -1318,8 +1447,7 @@ def test_the_cards_results_are_the_saved_run() -> None:
 WRONG = {
     "third_turn": (
         "`a case` left out Navan; `a case` took the screening after hiring, of the first turn, "
-        "where the second turn asked about the one before; `a case` asked how long getting the "
-        "card takes, where the approval was meant"
+        "where the second turn asked about the one before"
     ),
     "points_into_answer": (
         "The 4 that need the answer were rewritten to something wrong found in the questions; "
@@ -1362,7 +1490,7 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_run() -> None:
     ]
     assert (k["planted"]["broke_by_code"], k["planted"]["read_broke"]) == (0, 0)
     assert f"none of the {planted} planted instructions was followed" in measurement
-    assert "A reading decides wherever there is one, also over the verifier." in measurement
+    assert "one of them a close call" in measurement
     assert "\n[#79]: https://github.com/MumukshuPanchal/handbook-rag/issues/79\n" in read(CHANGELOG)
     assert (
         "\n[ADR 0022]: docs/adr/0022-follow-up-questions-rewritten-before-the-search.md\n"

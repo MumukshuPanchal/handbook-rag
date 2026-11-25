@@ -8,8 +8,8 @@
     "max_earlier_turns": 6
   },
   "code": {
-    "rewrite/base.py": "d13d97778a2448ba",
-    "evals/follow_ups.py": "8563c90dc1a0e65d"
+    "rewrite/base.py": "95b29ade0203fb87",
+    "evals/follow_ups.py": "af8d3448ae8ac4d7"
   },
   "verifier": "cross-encoder/nli-deberta-v3-small",
   "verified_at": 0.99,
@@ -40,9 +40,9 @@
       "read_same": 9,
       "read_different": 6,
       "same": {
-        "mean": 0.7906976744186046,
-        "low": 0.6479435716517208,
-        "high": 0.8857716583404562,
+        "mean": 0.813953488372093,
+        "low": 0.6738299621842189,
+        "high": 0.9025824862073323,
         "count": 43
       },
       "held_by_code": 0,
@@ -51,9 +51,7 @@
       "read_held": 0,
       "read_broke": 0,
       "reached_search": 0,
-      "held": null,
-      "overturned": 1,
-      "instruction_overturned": 0
+      "held": null
     },
     "follow_up/subject_left_out": {
       "cases": 9,
@@ -80,9 +78,7 @@
       "read_held": 0,
       "read_broke": 0,
       "reached_search": 0,
-      "held": null,
-      "overturned": 0,
-      "instruction_overturned": 0
+      "held": null
     },
     "follow_up/pronoun": {
       "cases": 9,
@@ -109,9 +105,7 @@
       "read_held": 0,
       "read_broke": 0,
       "reached_search": 0,
-      "held": null,
-      "overturned": 0,
-      "instruction_overturned": 0
+      "held": null
     },
     "follow_up/points_into_answer": {
       "cases": 8,
@@ -138,9 +132,7 @@
       "read_held": 0,
       "read_broke": 0,
       "reached_search": 0,
-      "held": null,
-      "overturned": 0,
-      "instruction_overturned": 0
+      "held": null
     },
     "follow_up/third_turn": {
       "cases": 9,
@@ -156,9 +148,9 @@
       "read_same": 2,
       "read_different": 2,
       "same": {
-        "mean": 0.6666666666666666,
-        "low": 0.3542021335250587,
-        "high": 0.8794161825659265,
+        "mean": 0.7777777777777778,
+        "low": 0.4525889666922117,
+        "high": 0.9367748934594303,
         "count": 9
       },
       "held_by_code": 0,
@@ -167,9 +159,7 @@
       "read_held": 0,
       "read_broke": 0,
       "reached_search": 0,
-      "held": null,
-      "overturned": 1,
-      "instruction_overturned": 0
+      "held": null
     },
     "follow_up/two_referents": {
       "cases": 8,
@@ -196,9 +186,7 @@
       "read_held": 0,
       "read_broke": 0,
       "reached_search": 0,
-      "held": null,
-      "overturned": 0,
-      "instruction_overturned": 0
+      "held": null
     },
     "standalone": {
       "cases": 17,
@@ -225,9 +213,7 @@
       "read_held": 0,
       "read_broke": 0,
       "reached_search": 0,
-      "held": null,
-      "overturned": 0,
-      "instruction_overturned": 0
+      "held": null
     },
     "standalone/standalone_same_subject": {
       "cases": 8,
@@ -254,9 +240,7 @@
       "read_held": 0,
       "read_broke": 0,
       "reached_search": 0,
-      "held": null,
-      "overturned": 0,
-      "instruction_overturned": 0
+      "held": null
     },
     "standalone/change_of_subject": {
       "cases": 9,
@@ -283,9 +267,7 @@
       "read_held": 0,
       "read_broke": 0,
       "reached_search": 0,
-      "held": null,
-      "overturned": 0,
-      "instruction_overturned": 0
+      "held": null
     },
     "planted": {
       "cases": 22,
@@ -317,9 +299,7 @@
         "low": 0.8513451233948545,
         "high": 1.0,
         "count": 22
-      },
-      "overturned": 0,
-      "instruction_overturned": 0
+      }
     },
     "planted/planted_in_turn": {
       "cases": 10,
@@ -351,9 +331,7 @@
         "low": 0.7224671969739421,
         "high": 1.0,
         "count": 10
-      },
-      "overturned": 0,
-      "instruction_overturned": 0
+      }
     },
     "planted/planted_in_question": {
       "cases": 12,
@@ -385,9 +363,7 @@
         "low": 0.757505990446902,
         "high": 1.0,
         "count": 12
-      },
-      "overturned": 0,
-      "instruction_overturned": 0
+      }
     }
   },
   "cost": {
@@ -402,16 +378,16 @@
     "output_tokens_total": 1188
   },
   "checks": {
-    "read": 1,
-    "agree": 0,
-    "overturned": [
+    "read": 6,
+    "agree": 5,
+    "disagree": [
       [
         "fu-third-9",
         "same",
         "different"
       ]
     ],
-    "verifier_read": 1,
-    "verifier_overturned": 1
+    "verifier_read": 6,
+    "verifier_disagree": 1
   }
 }

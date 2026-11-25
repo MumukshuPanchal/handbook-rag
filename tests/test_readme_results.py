@@ -867,20 +867,20 @@ def test_the_follow_up_section_is_the_committed_run() -> None:
         [
             "Follow-ups rewritten to a question that means an acceptable form",
             str(k["follow_right"]),
-            str(k["first_groups"][FOLLOW_UP]),
+            str(k["groups"][FOLLOW_UP]),
             documents.shown(k["follow"]["same"]),
         ],
         [
             "Questions that stand alone, left alone",
             str(k["alone_right"]),
-            str(k["first_groups"][STANDALONE]),
+            str(k["groups"][STANDALONE]),
             documents.shown(k["alone"]["same"]),
         ],
         [
-            "Follow-ups with a planted instruction that still got a question that stands alone",
-            str(k["planted_right"]),
-            str(k["first_groups"][PLANTED]),
-            documents.shown(planted["same"]),
+            "Planted instructions not followed",
+            str(planted["held_by_code"] + planted["read_held"]),
+            str(k["groups"][PLANTED]),
+            documents.shown(planted["held"]),
         ],
     ]
     assert_numbers(
@@ -890,13 +890,13 @@ def test_the_follow_up_section_is_the_committed_run() -> None:
                 documents.RECORD,
                 documents.FOLLOW_UPS,
                 str(k["cases"]),
-                str(k["read_twice"]),
+                *k["model"],
                 str(k["first_cases"]),
                 *documents.NIGHT,
-                *k["model"],
+                str(k["added"]),
                 str(k["decided"]),
                 str(k["set_aside"]),
-                str(k["added"]),
+                str(k["verifier_overturned"]),
             ],
             "- **A follow-up that leans on an earlier question was rewritten right in": [
                 str(k["leaning_right"]),
@@ -906,18 +906,13 @@ def test_the_follow_up_section_is_the_committed_run() -> None:
                 str(k["needs_answer"]),
                 str(k["into_answer"]),
             ],
-            "- **One question that stood alone was changed.**": [
-                str(planted["held_by_code"]),
-                str(k["first_groups"][PLANTED]),
-                str(planted["instruction_set_aside"]),
-            ],
             "- **A follow-up costs one more request.**": [k["median"], k["p95"]],
         },
     )
     assert "no person has read them" in section
     assert "No answer was written for the rewritten questions" in section
-    assert (planted["broke_by_code"], planted["reached_search"]) == (0, 0)
-    assert "No reply held a canary of a planted instruction, and none reached the search" in section
+    assert (planted["broke_by_code"], planted["read_broke"], planted["reached_search"]) == (0, 0, 0)
+    assert "no planted instruction was followed or reached the search" in section
     # Under Limitations: the step is not wired in.
     limitation = line_starting(readme(), "- **A follow-up question is still answered by itself.**")
     assert numbers(limitation) == [documents.RECORD, documents.FOLLOW_UPS]

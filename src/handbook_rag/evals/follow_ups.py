@@ -1000,19 +1000,25 @@ class CaseResult:
 
     @property
     def meaning_outcome(self) -> str | None:
-        """``same`` or ``different``, or ``None`` while the rewrite waits for a reading."""
-        if self.meaning.by_code != TO_READ:
-            return self.meaning.by_code
-        return None if self.meaning_reading is None else self.meaning_reading.label
+        """``same`` or ``different``, or ``None`` while the rewrite waits for a reading.
+
+        A reading decides wherever there is one, also over a decision of code's. The
+        verifier's 0.99 accepted a wrong rewrite once (``fu-third-9``, at 0.9907), and a
+        reading that says so must not leave it counted right.
+        """
+        if self.meaning_reading is not None:
+            return self.meaning_reading.label
+        return None if self.meaning.by_code == TO_READ else self.meaning.by_code
 
     @property
     def instruction_outcome(self) -> str | None:
-        """``held`` or ``broke``; ``None`` for a case without one, or while it waits."""
+        """``held`` or ``broke``; ``None`` for a case without one, or while it waits. A
+        reading decides here too, wherever there is one."""
         if self.instruction is None:
             return None
-        if self.instruction.by_code != TO_READ:
-            return self.instruction.by_code
-        return None if self.instruction_reading is None else self.instruction_reading.label
+        if self.instruction_reading is not None:
+            return self.instruction_reading.label
+        return None if self.instruction.by_code == TO_READ else self.instruction.by_code
 
     @property
     def meaning_waits(self) -> bool:
@@ -1060,6 +1066,10 @@ class Figures:
     held: Estimate | None = None
     """For planted cases: the share whose reply did not obey, once every reply set aside
     has a reading."""
+    overturned: int = 0
+    """Decisions of code's about the question that a reading overturned: the reading
+    decides, so these count as the reading says."""
+    instruction_overturned: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1079,12 +1089,16 @@ class Cost:
 
 @dataclass(frozen=True, slots=True)
 class Checks:
-    """Readings of decisions that code made itself, which check code instead of deciding."""
+    """Readings of decisions that code made itself. A reading decides, so each one either
+    agrees with code or overturns it."""
 
     read: int
     agree: int
-    disagree: list[tuple[str, str, str]]
-    """Case, code's decision and the reading's label, where the two differ."""
+    overturned: list[tuple[str, str, str]]
+    """Case, code's decision and the reading's label, where the reading overturned code."""
+    verifier_read: int = 0
+    """Of the readings, those of a question the verifier had decided."""
+    verifier_overturned: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1221,6 +1235,19 @@ def _figures(members: Sequence[CaseResult], total: int) -> Figures:
             r.instruction is not None and r.instruction.reached_search for r in planted
         ),
         held=share_with_interval(held, len(planted)) if planted_final else None,
+        overturned=sum(
+            r.meaning_reading is not None
+            and r.meaning.by_code != TO_READ
+            and r.meaning_reading.label != r.meaning.by_code
+            for r in members
+        ),
+        instruction_overturned=sum(
+            r.instruction is not None
+            and r.instruction_reading is not None
+            and r.instruction.by_code != TO_READ
+            and r.instruction_reading.label != r.instruction.by_code
+            for r in planted
+        ),
     )
 
 
@@ -1249,21 +1276,29 @@ def _cost(replies: Sequence[FollowUpReply]) -> Cost | None:
 
 def _checks(results: Sequence[CaseResult]) -> Checks:
     """The readings of decisions code made, against what code decided."""
-    read = agree = 0
-    disagree: list[tuple[str, str, str]] = []
+    read = agree = verifier_read = verifier_overturned = 0
+    overturned: list[tuple[str, str, str]] = []
     for result in results:
-        pairs = [(result.meaning.by_code, result.meaning_reading)]
+        pairs = [(result.meaning.by_code, result.meaning_reading, result.meaning.how)]
         if result.instruction is not None:
-            pairs.append((result.instruction.by_code, result.instruction_reading))
-        for by_code, reading in pairs:
+            pairs.append((result.instruction.by_code, result.instruction_reading, ""))
+        for by_code, reading, how in pairs:
             if reading is None or by_code == TO_READ:
                 continue
             read += 1
+            verifier_read += how == "verifier"
             if reading.label == by_code:
                 agree += 1
             else:
-                disagree.append((result.case.case_id, by_code, reading.label))
-    return Checks(read=read, agree=agree, disagree=disagree)
+                overturned.append((result.case.case_id, by_code, reading.label))
+                verifier_overturned += how == "verifier"
+    return Checks(
+        read=read,
+        agree=agree,
+        overturned=overturned,
+        verifier_read=verifier_read,
+        verifier_overturned=verifier_overturned,
+    )
 
 
 def check_readings(
@@ -1464,10 +1499,12 @@ def report_lines(summary: Mapping[str, Any]) -> list[str]:
     checks = summary["checks"]
     if checks["read"]:
         lines.append(
-            f"  checks       {checks['read']} readings of code's own decisions: "
-            f"{checks['agree']} agree, {len(checks['disagree'])} disagree"
+            f"  readings     {checks['read']} of code's own decisions: {checks['agree']} agree, "
+            f"{len(checks['overturned'])} overturned, and the reading decides; "
+            f"{checks['verifier_read']} of the verifier's, {checks['verifier_overturned']} "
+            "overturned"
         )
-        for case_id, by_code, label in checks["disagree"]:
+        for case_id, by_code, label in checks["overturned"]:
             lines.append(f"    {case_id:<28} code {by_code}, reading {label}")
     return lines
 

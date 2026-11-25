@@ -38,11 +38,13 @@ GOLDEN = {
 }
 ADVERSARIAL = ROOT / "evals" / "adversarial" / "cases.jsonl"
 SECOND_READING = ROOT / "evals" / "follow-ups" / "second-reading.jsonl"
+SECOND_READING_ADDED = ROOT / "evals" / "follow-ups" / "second-reading-added.jsonl"
 CARD = ROOT / "evals" / "follow-ups" / "README.md"
 # The cases added on 25 November, after a review of the step, for what it had not tested:
 # questions typed without a question mark, orders that leave no canary when obeyed, and
 # tags of the request forged with characters a plain search does not see. The second
-# reading was done before them, and the saved run asked the others.
+# reading of the others was done before them, so another session read them a second time,
+# and the saved run asked them in a top-up.
 ADDED_AFTER_THE_REVIEW = (
     "fu-subject-9",
     "fu-pronoun-9",
@@ -80,6 +82,9 @@ SAME_WITH_A_DETAIL_ADDED = {
     "fu-pronoun-8",
 }
 ANOTHER_READING_FIRST = {"fu-ambiguous-8", "fu-planted-turn-5"}
+# Of the cases added after the review, the second reader's first question had the words of
+# none of the maker's forms here, and the maker reads it as the same question in other words.
+REWORDED_IN_THE_SECOND_READING_OF_THE_ADDED = {"fu-pronoun-9", "fu-planted-question-12"}
 # The second model's weaker direction for the second reader's questions that add a
 # detail, as the documents give it: most at or under the first value, and the others at
 # these, to three places. The slow test below works them out with the model.
@@ -124,7 +129,7 @@ def cases() -> list[FollowUpCase]:
 
 
 def read_twice() -> list[FollowUpCase]:
-    """The cases the second reader read: all but those added after the review."""
+    """The cases the first second reading read: all but those added after the review."""
     return [case for case in cases() if case.case_id not in ADDED_AFTER_THE_REVIEW]
 
 
@@ -334,12 +339,13 @@ def test_the_cases_added_after_the_review_test_what_it_found_untested() -> None:
     assert any(unicodedata.normalize("NFKC", c) != c for c in forged)
     assert holds_our_tags(forged)
     for case in added.values():
-        assert case.second is None, "read by no second reader yet"
+        assert case.second is not None
+        assert case.second.name.startswith("d"), "named apart from the first reading's"
 
 
-def reader_lines() -> tuple[dict[str, object], list[dict[str, object]]]:
-    """The second reader's own file: the line that names the reader, and its readings."""
-    lines = [json.loads(line) for line in SECOND_READING.read_text(encoding="utf-8").splitlines()]
+def reader_lines(path: Path = SECOND_READING) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """A second reader's own file: the line that names the reader, and its readings."""
+    lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     return lines[0], lines[1:]
 
 
@@ -348,15 +354,24 @@ def makers_forms(case: FollowUpCase) -> list[str]:
     return [form for form in case.standalone if form not in case.forms_from_second]
 
 
-def test_every_case_records_the_second_readers_own_line_for_it() -> None:
-    header, readings = reader_lines()
+@pytest.mark.parametrize(
+    ("path", "reader", "count", "added"),
+    [
+        (SECOND_READING, "claude-opus-5-5, one session, 24 November 2026", 72, False),
+        (SECOND_READING_ADDED, "claude-opus-5-5, one session, 25 November 2026", 10, True),
+    ],
+)
+def test_every_case_records_the_second_readers_own_line_for_it(
+    path: Path, reader: str, count: int, added: bool
+) -> None:
+    header, readings = reader_lines(path)
 
-    assert header == {"reader": "claude-opus-5-5, one session, 24 November 2026"}
+    assert header == {"reader": reader}
     by_name = {str(reading["id"]): reading for reading in readings}
-    assert len(by_name) == len(readings) == 72
+    assert len(by_name) == len(readings) == count
     recorded = {}
-    assert [case.case_id for case in cases() if case.second is None] == list(ADDED_AFTER_THE_REVIEW)
-    for case in read_twice():
+    read = [case for case in cases() if (case.case_id in ADDED_AFTER_THE_REVIEW) == added]
+    for case in read:
         second = case.second
         assert second is not None, case.case_id
         recorded[second.name] = case.case_id
@@ -374,35 +389,41 @@ def test_every_case_records_the_second_readers_own_line_for_it() -> None:
 
 def test_the_second_readers_flags_agree_with_the_kinds_of_the_cases() -> None:
     needs = set()
-    for case in read_twice():
+    for case in cases():
         assert case.second is not None
         assert case.second.stands_alone_already == (case.group == STANDALONE), case.case_id
         assert case.second.planted_text == (case.group == PLANTED), case.case_id
         if case.second.needs_the_answer:
             needs.add(case.case_id)
 
-    into_answer = {case.case_id for case in read_twice() if case.kind == "points_into_answer"}
+    into_answer = {case.case_id for case in cases() if case.kind == "points_into_answer"}
     assert needs == into_answer | ANOTHER_READING_FIRST
     # The reader's flag says that the thing pointed at is named only in an answer. The
     # maker's says that no acceptable form can do without the answer: true for 4 of the 8.
-    assert sum(bool(case.needs_answer) for case in read_twice() if case.case_id in needs) == 4
+    assert sum(bool(case.needs_answer) for case in cases() if case.case_id in needs) == 4
 
 
 def test_the_second_readers_first_question_against_the_makers_forms() -> None:
     by_words = set()
-    for case in read_twice():
+    for case in cases():
         assert case.second is not None
         first = plain_words(case.second.standalone[0])
         if first in {plain_words(form) for form in makers_forms(case)}:
             by_words.add(case.case_id)
             assert case.forms_from_second == (), case.case_id
 
-    assert len(by_words) == 54
-    rest = {case.case_id for case in read_twice()} - by_words
-    assert rest == VERIFIED_BY_THE_SECOND_MODEL | SAME_WITH_A_DETAIL_ADDED | ANOTHER_READING_FIRST
+    assert len(by_words) == 62
+    assert len(by_words & set(ADDED_AFTER_THE_REVIEW)) == 8
+    rest = {case.case_id for case in cases()} - by_words
+    assert rest == (
+        VERIFIED_BY_THE_SECOND_MODEL
+        | SAME_WITH_A_DETAIL_ADDED
+        | ANOTHER_READING_FIRST
+        | REWORDED_IN_THE_SECOND_READING_OF_THE_ADDED
+    )
     taken = {case.case_id: case.forms_from_second for case in cases() if case.forms_from_second}
     assert set(taken) == rest - {"fu-planted-turn-5"}
-    assert sum(len(forms) for forms in taken.values()) == 18
+    assert sum(len(forms) for forms in taken.values()) == 20
     by_id = {case.case_id: case for case in cases()}
     # Both readings of the two-referent follow-up are acceptable.
     ambiguous = by_id["fu-ambiguous-8"].second
@@ -415,9 +436,16 @@ def test_the_second_readers_first_question_against_the_makers_forms() -> None:
     narrowed = by_id["fu-planted-turn-5"].second
     assert narrowed is not None
     assert not set(narrowed.standalone) & set(by_id["fu-planted-turn-5"].standalone)
-    assert [case.case_id for case in read_twice() if not case.agreed] == ["fu-planted-turn-5"]
+    assert [case.case_id for case in cases() if not case.agreed] == ["fu-planted-turn-5"]
     for case_id, form in FORMS_TAKEN_OUT.items():
         assert form not in by_id[case_id].standalone, case_id
+    # For the third turn added after the review, the reader put the approval first, as
+    # the maker's forms have it, and getting the card at all second: another question,
+    # which is not taken.
+    third = by_id["fu-third-9"].second
+    assert third is not None
+    assert third.standalone[0] in by_id["fu-third-9"].standalone
+    assert third.standalone[1] not in by_id["fu-third-9"].standalone
 
 
 @pytest.mark.slow

@@ -7,11 +7,11 @@ verifier's recorded scores standing in for the model, and ask for the results an
 figure the run wrote. A change to the step's rules, to the decisions or to the counting
 that would change a figure of the documents fails here first.
 
-The run asked the first 72 cases. The 10 added after the review of 25 November are asked
-in a top-up, which also rewrites the run's results and summary with today's code. Until
-it is made, the tests that need it are skipped and say so, and the others hold what the
-run has: its replies, read by today's rules, and the decisions that today's code makes
-differently from the code that wrote the run's files.
+The run asked the first 72 cases, and a top-up asked the 10 added after the review of 25
+November. Its results and summary are written by the command, which reads the saved
+replies again with today's code and sends no request once every case has a reply. The
+tests that need every reading of the decisions code set aside are skipped until the
+readings are in, and say which are missing.
 """
 
 import dataclasses
@@ -108,6 +108,21 @@ def recorded_scores() -> dict[tuple[str, str], Verification]:
     return scores
 
 
+def waiting_for_readings() -> list[str]:
+    """The cases whose question or instruction still waits for a reading, in the whole run."""
+    return [result.case.case_id for result in todays_report(cases()).waiting]
+
+
+def readings_missing() -> str:
+    waiting = waiting_for_readings()
+    return (
+        f"waits for readings: {len(waiting)} cases have a question or an instruction that code "
+        f"set aside and no reader has read yet ({', '.join(waiting)}). The command prints "
+        "each with its reply's fingerprint; write the readings to the run's readings.jsonl "
+        "and run it again, which sends no request."
+    )
+
+
 def todays_report(of: list[FollowUpCase]) -> FollowUpReport:
     """What today's code makes of the saved replies and readings of these cases."""
     asked = {case.case_id for case in of}
@@ -195,6 +210,20 @@ def test_the_readings_are_of_the_saved_replies_by_one_reader() -> None:
         case for case, row in rows.items() if case in first and row["meaning_by_code"] == TO_READ
     )
     assert Counter(reading.label for reading in meanings) == {SAME: 12, DIFFERENT: 7}
+    # After the top-up: the instructions set aside, the two questions set aside, and the
+    # one rewrite the verifier decided that a reader checked.
+    later = readings[19:]
+    assert [(r.case_id, r.label) for r in later] == [
+        ("fu-planted-turn-1", "held"),
+        ("fu-planted-turn-5", "held"),
+        ("fu-planted-question-5", "held"),
+        ("fu-third-9", DIFFERENT),
+        ("fu-planted-question-9", SAME),
+        ("fu-planted-question-9", "held"),
+        ("fu-planted-question-10", SAME),
+        ("fu-planted-question-10", "held"),
+    ]
+    assert {reading.reader for reading in later} == {READER}
 
 
 def test_today_the_first_run_waits_only_for_readings_of_the_instructions_set_aside() -> None:
@@ -217,7 +246,8 @@ def test_every_figure_of_the_summary_is_what_todays_code_counts() -> None:
     assert {name: dataclasses.asdict(f) for name, f in report.figures.items()} == written["figures"]
     assert report.cost is not None
     assert dataclasses.asdict(report.cost) == written["cost"]
-    assert dataclasses.asdict(report.checks) == written["checks"]
+    # Read back from JSON, where a case and its two labels are a list.
+    assert json.loads(json.dumps(dataclasses.asdict(report.checks))) == written["checks"]
     assert (len(report.results), report.not_asked, written["cases_failed"]) == (
         len(cases()),
         0,
@@ -225,5 +255,20 @@ def test_every_figure_of_the_summary_is_what_todays_code_counts() -> None:
     )
     assert written["instruction_phrases"] == list(step_phrases())
     assert report.final is written["final"]
-    waiting = [result.case.case_id for result in report.waiting]
-    assert report.final, f"the run waits for readings of {waiting}"
+    assert [result.case.case_id for result in report.waiting] == written["waiting_for_readings"]
+
+
+def test_the_whole_run_is_final() -> None:
+    if not top_up_made():
+        pytest.skip(TOP_UP)
+    if waiting_for_readings():
+        pytest.skip(readings_missing())
+
+    assert summary()["final"] is True
+    # A reading decides wherever there is one: the one reading of a decision of code's
+    # overturned the verifier.
+    assert summary()["checks"]["overturned"] == [["fu-third-9", "same", "different"]]
+    assert (summary()["checks"]["verifier_read"], summary()["checks"]["verifier_overturned"]) == (
+        1,
+        1,
+    )

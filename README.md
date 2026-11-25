@@ -293,19 +293,19 @@ The measurement of the last section was run twice more. Once with stored decline
 
 ### Follow-up questions
 
-A question asked after another often leans on it: "And in Finland?" after a question about annual leave in the UK. Searched for by itself, it finds nothing useful. A rewriting step sends the earlier questions and the new one to the answer model, and gets back a question that stands alone. It is built and measured, and not yet wired into `POST /ask` or the demo page ([ADR 0022](docs/adr/0022-follow-up-questions-rewritten-before-the-search.md), [issue 79](https://github.com/MumukshuPanchal/handbook-rag/issues/79)). The cases are [82 conversations](evals/follow-ups/README.md), written by one model session, the first 72 read again by a second, and no person has read them. The run of the first 72, on the night of 24 to 25 November 2026 with `gemini-3.5-flash-lite`, is [`evals/runs/follow-ups/baseline`](evals/runs/follow-ups/baseline): code decided 53 of the rewrites, and one reader session decided the other 19. The 10 cases added after a review of the step are asked in a top-up.
+A question asked after another often leans on it: "And in Finland?" after a question about annual leave in the UK. Searched for by itself, it finds nothing useful. A rewriting step sends the earlier questions and the new one to the answer model, and gets back a question that stands alone. It is built and measured, and not yet wired into `POST /ask` or the demo page ([ADR 0022](docs/adr/0022-follow-up-questions-rewritten-before-the-search.md), [issue 79](https://github.com/MumukshuPanchal/handbook-rag/issues/79)). The cases are [82 conversations](evals/follow-ups/README.md), written by one model session and read again by two more, and no person has read them. The run, with `gemini-3.5-flash-lite`, asked the first 72 on the night of 24 to 25 November 2026 and the 10 added after a review of the step in a top-up; it is [`evals/runs/follow-ups/baseline`](evals/runs/follow-ups/baseline). Code decided 61 of the rewrites, and a reader decided the other 21; a reading decides wherever there is one, and it overturned 1 rewrite that the verifier had taken for right.
 
 | | Right | Of | Share (95% interval) |
 |---|---|---|---|
-| Follow-ups rewritten to a question that means an acceptable form | 32 | 40 | 0.800 (0.652 to 0.895) |
-| Questions that stand alone, left alone | 15 | 16 | 0.938 (0.717 to 0.989) |
-| Follow-ups with a planted instruction that still got a question that stands alone | 15 | 16 | 0.938 (0.717 to 0.989) |
+| Follow-ups rewritten to a question that means an acceptable form | 34 | 43 | 0.791 (0.648 to 0.886) |
+| Questions that stand alone, left alone | 16 | 17 | 0.941 (0.730 to 0.990) |
+| Planted instructions not followed | 22 | 22 | 1.000 (0.851 to 1.000) |
 
 The same test as for the tables above holds this table and the figures in the points below to the run.
 
-- **A follow-up that leans on an earlier question was rewritten right in 30 of 32 cases.** One that points into the previous answer was rewritten right in 2 of 8: the step is given the questions only, and 4 of those 8 cannot be written without the answer.
-- **One question that stood alone was changed.** No reply held a canary of a planted instruction, and none reached the search; code held 13 of the 16 instructions, and 3 wait for a reading.
-- **A follow-up costs one more request.** In the run the median reply took 1.49 s and 95% of the replies came within 16.94 s, on a night the model was overloaded. No answer was written for the rewritten questions, so whether they get the right answer is not known.
+- **A follow-up that leans on an earlier question was rewritten right in 32 of 35 cases.** One that points into the previous answer was rewritten right in 2 of 8: the step is given the questions only, and 4 of those 8 cannot be written without the answer.
+- **One question that stood alone was changed**, and no planted instruction was followed or reached the search.
+- **A follow-up costs one more request.** In the run the median reply took 1.59 s and 95% of the replies came within 16.45 s. No answer was written for the rewritten questions, so whether they get the right answer is not known.
 
 ## Limitations
 

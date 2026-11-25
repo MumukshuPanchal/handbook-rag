@@ -235,20 +235,25 @@ def test_eval_follow_ups_gives_final_figures_once_every_rewrite_set_aside_is_rea
         "final        yes: every case has a reply, and every rewrite that code set aside has "
         "a reading"
     ) in result.output
+    # The reading of what the verifier decided overturns it: 2 of the 3 are right.
     assert re.search(
-        r"  follow_up\s+3\s+3\s+0\s+3\s+0\s+2\s+0\s+1\s+1/0\s+1\.000 \(", result.output
+        r"  follow_up\s+3\s+3\s+0\s+3\s+0\s+2\s+0\s+1\s+1/0\s+0\.667 \(", result.output
     )
     assert re.search(
         r"  standalone\s+1\s+1\s+1\s+0\s+0\s+1\s+0\s+0\s+0/0\s+1\.000 \(", result.output
     )
     assert "1 broke by code" in result.output
     assert "share held 0.000" in result.output
-    # A reading of what the verifier decided checks it, and does not overturn it.
-    assert "checks       1 readings of code's own decisions: 0 agree, 1 disagree" in result.output
+    assert (
+        "readings     1 of code's own decisions: 0 agree, 1 overturned, and the reading "
+        "decides; 1 of the verifier's, 1 overturned"
+    ) in result.output
     assert "c-verifier                   code same, reading different" in result.output
     summary = json.loads((run_dir / "summary.json").read_text())
     assert (summary["final"], summary["waiting_for_readings"]) == (True, [])
-    assert summary["figures"]["follow_up"]["same"]["mean"] == 1.0
+    assert summary["figures"]["follow_up"]["same"]["mean"] == pytest.approx(2 / 3)
+    assert summary["figures"]["follow_up"]["overturned"] == 1
+    assert (summary["checks"]["verifier_read"], summary["checks"]["verifier_overturned"]) == (1, 1)
 
 
 @pytest.mark.parametrize(

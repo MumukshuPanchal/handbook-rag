@@ -20,7 +20,9 @@ This module holds the rules, and they are the same for every provider:
   line that ends with a question mark and ends no sentence before it, with no label, no
   tag of the request's layout and no phrase of the instructions, no longer than
   ``POST /ask`` accepts, sharing a word with the conversation and adding no number to
-  it (:func:`read_reply`). A reply is used only if it passes these checks.
+  it (:func:`read_reply`). For a question asked without a question mark, a reply may
+  leave it out too, if it begins as a question does and ends no sentence. A reply is
+  used only if it passes these checks.
 - **What happens otherwise.** When the reply is not usable, or the request fails or runs
   out of time, the step returns the question as it was asked and says so
   (``Rewrite.fell_back``). It does not raise, and it does not ask again. Searching for
@@ -128,12 +130,24 @@ _NUMBER_WORDS = {
 _WORD = re.compile(r"[^\W\d_]+")
 # The marks a question ends with: the plain one, the full-width one and the Arabic one.
 _QUESTION_MARKS = ("?", "\uff1f", "\u061f")
+# The marks that end a sentence, other than a question mark.
+_SENTENCE_MARKS = (".", "!", "\u2026", "\u3002", "\uff0e", "\uff01")
+# How a question begins in English: a question word, or a verb that opens a question.
+_ASKS = re.compile(
+    r"(?:who|what|when|where|which|why|how|whose|whom|is|are|was|were|do|does|did|can"
+    r"|could|should|would|will|may|might|must|has|have|had|shall)\b",
+    re.IGNORECASE,
+)
 # The end of a sentence before the end of a reply: a question or exclamation mark that is
 # not the last character, or a full stop followed by a space and a capital letter or a
 # digit, where the stop does not follow a single letter, as in "U.S. Government".
 _SENTENCE_END = re.compile(
     r"[?!\uff1f\uff01\u061f](?=.)|(?<!\b[^\W\d_])\.(?=\s+[A-Z0-9])", re.DOTALL
 )
+# The same for a reply typed without capitals, as a model may type it when the caller did:
+# a question or exclamation mark anywhere, or a full stop followed by a space, where the
+# stop does not follow a single letter. A capital after the stop cannot be counted on.
+_SENTENCE_END_UNMARKED = re.compile(r"[?!\uff1f\uff01\u061f]|(?<!\b[^\W\d_])[.\uff0e\u3002](?=\s)")
 # A label in front of a reply: up to four words, then a colon and a space.
 _LABEL = re.compile(r"^[^\W\d_][^\W_]*(?: [^\W\d_][^\W_]*){0,3}\s*:\s")
 
@@ -249,7 +263,11 @@ def read_reply(question: str, turns: Sequence[Turn], reply: RewriteReply) -> Rew
     - it ends with a question mark, and holds no end of a sentence before it: no other
       question or exclamation mark, and no full stop followed by a capital letter or a
       digit, unless the stop follows a single letter, as in "U.S. Government". So an
-      answer, a statement, an order followed by a question, or two questions are refused;
+      answer, a statement, an order followed by a question, or two questions are refused.
+      A reply without a question mark is taken only for a question asked without one, as
+      typed by a caller who leaves it out, and only when it does not end as a sentence
+      does, ends no sentence inside, and begins with a question word or a verb that opens
+      a question (:func:`_fault_without_a_question_mark`);
     - it shares a word of three letters or more with the conversation, so that a reply in
       another language than the conversation's is refused;
     - it holds no number that neither the question nor an earlier question holds. A
@@ -281,10 +299,13 @@ def read_reply(question: str, turns: Sequence[Turn], reply: RewriteReply) -> Rew
     label = _LABEL.match(text)
     if label:
         return _unusable(question, reply, f"it begins with a label ({label.group(0).strip()})")
-    if not text.endswith(_QUESTION_MARKS):
-        return _unusable(question, reply, "it does not end with a question mark")
-    if _SENTENCE_END.search(text):
-        return _unusable(question, reply, "it holds the end of a sentence before its end")
+    if text.endswith(_QUESTION_MARKS):
+        if _SENTENCE_END.search(text):
+            return _unusable(question, reply, "it holds the end of a sentence before its end")
+    else:
+        problem = _fault_without_a_question_mark(question, text)
+        if problem is not None:
+            return _unusable(question, reply, problem)
     conversation = [question, *(turn.question for turn in turns)]
     if not _shares_a_word(text, conversation):
         return _unusable(question, reply, "it shares no word with the conversation")
@@ -294,6 +315,27 @@ def read_reply(question: str, turns: Sequence[Turn], reply: RewriteReply) -> Rew
             question, reply, f"it adds a number the conversation does not hold ({', '.join(added)})"
         )
     return _read(text, "rewritten", reply)
+
+
+def _fault_without_a_question_mark(question: str, text: str) -> str | None:
+    """Why a reply without a question mark cannot be used, if it cannot.
+
+    A caller who types without a question mark often gets a rewrite typed the same way,
+    and searching for the follow-up as typed instead is the failure the step is for. So
+    such a reply is used, but only for a question asked without a question mark, and
+    only when it reads as one question: it does not end as a sentence does, it ends no
+    sentence inside, and it begins as an English question does, with a question word or
+    a verb such as "is" or "does". An answer, an order or a statement begins otherwise.
+    """
+    if any(mark in question for mark in _QUESTION_MARKS):
+        return "it does not end with a question mark"
+    if text.endswith(_SENTENCE_MARKS):
+        return "it ends as a sentence does, not with a question mark"
+    if _SENTENCE_END_UNMARKED.search(text):
+        return "it holds the end of a sentence before its end"
+    if not _ASKS.match(text):
+        return "it has no question mark and does not begin as a question does"
+    return None
 
 
 def _shares_a_word(text: str, conversation: Sequence[str]) -> bool:

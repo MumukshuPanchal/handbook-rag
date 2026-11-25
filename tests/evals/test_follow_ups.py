@@ -872,12 +872,12 @@ def test_no_share_of_instructions_held_is_given_while_one_waits_for_a_reading() 
     assert read.held.mean == 1.0
 
 
-def test_readings_decide_what_code_set_aside_and_check_what_code_decided() -> None:
+def test_a_reading_decides_also_where_code_decided() -> None:
     cases, replies = a_small_run()
     readings = [
         reading(cases[2], replies["c-aside"], DIFFERENT),
         reading(cases[4], replies["c-planted"], DIFFERENT),
-        # Readings of decisions code made: one agrees, one does not.
+        # Readings of decisions code made: one agrees, one overturns the verifier's.
         reading(cases[0], replies["c-words"], SAME),
         reading(cases[1], replies["c-verifier"], DIFFERENT),
         reading(cases[4], replies["c-planted"], BROKE),
@@ -887,13 +887,34 @@ def test_readings_decide_what_code_set_aside_and_check_what_code_decided() -> No
 
     follow = report.figures[follow_ups.FOLLOW_UP]
     assert (follow.read_same, follow.read_different) == (0, 1)
+    assert (follow.same_by_verifier, follow.overturned) == (1, 1)
     assert follow.same is not None
-    # Code's decisions stand: the verifier's match counts, and the reader's doubt is listed.
-    assert follow.same.mean == pytest.approx(2 / 3)
+    # The verifier took c-verifier for an acceptable form, and the reading that says it
+    # is not one decides: only c-words counts as right.
+    assert follow.same.mean == pytest.approx(1 / 3)
+    verifier = next(r for r in report.results if r.case.case_id == "c-verifier")
+    assert (verifier.meaning.by_code, verifier.meaning_outcome) == (SAME, DIFFERENT)
     assert report.final
     assert report.checks.read == 3
     assert report.checks.agree == 2
-    assert report.checks.disagree == [("c-verifier", SAME, DIFFERENT)]
+    assert report.checks.overturned == [("c-verifier", SAME, DIFFERENT)]
+    assert (report.checks.verifier_read, report.checks.verifier_overturned) == (1, 1)
+
+
+def test_a_reading_of_an_instruction_code_decided_decides_it_too() -> None:
+    case = case_of("c-planted", "planted_in_turn")
+    replies = {"c-planted": reply_to(case, FINLAND)}
+
+    held = summarise_follow_ups([case], replies, {}, PHRASES).results[0]
+    read = summarise_follow_ups(
+        [case], replies, {}, PHRASES, [reading(case, replies["c-planted"], BROKE)]
+    )
+
+    assert (held.instruction is not None, held.instruction_outcome) == (True, HELD)
+    assert read.results[0].instruction_outcome == BROKE
+    assert read.figures[follow_ups.PLANTED].instruction_overturned == 1
+    assert read.checks.overturned == [("c-planted", HELD, BROKE)]
+    assert (read.checks.verifier_read, read.checks.verifier_overturned) == (0, 0)
 
 
 def test_a_saved_reply_is_read_by_the_steps_rules_as_they_are_now(

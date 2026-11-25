@@ -23,7 +23,7 @@ or a decision waits for a reading.
 What no test can hold is the reading of the figures, and what was not done. The documents
 say that themselves: no answer was written for the rewritten questions, it is one run,
 model sessions wrote and read the cases and a reader decided the rewrites code set aside,
-and the step is not wired in.
+and nothing measures the step in front of an answer.
 """
 
 import dataclasses
@@ -71,6 +71,7 @@ from tests.evals.test_committed_follow_up_cases import (
     makers_forms,
     reader_lines,
 )
+from tests.evals.test_committed_held_out_follow_up_runs import held_out_figures
 from tests.test_readme_results import (
     anchors,
     assert_numbers,
@@ -95,6 +96,8 @@ ISSUE = "https://github.com/MumukshuPanchal/handbook-rag/issues/"
 # the record of the answer evaluation's stages, the record of the corpus, the issues of
 # follow-up questions and of query rewriting, and the licence's version.
 RECORD, TWO_PASSAGE_RECORD, STAGES_RECORD, CORPUS_RECORD = "0022", "0021", "0014", "0002"
+# The record of the change that wires the step into the service.
+WIRING_RECORD = "0024"
 FOLLOW_UPS, REWRITING, LICENCE = "79", "22", "4.0"
 # The night of the run, by the account of the session that made it: its files hold no
 # date. The date of the decision record, and the day of the review.
@@ -571,6 +574,7 @@ def decision_record_numbers() -> dict[str, list[str]]:
             str(k["mirrored"]),
             str(k["planted"]["held_by_code"] + k["planted"]["read_held"]),
             str(k["groups"][PLANTED]),
+            WIRING_RECORD,
         ],
         "**A change of rule, made and reverted.**": [
             str(k["follow_right"] - k["follow_verifier_disagree"]),
@@ -677,6 +681,13 @@ def decision_record_numbers() -> dict[str, list[str]]:
             str(k["into_answer"]),
             str(k["needs_answer"]),
         ],
+        "**Held out.** On ": held_out_line(with_kinds=True),
+        "- **A held-out test of the rule as it stands.**": [
+            str(held_out_figures()["cases"]),
+            str(held_out_figures()["refused"]),
+            str(held_out_figures()["after_right"]),
+            str(held_out_figures()["after_of"]),
+        ],
         "- **Split a question that asks for two things in the same request**": [TWO_PASSAGE_RECORD],
         "- **Answers on the rewritten questions.**": [str(k["targets"])],
         "- **A person's reading.**": [str(k["set_aside"])],
@@ -720,6 +731,16 @@ def test_the_tables_of_the_decision_record_are_the_saved_run() -> None:
         [KIND_NAMES[kind], str(k["right"][kind]), str(k["of"][kind])]
         for kind in (*LEANING[:3], "third_turn", "points_into_answer")
     ]
+
+
+def held_out_line(*, with_kinds: bool) -> list[str]:
+    """The numbers of the line that gives the held-out figure beside the first run's."""
+    h, k = held_out_figures(), figures()
+    first = [str(h["cases"]), str(h["follow_right"]), str(h["follow_of"]), *h["follow_share"]]
+    first.append(three(k["follow"]["same"]["mean"]))
+    if with_kinds:
+        first += [str(h["alone_right"]), str(h["alone_of"]), str(h["held"]), str(h["planted_of"])]
+    return [*first, str(h["refused"]), str(h["misses"]), str(h["model_misses"])]
 
 
 def test_every_number_of_the_decision_record_is_worked_out_from_the_run() -> None:
@@ -1027,8 +1048,12 @@ def guide_numbers() -> dict[str, list[str]]:
         ],
         "- **No answer was written for the rewritten questions.**": [str(k["targets"])],
         "- **Model sessions, and no person.**": [str(k["set_aside"])],
+        "- **Held out.** ": held_out_line(with_kinds=False),
         "- **Few cases.**": [str(k["smallest_kind"]), str(k["smallest_kind"]), k["few"]],
-        "- **The step is not wired in.**": [str(k["longest_conversation"])],
+        "- **Wired in, and not measured there.**": [
+            WIRING_RECORD,
+            str(k["longest_conversation"]),
+        ],
     }
 
 
@@ -1172,7 +1197,7 @@ def card_numbers() -> dict[str, list[str]]:
     question_cases = question_with + canaries[("planted_in_question", False)]
     grebe = k["quoted_canaries"][2]
     return {
-        "Conversations that end in a follow-up question": [FOLLOW_UPS, REWRITING],
+        "Conversations that end in a follow-up question": [WIRING_RECORD, FOLLOW_UPS, REWRITING],
         "> **Status:": [str(k["first_cases"]), str(k["added"]), *k["reader"]],
         f"{k['cases']} conversations:": [
             str(k["cases"]),
@@ -1316,8 +1341,10 @@ def card_numbers() -> dict[str, list[str]]:
 def test_every_number_of_the_card_outside_its_results_is_worked_out() -> None:
     k, text = figures(), card_text()
     results = section(text, "## Results")
+    # The held-out cases' section is held by test_committed_held_out_follow_up_cases.py.
+    held_out = section(text, "## The held-out cases")
 
-    assert_numbers(text.replace(results, ""), card_numbers())
+    assert_numbers(text.replace(results, "").replace(held_out, ""), card_numbers())
     # What the lines take for granted.
     assert k["missed_wrong"] == k["missed"]
     assert k["given_back"] == k["follow_given_back"]
@@ -1399,6 +1426,12 @@ def test_the_cards_results_are_the_saved_run() -> None:
                 str(k["follow_right"]),
                 str(k["groups"][FOLLOW_UP]),
                 *share(k["follow"]["same"]),
+            ],
+            "- **Held out**, beside it:": [
+                str(held_out_figures()["follow_right"]),
+                str(held_out_figures()["follow_of"]),
+                *held_out_figures()["follow_share"],
+                str(held_out_figures()["cases"]),
             ],
             "- **Questions that stand alone, left alone": [
                 str(k["alone_right"]),
@@ -1515,6 +1548,7 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_run() -> None:
         "\n[ADR 0022]: docs/adr/0022-follow-up-questions-rewritten-before-the-search.md\n"
         in read(CHANGELOG)
     )
+    held = held_out_figures()
     assert numbers(line) == [
         FOLLOW_UPS,
         str(k["cases"]),
@@ -1526,10 +1560,15 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_run() -> None:
         str(k["into_answer"]),
         str(k["right"]["points_into_answer"]),
         RECORD,
+        str(held["cases"]),
+        str(held["follow_right"]),
+        str(held["follow_of"]),
+        WIRING_RECORD,
     ]
-    # It stands among what was started since 1.0 and is not finished: the wiring remains.
-    assert roadmap.index(line) > roadmap.index("Started since 1.0, and not finished:")
-    assert "What remains is the wiring" in line
+    # It stands among what is done since 1.0: the wiring was the last of it.
+    assert roadmap.index("Done since 1.0:") < roadmap.index(line)
+    assert roadmap.index(line) < roadmap.index("Started since 1.0, and not finished:")
+    assert "every reply names the question searched for" in line
     assert "no person has read the cases" in line
 
 
@@ -1542,7 +1581,7 @@ def test_the_architecture_page_names_the_new_parts() -> None:
         "    rewrite/            the step that rewrites a follow-up into a question that "
         "stands alone,\n" in text
     )
-    assert "which nothing uses yet" in text
+    assert "which the entry point runs when a question has earlier questions" in text
     assert "the checks of the two-passage questions and the follow-up measurement" in text
     assert "follow-up conversations, saved runs" in text
 

@@ -361,6 +361,39 @@ class Settings(BaseSettings):
             "Unset or empty: no fallback."
         ),
     )
+    follow_ups: bool = Field(
+        default=True,
+        description=(
+            "Whether a question sent with the earlier questions of its conversation is "
+            "rewritten into one that stands alone before the search, with one request to "
+            "the answer model (ADR 0024). On by default: a question sent without earlier "
+            "questions costs nothing more. Switched off, the earlier questions are "
+            "ignored and every question is searched for as it was typed."
+        ),
+    )
+    follow_up_earlier_questions: int = Field(
+        default=3,
+        ge=1,
+        le=6,
+        description=(
+            "How many earlier questions the rewriting step reads: the latest ones. More "
+            "may be sent, and the oldest are dropped. No conversation longer than two "
+            "earlier questions has been measured."
+        ),
+    )
+    follow_up_timeout_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        le=600,
+        description=(
+            "How long the rewriting step may wait for its one request. It is asked once, "
+            "with no retry and no fallback model: when it fails or runs out of time, the "
+            "question is searched for as it was typed, and the reply says so. In the "
+            "measurement, on an evening the model was overloaded, the median reply took "
+            "1.59 s, 95% came within 16.45 s, and 6 of 82 took longer than 15 s; on the "
+            "day of the held-out run none took longer than 7.44 s."
+        ),
+    )
     eval_requests_per_minute: float = Field(
         default=10.0,
         gt=0,

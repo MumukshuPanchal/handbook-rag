@@ -15,6 +15,12 @@
 // content security policy backs this up: the browser runs no inline script and loads
 // nothing from another site.
 //
+// A conversation lives in this page's memory and nowhere else. Each answer says which
+// question the service searched for, and the page sends those questions with the next
+// one, so that a follow-up can be rewritten into a question that stands alone
+// (docs/adr/0024-follow-up-questions-in-the-service.md). Nothing is kept in the browser's
+// storage: reloading the page starts a new conversation.
+//
 // There is no build step and no library: this file is what the browser runs. What can
 // go wrong is kept in small functions that take values and return values, such as
 // reading the events of a stream and building the answer from its segments. The rest
@@ -156,6 +162,7 @@ function answerFacts(answer) {
       : "unknown";
   const firstText = answer.first_text_ms === null ? "no text came" : seconds(answer.first_text_ms);
   return [
+    ...searchedFacts(answer),
     ["Model", shown(answer.model)],
     ...cacheFacts(answer),
     ...attemptFacts(answer),
@@ -220,6 +227,69 @@ function cacheFacts(answer) {
   ];
   if (Number.isFinite(hit.similarity) && Number.isFinite(hit.score)) {
     facts.push(["Similarity", hit.similarity.toFixed(3)], ["Second check", hit.score.toFixed(3)]);
+  }
+  return facts;
+}
+
+// ---- The question searched for --------------------------------------------------------
+
+// The question the service searched for, from the searched event or the searched_for
+// field of an answer, when it has the shape this page reads. Null otherwise. A service
+// older than the field sends none, so isAnswer does not ask for it.
+function searchedFor(value) {
+  return isObject(value) && typeof value.question === "string" && typeof value.outcome === "string"
+    ? value
+    : null;
+}
+
+// What a reader is told of the question searched for, as one line of text, or "" when
+// it is the question as asked. A follow-up that could not be rewritten is searched for as
+// it was typed, and the reader is told so: it then finds little.
+function searchedLine(searched) {
+  if (searched.outcome === "failed" || searched.outcome === "unusable") {
+    const why =
+      searched.outcome === "failed"
+        ? "the request to rewrite it failed"
+        : "the rewritten question could not be used";
+    return `Searched for your question as you typed it: ${why}. A follow-up searched for that way may find little.`;
+  }
+  if (searched.question !== searched.asked) {
+    return `Searched for: ${searched.question}`;
+  }
+  return "";
+}
+
+// How the rewriting step came to the question, in words.
+function outcomeInWords(outcome) {
+  const words = {
+    unchanged: "given back as it was asked: it stands alone",
+    rewritten: "rewritten to stand alone",
+    unusable: "not usable, so searched for as typed",
+    failed: "failed, so searched for as typed",
+  };
+  return Object.hasOwn(words, outcome) ? words[outcome] : shown(outcome);
+}
+
+// The facts of the rewriting step, as pairs of a label and a value, when it ran.
+function searchedFacts(answer) {
+  const searched = searchedFor(answer.searched_for);
+  if (searched === null || searched.outcome === "not_asked") {
+    return [];
+  }
+  const facts = [
+    ["Searched for", searched.question],
+    ["The follow-up was", outcomeInWords(searched.outcome)],
+  ];
+  if (Number.isInteger(searched.requests) && searched.requests > 0) {
+    const usage = isObject(searched.usage) ? searched.usage : {};
+    const tokens =
+      Number.isFinite(usage.input_tokens) && Number.isFinite(usage.output_tokens)
+        ? `, ${usage.input_tokens} tokens read, ${usage.output_tokens} written`
+        : "";
+    facts.push([
+      "Rewriting took",
+      `${plural(searched.requests, "request", "requests")}${tokens}, ${seconds(searched.took_ms)}`,
+    ]);
   }
   return facts;
 }
@@ -315,6 +385,10 @@ const page = {
   sources: document.getElementById("sources"),
   factsArea: document.getElementById("facts-area"),
   facts: document.getElementById("facts"),
+  searched: document.getElementById("searched"),
+  conversationArea: document.getElementById("conversation-area"),
+  conversation: document.getElementById("conversation"),
+  newConversation: document.getElementById("new-conversation"),
   searchArea: document.getElementById("search-area"),
   searchCount: document.getElementById("search-count"),
   searchState: document.getElementById("search-state"),
@@ -494,8 +568,40 @@ function fail(words) {
   say("No answer.");
 }
 
+// Shows the question searched for above the answer, as text, when it is not the one asked.
+function showSearched(searched) {
+  const line = searchedLine(searched);
+  page.searched.textContent = line;
+  page.searched.hidden = line === "";
+}
+
+// ---- The conversation -----------------------------------------------------------------
+
+// The questions of this conversation as the service searched for them, oldest first, in
+// this page's memory only. The latest are sent with each question, up to the number the
+// service accepts.
+const conversation = [];
+const EARLIER_SENT = 10;
+
+function remember(question) {
+  conversation.push(question);
+  renderConversation();
+}
+
+function forget() {
+  conversation.length = 0;
+  renderConversation();
+}
+
+function renderConversation() {
+  page.conversation.replaceChildren(...conversation.map((question) => make("li", "", question)));
+  page.conversationArea.hidden = conversation.length === 0;
+}
+
 function clearAnswer() {
   page.answerArea.hidden = false;
+  page.searched.textContent = "";
+  page.searched.hidden = true;
   page.stream.replaceChildren();
   page.stream.hidden = false;
   page.stream.classList.remove("unfinished");
@@ -528,17 +634,22 @@ async function ask(question) {
   current = controller;
   setBusy(true);
   clearAnswer();
-  search(question);
+  const earlier = conversation.slice(-EARLIER_SENT);
+  // A question asked by itself is searched for as it is. A follow-up is searched for once
+  // the service has said which question it searched for.
+  if (earlier.length === 0) {
+    search(question);
+  }
   say("Asking. The answer appears below as the model writes it.");
   try {
     const response = await fetch("/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: question, stream: true }),
+      body: JSON.stringify({ query: question, stream: true, earlier }),
       signal: controller.signal,
     });
     if (response.ok) {
-      await readAnswer(response);
+      await readAnswer(response, question, earlier.length > 0);
     } else {
       await refused(response);
     }
@@ -566,10 +677,10 @@ async function refused(response) {
   renderFacts([], response.headers.get("X-Trace-Id"));
 }
 
-// Reads the events of the answer: text as it is written, then the answer or an error.
-// The text is not announced piece by piece: the status line says that the model is
-// writing, and when the answer is complete.
-async function readAnswer(response) {
+// Reads the events of the answer: the question searched for, text as it is written, then
+// the answer or an error. The text is not announced piece by piece: the status line says
+// that the model is writing, and when the answer is complete.
+async function readAnswer(response, question, followUp) {
   const traceId = response.headers.get("X-Trace-Id");
   const contentType = response.headers.get("Content-Type");
   if (mediaType(contentType) !== "text/event-stream") {
@@ -583,14 +694,25 @@ async function readAnswer(response) {
       return;
     }
     const data = parseData(event.data);
-    if (event.name === "text" && data !== null && typeof data.text === "string") {
+    if (event.name === "searched") {
+      const searched = searchedFor(data);
+      if (searched !== null) {
+        showSearched(searched);
+        if (followUp) {
+          search(searched.question);
+        }
+      }
+    } else if (event.name === "text" && data !== null && typeof data.text === "string") {
       if (page.stream.textContent === "") {
         say("The model is writing.");
       }
       page.stream.append(data.text);
     } else if (event.name === "answer") {
       ended = true;
-      showAnswer(data);
+      if (showAnswer(data)) {
+        const searched = searchedFor(data.searched_for);
+        remember(searched === null ? question : searched.question);
+      }
     } else if (event.name === "error") {
       ended = true;
       const detail = data !== null && typeof data.detail === "string" ? data.detail : "";
@@ -606,18 +728,18 @@ async function readAnswer(response) {
 
 // Shows the answer event, or says that it cannot be read. Its shape is checked first,
 // and a fault while building it is caught too, so a reader is never told that the
-// connection broke when it was the answer that could not be read.
+// connection broke when it was the answer that could not be read. True when it is shown.
 function showAnswer(data) {
   if (!isAnswer(data)) {
     fail(UNREADABLE_ANSWER);
-    return;
+    return false;
   }
   try {
     renderAnswer(data);
   } catch (error) {
     console.error(error);
     fail(UNREADABLE_ANSWER);
-    return;
+    return false;
   }
   const from = cacheHit(data) === null ? "" : " It came from the cache.";
   say(
@@ -625,6 +747,7 @@ function showAnswer(data) {
       ? `The answer is complete. It cites ${plural(data.sources.length, "source", "sources")}.${from}`
       : `Not an answer: the assistant declined, or its reply did not come to a proper end.${from}`,
   );
+  return true;
 }
 
 function stopped() {
@@ -743,6 +866,16 @@ page.stop.addEventListener("click", () => {
     return;
   }
   current.abort();
+});
+
+page.newConversation.addEventListener("click", () => {
+  if (current !== null) {
+    say("An answer is still being written. Stop it first, or wait for it.");
+    return;
+  }
+  forget();
+  say("A new conversation: the next question is asked by itself.");
+  page.question.focus();
 });
 
 page.question.addEventListener("input", showCount);

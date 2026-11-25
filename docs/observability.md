@@ -158,6 +158,28 @@ For the near-miss above the three lists held one entry each: a cosine of 0.89554
 
 The answer is stored after the `answer` span has closed, by a thread of its own, and leaves no span: a failure to store is logged, and so is an answer that was still waiting to be stored when the process ended. When the service starts, it runs both of the cache's models once: it embeds one question, and it loads the second model and lets it read one pair. That is the span `cache.warm_up`. In the first check, where it did not yet embed there, it took 1,106.0 ms. A command loads the second model only when a stored question is near the one asked. That is the span `cache.load_verifier` under `cache.lookup`, and its time does not count towards the lookup's 2 seconds. Neither does the model's first reading after it, nor the first embedding of a process. The first check was made before that span existed, and before a lookup had a time limit.
 
+## The trace of a follow-up
+
+A question sent with earlier questions ([ADR 0024](adr/0024-follow-up-questions-in-the-service.md)) is first rewritten into one that stands alone. That step is the first span under `answer`, `rewrite`, before `cache.lookup` and `search`, and its one request is a span of its own, named as an answer's request is:
+
+```
+answer                                    the follow-up as a whole
+  rewrite                                 the question made to stand alone, from the earlier questions
+    generate_content gemini-3.5-flash-lite   the step's one request, with its tokens
+  cache.lookup                            for the rewritten question, when there is a cache
+  search                                  for the rewritten question
+    ...
+  generate_content gemini-3.5-flash-lite  the answer's request
+```
+
+| Attribute of `rewrite` | What it says |
+|---|---|
+| `handbook_rag.rewrite.outcome` | How the step ended: `unchanged`, `rewritten`, `unusable` or `failed`. After the last two the question was searched for as it was typed |
+| `handbook_rag.earlier_turns` | How many earlier questions the step read |
+| `handbook_rag.query.chars` | The length of the question searched for. Its text only with content on |
+
+The request's span has the model asked for and the one that served it, the tokens, the reason it stopped, and, when it failed, `handbook_rag.failure`, as an answer's request has. A failed request marks its own span as failed, and not `rewrite` or `answer`: the answer went on, with the question as it was typed. The step's time is the length of its span. A question sent without earlier questions has no `rewrite` span.
+
 ## Through the HTTP API
 
 A request to the API is traced the same way. Its response carries the trace id in `trace_id` and in the `X-Trace-Id` header, and the header is also on a failed request, which is the one a caller most needs an id for. The web framework adds its own spans around ours: the trace starts with `POST /search` or `POST /ask`, which records the method, the route and the status code, and our spans sit inside it.
@@ -173,6 +195,7 @@ Start the service with `HANDBOOK_RAG_TRACING=true make serve`.
 | Span | What it covers | Worth looking at |
 |---|---|---|
 | `answer` | One question, from search to answer | `answered`, `query.chars`, `requests`, `fallback` |
+| `rewrite` | A follow-up made to stand alone, when the question has earlier questions | The table in the section on a follow-up, above |
 | `cache.lookup` | What the answer cache did with the question, when the caller has a cache | The table in the section on a cached answer, above |
 | `cache.verify` | The cache's second model, when a stored question was near | `model` and `pairs` |
 | `cache.load_verifier` | A command loading the cache's second model, the first time a stored question was near | `model` |
@@ -200,7 +223,7 @@ A trace holds ids, scores, sizes, token counts and timings, and the names of thi
 - **The prompt** sent to the model is not recorded. It is the question, the instructions and the passages, and the passages can be found by their ids.
 - **An error** is recorded as its kind only, for example `handbook_rag.index.store.VectorStoreError`. An error message can quote the input that caused it, and a stack trace holds file paths from the machine it ran on.
 
-`HANDBOOK_RAG_TRACE_CONTENT=true` adds the question's text, the answer's text with its citation markers (on the `answer` span), the stored questions the cache compared it with (on `cache.lookup`), and the full message and stack trace of an error, for debugging on your own machine.
+The earlier questions of a follow-up, and the question it was rewritten to, are left out the same way. `HANDBOOK_RAG_TRACE_CONTENT=true` adds the question's text, the answer's text with its citation markers (on the `answer` span), the stored questions the cache compared it with (on `cache.lookup`), and the full message and stack trace of an error, for debugging on your own machine.
 
 ## Using a trace to debug
 

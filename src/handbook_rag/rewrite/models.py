@@ -27,7 +27,9 @@ reply cut off at the limit is not usable, and the evaluation counts it."""
 Outcome = Literal["not_asked", "unchanged", "rewritten", "unusable", "failed"]
 """How the step ended for one question.
 
-- ``not_asked``: there were no earlier turns, so no model was asked.
+- ``not_asked``: there were no earlier turns, so no model was asked. The entry point of an
+  answer says the same when it was given no rewriting step, as when follow-ups are
+  switched off (``pipeline.py``).
 - ``unchanged``: the model gave the question back with the words it had.
 - ``rewritten``: the model gave another question, and it passed every check.
 - ``unusable``: the model replied, and the reply was not one usable question.

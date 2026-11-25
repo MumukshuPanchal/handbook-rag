@@ -8,7 +8,7 @@
     "max_earlier_turns": 6
   },
   "code": {
-    "rewrite/base.py": "234553186c068fbd",
+    "rewrite/base.py": "7f691d917c7c93e2",
     "evals/follow_ups.py": "af8d3448ae8ac4d7"
   },
   "verifier": "cross-encoder/nli-deberta-v3-small",

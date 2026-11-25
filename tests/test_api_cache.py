@@ -7,6 +7,7 @@ leaves the machine.
 
 import json
 import logging
+import re
 import threading
 from typing import Any
 
@@ -111,8 +112,10 @@ def test_a_hit_is_streamed_as_one_piece_of_text_then_the_answer() -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
-    text, answer = response.content.split(b"event: answer\n")
-    # The whole text in one event, without citation markers, as a model's pieces are.
+    searched, text, answer = re.split(b"(?=event: (?:text|answer)\n)", response.content)
+    # The question searched for first, then the whole text in one event, without citation
+    # markers, as a model's pieces are.
+    assert searched.startswith(b"event: searched\n")
     assert text == (b'event: text\ndata: {"text":"Sixteen weeks.\\nAsk the People team."}\n\n')
     body = json.loads(answer_event(response.content))
     assert body["answer"] == "Sixteen weeks.[1]\nAsk the People team."

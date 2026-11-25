@@ -326,3 +326,38 @@ def test_the_example_file_lists_the_cache_settings_with_their_defaults() -> None
         f"HANDBOOK_RAG_CACHE_VERIFIER_MODEL={settings.cache_verifier_model}",
     ):
         assert f"\n{line}\n" in example, line
+
+
+def test_the_example_file_lists_the_follow_up_settings_with_their_defaults() -> None:
+    example = (Path(__file__).parents[1] / ".env.example").read_text(encoding="utf-8")
+    settings = Settings()
+
+    for line in (
+        f"HANDBOOK_RAG_FOLLOW_UPS={str(settings.follow_ups).lower()}",
+        f"HANDBOOK_RAG_FOLLOW_UP_EARLIER_QUESTIONS={settings.follow_up_earlier_questions}",
+        f"HANDBOOK_RAG_FOLLOW_UP_TIMEOUT_SECONDS={settings.follow_up_timeout_seconds:g}",
+    ):
+        assert f"\n{line}\n" in example, line
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("follow_up_earlier_questions", 0),
+        ("follow_up_earlier_questions", 7),
+        ("follow_up_timeout_seconds", 0),
+        ("follow_up_timeout_seconds", 15000),
+    ],
+)
+def test_a_follow_up_setting_out_of_its_range_is_refused(field: str, value: float) -> None:
+    options: dict[str, Any] = {field: value}
+
+    with pytest.raises(ValidationError):
+        Settings(**options)
+
+
+def test_the_step_reads_no_more_earlier_questions_than_it_can_send() -> None:
+    from handbook_rag.rewrite.models import MAX_EARLIER_TURNS
+
+    field = Settings.model_fields["follow_up_earlier_questions"]
+    assert any(getattr(rule, "le", None) == MAX_EARLIER_TURNS for rule in field.metadata)

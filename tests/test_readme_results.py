@@ -1131,6 +1131,9 @@ def test_the_follow_up_section_is_the_committed_run() -> None:
     # Imported here: that module imports this one's helpers.
     from handbook_rag.evals.follow_ups import FOLLOW_UP, PLANTED, STANDALONE
     from tests.evals import test_follow_up_documents as documents
+    from tests.evals.test_committed_held_out_follow_up_runs import held_out_figures
+
+    held = held_out_figures()
 
     k = documents.figures()
     section = readme().split("### Follow-up questions\n")[1].split("\n## ")[0]
@@ -1180,17 +1183,41 @@ def test_the_follow_up_section_is_the_committed_run() -> None:
                 str(k["into_answer"]),
             ],
             "- **A follow-up costs one more request.**": [k["median"], k["p95"]],
+            # The held-out run, under the rule as it stood before it, and the same
+            # replies read again under the rule changed after them.
+            "- **Held out.**": [
+                str(held["cases"]),
+                str(held["follow_right"]),
+                str(held["follow_of"]),
+                *held["follow_share"],
+                documents.three(k["follow"]["same"]["mean"]),
+                str(held["misses"]),
+                str(held["refused"]),
+                str(held["model_misses"]),
+                str(held["after_right"]),
+                str(held["after_of"]),
+            ],
+            "**In the service.**": [documents.WIRING_RECORD],
         },
     )
+    assert "which is not held-out evidence" in section
     assert "no person has read them" in section
     assert "two reader sessions decided the other 21" in section
     assert "No answer was written for the rewritten questions" in section
     assert (planted["broke_by_code"], planted["read_broke"], planted["reached_search"]) == (0, 0, 0)
     assert "no planted instruction was followed or reached the search" in section
-    # Under Limitations: the step is not wired in.
-    limitation = line_starting(readme(), "- **A follow-up question is still answered by itself.**")
-    assert numbers(limitation) == [documents.RECORD, documents.FOLLOW_UPS]
-    assert "not wired in" in limitation
+    # Under Limitations: what the step cannot do, and what is not measured.
+    limitation = line_starting(
+        readme(), "- **A follow-up is rewritten from the earlier questions alone"
+    )
+    assert numbers(limitation) == [
+        str(k["right"]["points_into_answer"]),
+        str(k["into_answer"]),
+        documents.RECORD,
+        documents.WIRING_RECORD,
+        documents.FOLLOW_UPS,
+    ]
+    assert "changed after the held-out replies were seen" in limitation
     # The command, with one real request for each case.
     command = line_starting(readme(), "make eval-follow-ups")
     assert command.endswith(f"and measure it: {k['cases']} real requests")

@@ -39,8 +39,16 @@ PINNED_VERSION = 2
 PINNED = {
     # Which replies are kept, and which may be served to a question worded differently.
     "cache/rules.py": "87fee71e1a0e98e3",
-    # How a question is answered from the passages that were found.
-    "pipeline.py": "bdd6ba2ef69fcad4",
+    # How a question is answered from the passages that were found. Follow-up questions
+    # (issue 79, ADR 0024) changed it: with earlier questions and the rewriting step, the
+    # question is rewritten first, and the lookup, the search, the answer and the entry
+    # stored all take the question that came out, as they would take it typed. So an
+    # entry is still the answer to its own question, by the same instructions and search.
+    # Without earlier questions the code path is the one pinned before. A wrong rewrite
+    # looks up and stores an answer to another question, which the reply names, as a
+    # wrong question typed would. No stored answer becomes wrong, and none may be served
+    # where it could not before: the version stays as it is.
+    "pipeline.py": "5f6642374d3ceaef",
     # How a model's reply is read into statements and citations.
     "generate/base.py": "0408beccbd6450f1",
     "generate/claude.py": "f370a5e4dd209266",

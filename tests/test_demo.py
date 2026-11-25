@@ -23,7 +23,14 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from handbook_rag import demo, wiring
-from handbook_rag.api import MAX_QUERY_CHARS, AskResponse, CachedAnswer, create_app
+from handbook_rag.api import (
+    MAX_EARLIER_QUESTIONS,
+    MAX_QUERY_CHARS,
+    AskResponse,
+    CachedAnswer,
+    SearchedQuestion,
+    create_app,
+)
 from handbook_rag.config import Settings
 from handbook_rag.demo import CONTENT_SECURITY_POLICY, FILES
 from handbook_rag.index.indexer import index_chunks
@@ -374,6 +381,8 @@ FORBIDDEN = {
     "an attribute made as a node": (
         r"\b(?:attributes|createAttribute|setNamedItem|setAttributeNode)\b"
     ),
+    # A conversation is kept in the page's memory only (ADR 0024).
+    "storage in the browser": r"\b(?:localStorage|sessionStorage|indexedDB|cookie|caches)\b",
 }
 
 
@@ -463,6 +472,10 @@ def test_the_script_reads_nothing_as_html_or_code_and_makes_links_in_one_place()
             'page.answer.setAttribute("title", data.text);',
             "an attribute other than aria- set by name",
         ),
+        ('localStorage.setItem("earlier", conversation.join());', "storage in the browser"),
+        ("sessionStorage.conversation = question;", "storage in the browser"),
+        ("document.cookie = question;", "storage in the browser"),
+        ('indexedDB.open("conversation");', "storage in the browser"),
     ],
 )
 def test_the_check_of_the_script_finds_each_kind_of_call_planted_in_it(
@@ -521,3 +534,61 @@ def test_the_page_reads_the_fields_the_api_sends_for_a_cached_answer() -> None:
     facts = body_of("cacheFacts")
     for label in ('"Served from"', '"Stored"', '"Similarity"', '"Second check"'):
         assert label in facts, label
+
+
+# A conversation: the earlier questions sent with the next one (ADR 0024).
+
+
+def test_the_question_searched_for_is_shown_as_text_when_it_is_not_the_one_asked() -> None:
+    line, show = body_of("searchedLine"), body_of("showSearched")
+
+    assert "`Searched for: ${searched.question}`" in line
+    assert "searched.question !== searched.asked" in line
+    # A follow-up that could not be rewritten says so: it was searched for as typed.
+    assert 'searched.outcome === "failed" || searched.outcome === "unusable"' in line
+    assert "as you typed it" in line
+    # Set as text, like everything else that comes from the API.
+    assert "page.searched.textContent = line;" in show
+    assert 'event.name === "searched"' in body_of("readAnswer")
+
+
+def test_the_page_reads_the_fields_the_api_sends_for_the_question_searched_for() -> None:
+    script = static("demo.js")
+
+    # The page's own element for the line is page.searched, which is not a field.
+    read = set(re.findall(r"(?<!page\.)\bsearched\.(\w+)", script))
+    assert read <= set(SearchedQuestion.model_fields)
+    assert {"question", "asked", "outcome", "requests", "usage", "took_ms"} <= read
+    assert "searched_for" in AskResponse.model_fields
+    assert "answer.searched_for" in body_of("searchedFacts")
+    # A service older than the field sends none, and its answers are still shown.
+    assert "searched_for" not in body_of("isAnswer")
+
+
+def test_only_the_questions_searched_for_are_sent_and_nothing_is_kept_in_the_browser() -> None:
+    script = static("demo.js")
+    ask, read = body_of("ask"), body_of("readAnswer")
+
+    assert "body: JSON.stringify({ query: question, stream: true, earlier })," in ask
+    assert "const earlier = conversation.slice(-EARLIER_SENT);" in ask
+    # What is remembered of a turn is the question it searched for, or the one typed when
+    # the service did not say: never the answer.
+    assert "remember(searched === null ? question : searched.question);" in read
+    assert script.count("remember(") == 2, "its definition and that one call"
+    assert script.count("conversation.push(") == 1
+    assert "conversation.push(question);" in body_of("remember")
+    assert f"const EARLIER_SENT = {MAX_EARLIER_QUESTIONS};" in script
+    # Reloading the page starts again: the conversation is a variable of the script.
+    assert "const conversation = [];" in script
+    assert problems_in(script) == []
+
+
+def test_a_new_conversation_can_be_started_and_the_page_says_what_is_sent() -> None:
+    markup = page()
+    ids = {attrs["id"] for _, attrs in markup.elements if attrs.get("id")}
+    html = static("demo.html")
+
+    assert {"conversation-area", "conversation", "new-conversation", "searched"} <= ids
+    assert "Only questions are sent, never answers." in html
+    assert "reloading it starts a new conversation" in html
+    assert "conversation.length = 0;" in body_of("forget")

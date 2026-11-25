@@ -1,0 +1,10 @@
+{
+  "config": {
+    "rewrite_model": "gemini-3.5-flash-lite",
+    "rewrite_max_tokens": 1000,
+    "rewrite_instructions": "afb461d34a42d893",
+    "rewrite_request": "42db8ba9403659f5",
+    "max_earlier_turns": 6
+  },
+  "attempts": 20
+}

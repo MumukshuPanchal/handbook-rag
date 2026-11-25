@@ -9,6 +9,11 @@ also serves a demo page at ``/`` that asks ``/ask`` (see ``demo.py`` and ADR 001
 ``/ask`` serves an answer stored earlier when the answer cache holds one for the
 question, and says so in the answer (``cache/answers.py`` and ADR 0020).
 
+``/ask`` takes the earlier questions of a conversation too. The service keeps no
+conversation: the caller sends them with each question. A question with earlier
+questions is first rewritten so that it stands alone, and every reply says which
+question was searched for (``rewrite/``, ``pipeline.py`` and ADR 0024).
+
 The application is built by :func:`create_app`, a factory. Tests build one with stand-in
 parts; ``handbook-rag serve`` builds the real one.
 """
@@ -30,7 +35,7 @@ from starlette.types import Receive, Scope, Send
 from handbook_rag import __version__, demo, wiring
 from handbook_rag.cache.answers import AnswerCache
 from handbook_rag.config import Settings, get_settings
-from handbook_rag.generate.base import GenerationError, Generator
+from handbook_rag.generate.base import FailureReason, GenerationError, Generator
 from handbook_rag.generate.models import Answer
 from handbook_rag.index.store import (
     CollectionMissingError,
@@ -40,8 +45,9 @@ from handbook_rag.index.store import (
     VectorStoreError,
 )
 from handbook_rag.ingest.models import Chunk
-from handbook_rag.pipeline import answer_question
+from handbook_rag.pipeline import FollowUps, SearchedFor, answer_question
 from handbook_rag.retrieve.dense import Retriever
+from handbook_rag.rewrite.models import Outcome
 from handbook_rag.streaming import (
     AnswerRun,
     Failed,
@@ -58,8 +64,13 @@ from handbook_rag.tracing import configure_tracing, record_query, record_results
 # the embedding model would silently ignore most of it.
 MAX_QUERY_CHARS = 500
 MAX_LIMIT = 20
-# The largest request body that is read. A valid request is far smaller.
-MAX_BODY_BYTES = 8_192
+# How many earlier questions /ask accepts with a question. The service reads the latest
+# few (HANDBOOK_RAG_FOLLOW_UP_EARLIER_QUESTIONS) and drops the rest, so a caller may send
+# its whole conversation up to this bound.
+MAX_EARLIER_QUESTIONS = 10
+# The largest request body that is read. It leaves room for a question and every earlier
+# question at their longest, written in characters of four bytes each, as some scripts are.
+MAX_BODY_BYTES = 32_768
 # How long one call to the vector store may take before the request gives up.
 STORE_TIMEOUT_SECONDS = 10.0
 # Searched once when the application starts, so that the models are loaded and have run.
@@ -191,6 +202,25 @@ class AskRequest(BaseModel):
             "one JSON response at the end."
         ),
     )
+    earlier: list[
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_QUERY_CHARS),
+        ]
+    ] = Field(
+        default_factory=list,
+        max_length=MAX_EARLIER_QUESTIONS,
+        description=(
+            "The earlier questions of the conversation, oldest first. With at least one, "
+            "the question is first rewritten so that it stands alone, with one more "
+            "request to the answer model, and the rewritten question is the one searched "
+            "for and answered. The latest few are read and the oldest dropped. Send each "
+            "earlier question as it was searched for, the `searched_for.question` of its "
+            "reply, so that a further follow-up builds on questions that already stand "
+            "alone. Questions only: each item is a string, and an answer, or an object "
+            "with one, is refused. The service keeps no conversation of its own."
+        ),
+    )
     cache: bool = Field(
         default=True,
         # Strict: "false" and 0 are mistakes by the caller, not no.
@@ -275,6 +305,40 @@ class CachedAnswer(BaseModel):
     stored_at: str = Field(description="When the answer was stored, in UTC (ISO 8601).")
 
 
+class SearchedQuestion(BaseModel):
+    """The question that was searched for and answered, and how it came to be."""
+
+    asked: str = Field(description="The question as it was sent.")
+    question: str = Field(
+        description=(
+            "The question that was looked up in the cache, searched for and answered. "
+            "Send it as an earlier question with the next follow-up."
+        )
+    )
+    outcome: Outcome = Field(
+        description=(
+            "How the rewriting step came to the question. not_asked: no earlier question "
+            "was sent, or follow-ups are switched off, so no model was asked. unchanged: "
+            "the model gave the question back. rewritten: the model gave another question, "
+            "which passed the step's checks. unusable: the model's reply did not pass "
+            "them. failed: the request failed or ran out of time. After unusable and "
+            "failed the question is the one asked, searched for as it was typed: a "
+            "follow-up then finds little."
+        )
+    )
+    failure: FailureReason | None = Field(
+        description="Why the request failed, in one fixed word, after failed. Null otherwise."
+    )
+    earlier: int = Field(
+        description="How many earlier questions the step read. 0 when it did not run."
+    )
+    requests: int = Field(
+        description="How many requests to a model the step made: 0 or 1. Not counted in `requests`."
+    )
+    usage: Usage
+    took_ms: float = Field(description="How long the step took, in milliseconds.")
+
+
 class AskResponse(BaseModel):
     """An answer, with the passages it cites."""
 
@@ -303,7 +367,8 @@ class AskResponse(BaseModel):
         description=(
             "How many requests to a model the answer took, failed ones included. 0 when "
             "nothing was found to answer from, so that no model was asked, and 0 when "
-            "the answer came from the cache."
+            "the answer came from the cache. The rewriting step's request, when there was "
+            "one, is counted in `searched_for.requests` and not here."
         )
     )
     fallback: bool = Field(
@@ -327,6 +392,12 @@ class AskResponse(BaseModel):
             "Null when the model wrote the answer for this request. Otherwise the answer "
             "is one stored earlier: `model` and `stop_reason` are those of the stored "
             "answer, `usage` is zero and `requests` is 0, because no model was asked."
+        )
+    )
+    searched_for: SearchedQuestion = Field(
+        description=(
+            "The question that was searched for and answered. It differs from the one "
+            "asked when a follow-up was rewritten."
         )
     )
 
@@ -360,9 +431,16 @@ ASK_SUCCESS = (
     "whose data is the same JSON object. If the answer fails after it has begun, the "
     'stream ends with one `event: error` with `data: {"detail": "..."}` instead. An '
     "answer that comes from the cache is one `event: text` with the whole text, then "
-    "the `event: answer`."
+    "the `event: answer`. Before the first `event: text`, one `event: searched` "
+    "carries the question searched for, as the answer's `searched_for` field."
 )
 ASK_STREAM_EXAMPLE = (
+    "event: searched\n"
+    'data: {"asked":"How many weeks of parental leave do new parents get?",'
+    '"question":"How many weeks of parental leave do new parents get?","outcome":"not_asked",'
+    '"failure":null,"earlier":0,"requests":0,"usage":{"input_tokens":0,"output_tokens":0},'
+    '"took_ms":0.0}\n'
+    "\n"
     "event: text\n"
     'data: {"text":"New parents get sixteen weeks of paid leave."}\n'
     "\n"
@@ -374,7 +452,11 @@ ASK_STREAM_EXAMPLE = (
     '"heading_path":["Parental leave"],"text":"New parents get sixteen weeks of paid leave."}],'
     '"model":"gemini-3.5-flash-lite","stop_reason":"end_turn",'
     '"usage":{"input_tokens":1200,"output_tokens":20},"requests":1,"fallback":false,'
-    '"took_ms":1500.0,"first_text_ms":1300.0,"trace_id":null,"cached":null}\n'
+    '"took_ms":1500.0,"first_text_ms":1300.0,"trace_id":null,"cached":null,'
+    '"searched_for":{"asked":"How many weeks of parental leave do new parents get?",'
+    '"question":"How many weeks of parental leave do new parents get?","outcome":"not_asked",'
+    '"failure":null,"earlier":0,"requests":0,"usage":{"input_tokens":0,"output_tokens":0},'
+    '"took_ms":0.0}}\n'
     "\n"
 )
 ASK_UNAVAILABLE = (
@@ -398,7 +480,29 @@ def _json_line(value: object) -> str:
     return text.encode("utf-8", errors="replace").decode("utf-8")
 
 
-def _respond(answer: Answer, *, started: float, run: AnswerRun) -> AskResponse:
+def _searched_question(searched: SearchedFor) -> SearchedQuestion:
+    """What a caller is told about the question searched for. The reason a reply was not
+    usable is not sent: it can quote the model's reply, and the outcome says enough."""
+    rewrite = searched.rewrite
+    usage = rewrite.reply.usage if rewrite.reply is not None else None
+    return SearchedQuestion(
+        asked=searched.asked,
+        question=searched.question,
+        outcome=rewrite.outcome,
+        failure=rewrite.failure.reason if rewrite.failure is not None else None,
+        earlier=searched.earlier,
+        requests=rewrite.requests,
+        usage=Usage(
+            input_tokens=usage.input_tokens if usage is not None else 0,
+            output_tokens=usage.output_tokens if usage is not None else 0,
+        ),
+        took_ms=_milliseconds(rewrite.seconds),
+    )
+
+
+def _respond(
+    answer: Answer, *, started: float, run: AnswerRun, searched: SearchedFor
+) -> AskResponse:
     """The response to a question, from the answer and the run that wrote it."""
     # A reply that is not an answer lists no sources, even if the model attached one to
     # it. The command line does the same. Its markers would then point at nothing.
@@ -441,6 +545,7 @@ def _respond(answer: Answer, *, started: float, run: AnswerRun) -> AskResponse:
             score=answer.cached.score,
             stored_at=answer.cached.stored_at,
         ),
+        searched_for=_searched_question(searched),
     )
 
 
@@ -512,14 +617,25 @@ class EventStream(StreamingResponse):
             self._on_close()
 
 
-async def _events(run: AnswerRun, first: Text | Finished, started: float) -> AsyncIterator[bytes]:
-    """The events of a stream that has begun: text, then the answer or an error."""
+async def _events(
+    run: AnswerRun, first: Text | Finished, started: float, searched: SearchedFor
+) -> AsyncIterator[bytes]:
+    """The events of a stream that has begun: the question searched for, text, then the
+    answer or an error.
+
+    The question searched for is known before the search, and goes first, so that a page
+    can show it while the answer is written. It is sent once the first text or the answer
+    is there and not sooner: until then a failure is still an HTTP error.
+    """
+    yield server_sent_event(
+        "searched", _json_line(_searched_question(searched).model_dump(mode="json"))
+    )
     event: Text | Finished | Failed = first
     while isinstance(event, Text):
         yield server_sent_event("text", _json_line({"text": event.text}))
         event = await run.next()
     if isinstance(event, Finished):
-        body = _respond(event.answer, started=started, run=run)
+        body = _respond(event.answer, started=started, run=run, searched=searched)
         yield server_sent_event("answer", _json_line(body.model_dump(mode="json")))
         return
     refusal = _refusal(event.error)
@@ -543,6 +659,17 @@ def _answer_model(settings: Settings) -> Generator | None:
         return wiring.make_generator(settings)
     except GenerationError as error:
         logger.warning("answering is not configured: %s", error)
+        return None
+
+
+def _follow_ups(settings: Settings) -> FollowUps | None:
+    """The rewriting step of the service, or ``None`` when follow-ups are off or cannot be
+    built. Without it a question with earlier questions is searched for as typed, and the
+    reply says that the step did not run."""
+    try:
+        return wiring.make_follow_ups(settings)
+    except GenerationError as error:
+        logger.warning("follow-up questions are not rewritten: %s", error)
         return None
 
 
@@ -589,11 +716,16 @@ def create_app(
     store: VectorStore | None = None,
     generator: Generator | None = None,
     cache: AnswerCache | None = None,
+    follow_ups: FollowUps | None = None,
 ) -> FastAPI:
     """Build the application.
 
     Whatever is not passed is built from the settings when the application starts.
     Tests pass a ``retriever``, a ``store`` and a ``generator`` made of stand-in parts.
+
+    The rewriting step uses the answer model, so a caller that passes a ``generator``
+    passes the ``follow_ups`` that go with it, or has none. Otherwise it is built from the
+    settings, when there is an answer model and follow-ups are on.
 
     The answer cache is built together with the retriever, because it embeds a question
     with the retriever's own model and keeps its answers in the retriever's store. So a
@@ -619,6 +751,12 @@ def create_app(
         # Building the answer model sends no request. So a missing key is found out here,
         # and a wrong one only by the first question.
         app.state.generator = generator if generator is not None else _answer_model(settings)
+        if generator is not None:
+            app.state.follow_ups = follow_ups
+        else:
+            app.state.follow_ups = (
+                _follow_ups(settings) if app.state.generator is not None else None
+            )
         held = app.state.store
         if retriever is not None:
             app.state.retriever, app.state.cache = retriever, cache
@@ -808,6 +946,9 @@ def create_app(
             )
         retriever: Retriever = app.state.retriever
         answers: AnswerCache | None = app.state.cache
+        rewriting: FollowUps | None = app.state.follow_ups
+        # Set by the worker before the search, and so before any text or answer is read.
+        searched: list[SearchedFor] = []
 
         def write(on_text: OnText, on_trace: OnTrace) -> Answer:
             return answer_question(
@@ -820,6 +961,9 @@ def create_app(
                 on_trace=on_trace,
                 cache=answers,
                 fresh=not request.cache,
+                earlier=request.earlier,
+                follow_ups=rewriting,
+                on_searched=searched.append,
             )
 
         run = AnswerRun.start(write, slots)
@@ -828,7 +972,7 @@ def create_app(
             if request.stream and not isinstance(event, Failed):
                 # From here the stream owns the run, and stops it when it ends.
                 return EventStream(
-                    _events(run, event, started),
+                    _events(run, event, started, searched[0]),
                     on_close=run.stop,
                     headers={**STREAM_HEADERS, **_trace_headers(run)},
                 )
@@ -840,7 +984,7 @@ def create_app(
             run.stop()
             raise
         if isinstance(event, Finished):
-            body = _respond(event.answer, started=started, run=run)
+            body = _respond(event.answer, started=started, run=run, searched=searched[0])
             return Response(
                 content=_json_line(body.model_dump(mode="json")),
                 media_type="application/json",

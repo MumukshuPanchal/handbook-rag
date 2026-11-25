@@ -3,6 +3,7 @@ import itertools
 import json
 import logging
 import math
+import re
 import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -29,6 +30,7 @@ from handbook_rag.api import (
     BUSY_RETRY_AFTER_SECONDS,
     EMPTY,
     MAX_BODY_BYTES,
+    MAX_EARLIER_QUESTIONS,
     MAX_LIMIT,
     MAX_QUERY_CHARS,
     MODEL_QUOTA,
@@ -501,6 +503,20 @@ def test_serve_runs_the_api_where_the_settings_say(monkeypatch: pytest.MonkeyPat
 # real generators do, from the worker thread the answer runs in.
 
 QUESTION = "how many weeks of paid leave"
+# What every answer says of the question it searched for when no earlier question was sent:
+# the question as it was asked, and that the rewriting step did not run.
+NOT_ASKED = {
+    "asked": QUESTION,
+    "question": QUESTION,
+    "outcome": "not_asked",
+    "failure": None,
+    "earlier": 0,
+    "requests": 0,
+    "usage": {"input_tokens": 0, "output_tokens": 0},
+    "took_ms": 0.0,
+}
+NOT_ASKED_JSON = json.dumps(NOT_ASKED, separators=(",", ":"))
+SEARCHED_EVENT = f"event: searched\ndata: {NOT_ASKED_JSON}\n\n".encode()
 # How long a test waits for a worker thread before it calls the wait a failure.
 WAIT = 5.0
 
@@ -671,6 +687,8 @@ def test_ask_numbers_the_sources_in_the_order_the_answer_first_cites_them() -> N
         "trace_id": None,
         # Written for this request: nothing came from the answer cache.
         "cached": None,
+        # Asked without earlier questions: searched for as it was asked.
+        "searched_for": NOT_ASKED,
     }
     ((asked, chunks),) = model.asked
     assert asked == QUESTION
@@ -765,7 +783,8 @@ def test_a_stream_sends_each_piece_as_it_is_written_then_the_answer_byte_for_byt
     assert TRACE_HEADER not in response.headers, "tracing is off"
     assert (
         response.content
-        == (
+        == SEARCHED_EVENT
+        + (
             'event: text\ndata: {"text":"Sixteen weeks."}\n\n'
             'event: text\ndata: {"text":"\\nCafé visits need no approval."}\n\n'
             "event: answer\n"
@@ -778,7 +797,8 @@ def test_a_stream_sends_each_piece_as_it_is_written_then_the_answer_byte_for_byt
             '"text":"New parents get sixteen weeks of paid leave."}],'
             '"model":"stand-in-model-002","stop_reason":"end_turn",'
             '"usage":{"input_tokens":1200,"output_tokens":40},"requests":1,"fallback":false,'
-            '"took_ms":2000.0,"first_text_ms":1000.0,"trace_id":null,"cached":null}\n\n'
+            '"took_ms":2000.0,"first_text_ms":1000.0,"trace_id":null,"cached":null,'
+            f'"searched_for":{NOT_ASKED_JSON}}}\n\n'
         ).encode()
     )
 
@@ -793,7 +813,9 @@ def test_text_that_utf8_cannot_encode_is_replaced_instead_of_failing_either_form
     assert plain.status_code == 200
     assert plain.json()["answer"] == "Sixteen weeks ?.[1]"
     assert streamed.status_code == 200
-    assert streamed.content.startswith(b'event: text\ndata: {"text":"Sixteen weeks ?."}\n\n')
+    assert streamed.content.startswith(
+        SEARCHED_EVENT + b'event: text\ndata: {"text":"Sixteen weeks ?."}\n\n'
+    )
     assert json.loads(answer_event(streamed.content))["answer"] == "Sixteen weeks ?.[1]"
 
 
@@ -813,8 +835,9 @@ def test_a_stream_whose_answer_was_finished_before_it_began_holds_just_the_answe
         response = client.post("/ask", json={"query": QUESTION, "stream": True})
 
     assert response.status_code == 200
-    assert response.content.startswith(b"event: answer\ndata: {")
-    assert response.content.count(b"event: ") == 1
+    # The question searched for, then the answer, and nothing between them.
+    assert response.content.startswith(SEARCHED_EVENT + b"event: answer\ndata: {")
+    assert response.content.count(b"event: ") == 2
     assert json.loads(answer_event(response.content))["first_text_ms"] is None
 
 
@@ -897,7 +920,7 @@ def test_a_model_that_fails_after_its_first_text_ends_the_stream_with_an_error_e
         plain = client.post("/ask", json={"query": QUESTION})
 
     assert streamed.status_code == 200, "the stream had begun"
-    assert streamed.content == (
+    assert streamed.content == SEARCHED_EVENT + (
         b'event: text\ndata: {"text":"Sixteen weeks."}\n\n'
         b'event: error\ndata: {"detail":"The answer model is unavailable. Try again later."}\n\n'
     )
@@ -1147,7 +1170,8 @@ async def leave_after_the_first_text(application: FastAPI, spec_version: str) ->
 
     async def send(message: Message) -> None:
         sent.append(message)
-        if message["type"] == "http.response.body" and message.get("body"):
+        # The question searched for comes first, then the first text.
+        if message["type"] == "http.response.body" and b"event: text" in message.get("body", b""):
             got_text.set()
             if spec_version == "2.4":
                 raise OSError("the caller has gone")
@@ -1176,7 +1200,8 @@ def test_when_the_caller_goes_away_mid_stream_the_model_call_is_stopped_and_its_
 
     assert sent[0]["type"] == "http.response.start"
     assert sent[0]["status"] == 200
-    assert sent[1]["body"] == b'event: text\ndata: {"text":"Sixteen weeks."}\n\n'
+    assert sent[1]["body"] == SEARCHED_EVENT
+    assert sent[2]["body"] == b'event: text\ndata: {"text":"Sixteen weeks."}\n\n'
     assert isinstance(model.interrupted, CallerGone)
     assert model.written == ["Sixteen weeks."], "nothing was written after the caller left"
     assert slots_in_use(application) == 0
@@ -1235,13 +1260,23 @@ def test_a_traced_answer_returns_the_id_of_its_trace_and_leaves_the_question_out
     recorded = everything_recorded(finished)
     assert QUESTION not in recorded
     assert "Sixteen weeks." not in recorded
-    assert QUESTION not in sent_back(response)
+    # The question comes back to its caller in one place only: as the question searched for.
+    assert QUESTION not in sent_back(response, but_the_question_searched_for=True)
 
 
-def sent_back(response: Response) -> str:
-    """Everything a response tells its caller: its headers and its body."""
+def sent_back(response: Response, *, but_the_question_searched_for: bool = False) -> str:
+    """Everything a response tells its caller: its headers and its body.
+
+    A reply names the question as asked and as searched for, so that a caller can send it
+    with its next question (ADR 0024). With ``but_the_question_searched_for`` that part of
+    the body, its ``searched`` event or its ``searched_for`` field, is left out.
+    """
     headers = "\n".join(f"{name}: {value}" for name, value in response.headers.items())
-    return f"{headers}\n{response.text}"
+    body = response.text
+    if but_the_question_searched_for:
+        body = re.sub(r"event: searched\ndata: [^\n]*\n\n", "", body)
+        body = re.sub(r',"searched_for":\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', "", body)
+    return f"{headers}\n{body}"
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -1265,6 +1300,9 @@ def test_a_failed_answer_keeps_the_question_the_answer_and_the_errors_message_to
     recorded = everything_recorded(spans.get_finished_spans())
     for part in (question, "salary is 90,000", secret, "/Users/someone", "GEMINI_API_KEY"):
         assert part not in recorded
+        # A stream that had begun named the question it searched for, before the failure.
+        assert part not in sent_back(response, but_the_question_searched_for=True)
+    for part in (secret, "/Users/someone", "GEMINI_API_KEY"):
         assert part not in sent_back(response)
     assert "Parents get sixteen weeks" not in recorded
     assert "handbook_rag.generate.base.GenerationError" in recorded, "the kind of error only"
@@ -1309,14 +1347,21 @@ def test_the_api_documents_both_forms_of_an_answer_and_why_it_may_be_refused(
     assert example == ASK_STREAM_EXAMPLE
     # The example is a stream that keeps to the format, ending in a valid answer.
     AskResponse.model_validate_json(answer_event(example.encode()))
-    assert example.startswith('event: text\ndata: {"text":')
+    assert example.startswith('event: searched\ndata: {"asked":')
+    assert "event: searched" in success["description"]
     refused = ask["responses"]["503"]
     assert refused["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/Problem"
     }
     assert set(refused["headers"]) == {"Retry-After", TRACE_HEADER}
     request = schemas["AskRequest"]
-    assert set(request["properties"]) == {"query", "section", "stream", "cache"}
+    assert set(request["properties"]) == {"query", "section", "stream", "cache", "earlier"}
+    assert request["properties"]["earlier"]["maxItems"] == MAX_EARLIER_QUESTIONS
+    assert request["properties"]["earlier"]["items"] == {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": MAX_QUERY_CHARS,
+    }
     assert request["properties"]["cache"]["type"] == "boolean"
     assert request["properties"]["cache"]["default"] is True
     assert request["required"] == ["query"]
@@ -1338,6 +1383,17 @@ def test_the_api_documents_both_forms_of_an_answer_and_why_it_may_be_refused(
         "first_text_ms",
         "trace_id",
         "cached",
+        "searched_for",
+    }
+    assert set(schemas["SearchedQuestion"]["properties"]) == {
+        "asked",
+        "question",
+        "outcome",
+        "failure",
+        "earlier",
+        "requests",
+        "usage",
+        "took_ms",
     }
     assert set(schemas["CachedAnswer"]["properties"]) == {
         "tier",

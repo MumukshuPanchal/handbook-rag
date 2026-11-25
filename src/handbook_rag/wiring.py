@@ -39,6 +39,7 @@ from handbook_rag.retrieve.sparse import SparseRetriever
 from handbook_rag.retrieve.spread import PageSpread
 
 if TYPE_CHECKING:
+    from handbook_rag.pipeline import FollowUps
     from handbook_rag.rewrite.base import Rewriter
 
 RetrievalMode = Literal["dense", "sparse", "hybrid"]
@@ -455,17 +456,18 @@ def make_generator(settings: Settings, *, attempts: int | None = None) -> Genera
     )
 
 
-def make_rewriter(settings: Settings) -> "Rewriter":
+def make_rewriter(
+    settings: Settings, *, timeout_seconds: float = EVALUATION_TIMEOUT_SECONDS
+) -> "Rewriter":
     """The model that rewrites a follow-up into a question that stands alone (issue 79).
 
     It is the answer model, used a second time for a much smaller request, so its name
-    decides the provider as for an answer. Built as an evaluation builds the answer
-    model: its SDK sends each request once, and waits
-    :data:`EVALUATION_TIMEOUT_SECONDS` at most for the connection and for each next part
-    of a reply, so that a slow reply is measured and not cut off. Nothing asks again:
-    the rewriting step makes one request, and an evaluation tries a failed case again
-    itself. A service that rewrites before it answers will need a time limit of its own,
-    which belongs to the change that puts the step in front of ``POST /ask``.
+    decides the provider as for an answer. Its SDK sends each request once, and waits
+    ``timeout_seconds`` at most for the connection and for the reply, which is not
+    streamed. Nothing asks again: the rewriting step makes one request, and an
+    evaluation tries a failed case again itself. The evaluation keeps
+    :data:`EVALUATION_TIMEOUT_SECONDS`, so that a slow reply is measured and not cut off;
+    an answer gets the shorter limit of its settings (:func:`make_follow_ups`).
 
     A missing Gemini key is found here, as for the answer model. The Claude client's own
     span is switched off: the step opens a span for its request itself.
@@ -478,11 +480,11 @@ def make_rewriter(settings: Settings) -> "Rewriter":
 
     if settings.answer_model.startswith("gemini-"):
         return GeminiRewriter(
-            _gemini_client(settings, 1, timeout_seconds=EVALUATION_TIMEOUT_SECONDS),
+            _gemini_client(settings, 1, timeout_seconds=timeout_seconds),
             model=settings.answer_model,
         )
     options: dict[str, Any] = {
-        "timeout": EVALUATION_TIMEOUT_SECONDS,
+        "timeout": timeout_seconds,
         "max_retries": 0,
         "open_telemetry": False,
     }
@@ -491,6 +493,26 @@ def make_rewriter(settings: Settings) -> "Rewriter":
         options["api_key"] = key.get_secret_value()
     return ClaudeRewriter(
         anthropic.Anthropic(**options), model=settings.answer_model, effort=settings.answer_effort
+    )
+
+
+def make_follow_ups(settings: Settings) -> "FollowUps | None":
+    """The rewriting step in front of an answer, or ``None`` when follow-ups are off.
+
+    For the ``ask`` command and the service, never for an evaluation: it waits
+    ``HANDBOOK_RAG_FOLLOW_UP_TIMEOUT_SECONDS`` for its one request, and reads the latest
+    ``HANDBOOK_RAG_FOLLOW_UP_EARLIER_QUESTIONS``. Building it sends no request. A missing
+    Gemini key is found here, as for the answer model.
+    """
+    if not settings.follow_ups:
+        return None
+    # Imported here, as the step's models are: the entry point loads the rewriting step,
+    # and a process that only builds the other parts has no reason to load either.
+    from handbook_rag.pipeline import FollowUps
+
+    return FollowUps(
+        make_rewriter(settings, timeout_seconds=settings.follow_up_timeout_seconds),
+        earlier_questions=settings.follow_up_earlier_questions,
     )
 
 

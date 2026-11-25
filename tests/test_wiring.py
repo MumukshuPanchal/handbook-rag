@@ -509,6 +509,11 @@ DECIDES_NO_ANSWER: dict[str, Any] = {
     # Its answers are never stored (cache/answers.py).
     "answer_fallback_model": "gemini-3.8-flash",
     "eval_requests_per_minute": 5.0,
+    # They decide which question is searched for, and the cache is keyed on that question:
+    # an answer stored for it is its answer under any of them (ADR 0024).
+    "follow_ups": False,
+    "follow_up_earlier_questions": 5,
+    "follow_up_timeout_seconds": 5.0,
     "judge_model": "gemini-3.8-flash",
     "judge_max_tokens": 1000,
 }

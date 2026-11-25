@@ -100,7 +100,7 @@ from handbook_rag.ingest.models import Chunk
 from handbook_rag.ingest.snapshot import SnapshotError, download_snapshot, snapshot_commit
 from handbook_rag.ingest.tokens import token_counter
 from handbook_rag.measuring import measuring_the_model
-from handbook_rag.pipeline import answer_question
+from handbook_rag.pipeline import FollowUps, SearchedFor, answer_question
 from handbook_rag.retrieve.dense import Retriever
 from handbook_rag.retrieve.spread import PageSpread
 from handbook_rag.tracing import record_query, record_results, stage, trace_id, tracing_session
@@ -2768,17 +2768,35 @@ def ask(
             ),
         ),
     ] = True,
+    earlier: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--earlier",
+            help=(
+                "An earlier question of the conversation. Repeat it for each, oldest first. "
+                "With one or more, the question is first rewritten so that it stands alone, "
+                "with one more request to the answer model, and the command says which "
+                "question it searched for (HANDBOOK_RAG_FOLLOW_UPS). Questions only, never "
+                "answers."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Answer a question from the handbook, with the passages that support the answer.
 
     An answer stored earlier for the same question, or for one that means the same, is
     printed without a request to the model, and the command says so
     (HANDBOOK_RAG_CACHE_MODE).
+
+    With --earlier, the question is a follow-up: it is rewritten into one that stands
+    alone, which is then looked up, searched for and answered (ADR 0024).
     """
     settings = get_settings()
     traced: str | None = None
     wrote = False
     answers: AnswerCache | None = None
+    searched: SearchedFor | None = None
+    earlier_questions = list(earlier or [])
 
     def note_trace(found: str) -> None:
         nonlocal traced
@@ -2788,6 +2806,14 @@ def ask(
         nonlocal wrote
         wrote = True
         typer.echo(text, nl=False)
+
+    def note_searched(found: SearchedFor) -> None:
+        nonlocal searched
+        searched = found
+        # Before the answer, so that the reader knows what it answers.
+        line = _searched_line(found, given=any(q.strip() for q in earlier_questions))
+        if line is not None:
+            typer.echo(line + "\n")
 
     # Leaving the session sends the trace, also when the answer fails.
     with tracing_session(settings):
@@ -2799,6 +2825,10 @@ def ask(
                 settings, wiring.make_store(settings)
             )
             generator = wiring.make_generator(settings)
+            # Built only for a follow-up: without earlier questions nothing is rewritten.
+            follow_ups: FollowUps | None = None
+            if earlier_questions:
+                follow_ups = wiring.make_follow_ups(settings)
             if answers is not None:
                 # The collection the answers are kept in is made here, before the
                 # question is looked up, and not by the answer that is stored at the
@@ -2815,6 +2845,9 @@ def ask(
                 on_trace=note_trace,
                 cache=answers,
                 fresh=not cache,
+                earlier=earlier_questions,
+                follow_ups=follow_ups,
+                on_searched=note_searched,
             )
         except (VectorStoreError, GenerationError) as error:
             if wrote:
@@ -2857,6 +2890,8 @@ def ask(
         details.append(f"tokens and time of the last of {answer.requests} requests")
     if answer.fallback:
         details.append("written by the fallback model")
+    if searched is not None and searched.rewrite.requests:
+        details.append(_rewrite_cost(searched))
     if answer.stop_reason == "max_tokens":
         details.append("cut off at the token limit")
     elif answer.stop_reason == "refusal":
@@ -2875,6 +2910,44 @@ def ask(
             "not answer in time.",
             err=True,
         )
+
+
+def _searched_line(searched: SearchedFor, *, given: bool) -> str | None:
+    """What the command says, before the answer, of the question it searched for.
+
+    Nothing when no earlier question was ``given``. A follow-up that could not be
+    rewritten is searched for as it was typed, and the line says so: it finds little.
+    """
+    rewrite = searched.rewrite
+    if rewrite.outcome == "not_asked":
+        if not given:
+            return None
+        return (
+            "Searched for the question as it was typed: follow-up questions are switched "
+            "off (HANDBOOK_RAG_FOLLOW_UPS)."
+        )
+    if rewrite.outcome == "rewritten":
+        return f"Searched for: {searched.question}"
+    if rewrite.outcome == "unchanged":
+        return "Searched for the question as it was asked: it stands alone."
+    why = "the model's reply was not usable" if rewrite.outcome == "unusable" else "it failed"
+    if rewrite.failure is not None:
+        why = f"it failed ({rewrite.failure.reason})"
+    return (
+        f"Searched for the question as it was typed: rewriting it to stand alone did not "
+        f"work, because {why}."
+    )
+
+
+def _rewrite_cost(searched: SearchedFor) -> str:
+    """What rewriting the follow-up cost, for the line of details after the answer."""
+    rewrite = searched.rewrite
+    parts = ["rewritten with 1 request" if rewrite.changed else "rewriting took 1 request"]
+    if rewrite.reply is not None:
+        usage = rewrite.reply.usage
+        parts.append(f"{usage.input_tokens:,} tokens in, {usage.output_tokens:,} out")
+    parts.append(f"{rewrite.seconds:.1f} s")
+    return ", ".join(parts)
 
 
 def _show_cache_hit(hit: CacheHit) -> None:

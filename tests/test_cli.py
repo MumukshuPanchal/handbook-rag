@@ -4435,3 +4435,117 @@ def test_eval_adversarial_never_gets_a_cache_either(
     assert asked[:3] == asked[3:], "every case again, the one that is searched for too"
     store = wiring.make_store(get_settings())
     assert answer_collections(store.client) == []
+
+
+# ask with the earlier questions of a conversation (issue 79, ADR 0024).
+
+
+class AskedCanned(CannedGenerator):
+    """The canned answer model, recording the question it was asked."""
+
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    def generate(
+        self,
+        question: str,
+        chunks: Sequence[Chunk],
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Answer:
+        self.asked.append(question)
+        return super().generate(question, chunks, on_text=on_text)
+
+
+def test_ask_with_earlier_questions_rewrites_the_follow_up_and_says_what_it_searched_for(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    from handbook_rag.pipeline import FollowUps
+    from tests.rewrite.support import replying
+
+    model, rewriter = AskedCanned(), replying("How many weeks of paid leave do new parents get?")
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: model)
+    monkeypatch.setattr(
+        "handbook_rag.wiring.make_follow_ups", lambda _settings: FollowUps(rewriter)
+    )
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(
+        app,
+        [
+            "ask",
+            "--earlier",
+            "Who approves parental leave?",
+            "--earlier",
+            "how much is paid",
+            "and how many weeks",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Searched for: How many weeks of paid leave do new parents get?" in result.output
+    assert result.output.index("Searched for:") < result.output.index("Sixteen weeks")
+    assert model.asked == ["How many weeks of paid leave do new parents get?"]
+    ((turns, question),) = rewriter.calls
+    assert [turn.question for turn in turns] == ["Who approves parental leave?", "how much is paid"]
+    assert all(turn.answer is None for turn in turns)
+    assert question == "and how many weeks"
+    assert "rewritten with 1 request, 420 tokens in, 18 out, 0.8 s" in result.output
+
+
+def test_ask_without_earlier_questions_builds_no_rewriting_step(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    def refuse(_settings: Settings) -> None:
+        raise AssertionError("the rewriting step was built for a question asked by itself")
+
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: CannedGenerator())
+    monkeypatch.setattr("handbook_rag.wiring.make_follow_ups", refuse)
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["ask", "how many weeks of parental leave"])
+
+    assert result.exit_code == 0, result.output
+    assert "Searched for" not in result.output
+    assert "rewrit" not in result.output
+
+
+def test_ask_says_when_a_follow_up_was_searched_for_as_typed_because_the_step_failed(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    from handbook_rag.pipeline import FollowUps
+    from tests.rewrite.support import failing
+
+    model = AskedCanned()
+    rewriter = failing(GenerationError("too slow", reason="timeout"))
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: model)
+    monkeypatch.setattr(
+        "handbook_rag.wiring.make_follow_ups", lambda _settings: FollowUps(rewriter)
+    )
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(
+        app, ["ask", "--earlier", "Who approves parental leave?", "and how many weeks"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Searched for the question as it was typed" in result.output
+    assert "because it failed (timeout)" in result.output
+    assert model.asked == ["and how many weeks"]
+
+
+def test_ask_says_when_follow_ups_are_off_and_earlier_questions_were_given(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    model = AskedCanned()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: model)
+    monkeypatch.setenv("HANDBOOK_RAG_FOLLOW_UPS", "false")
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(
+        app, ["ask", "--earlier", "Who approves parental leave?", "and how many weeks"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "follow-up questions are switched off" in result.output
+    assert model.asked == ["and how many weeks"]

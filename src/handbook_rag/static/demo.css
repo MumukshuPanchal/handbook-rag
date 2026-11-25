@@ -156,6 +156,22 @@ button[aria-disabled="true"] {
   text-align: left;
 }
 
+/* The questions of the conversation, as they were searched for, and the question an
+   answer searched for when it is not the one asked. */
+.conversation-list {
+  margin: 0 0 0.5rem;
+  padding-left: 1.5rem;
+  overflow-wrap: anywhere;
+}
+
+.searched {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 4px solid var(--accent);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
 .status {
   min-height: 1.5em;
   margin: 1rem 0;

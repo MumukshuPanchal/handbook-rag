@@ -16,7 +16,7 @@ from pydantic import SecretStr
 from handbook_rag import wiring
 from handbook_rag.api import MAX_BODY_BYTES, MAX_EARLIER_QUESTIONS, MAX_QUERY_CHARS, create_app
 from handbook_rag.config import Settings
-from handbook_rag.generate.base import GenerationError
+from handbook_rag.generate.base import FailureReason, GenerationError
 from handbook_rag.pipeline import FollowUps
 from tests.rewrite.support import StandInRewriter, failing, replying
 from tests.test_api import Writing, answer_event, answers_ended, indexed_store
@@ -229,3 +229,95 @@ def test_the_streams_and_the_answers_threads_end_after_follow_ups() -> None:
     with TestClient(conversing(model, rewriter)) as client:
         client.post("/ask", json={"query": FOLLOW_UP, "earlier": [FIRST], "stream": True})
         assert answers_ended()
+
+
+@pytest.mark.parametrize(
+    "reason", ["timeout", "rate_limit", "quota", "configuration", "unavailable"]
+)
+@pytest.mark.parametrize("stream", [False, True])
+def test_a_failed_rewrite_is_logged_with_its_reason_and_its_words_but_not_the_question(
+    reason: FailureReason, stream: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    secret = f"The provider refused the request ({reason}): check GEMINI_API_KEY."
+    rewriter = failing(GenerationError(secret, reason=reason))
+    with TestClient(conversing(Writing(("Sixteen weeks.", (0,))), rewriter)) as client:
+        response = client.post(
+            "/ask", json={"query": FOLLOW_UP, "earlier": [FIRST], "stream": stream}
+        )
+        assert answers_ended()
+
+    assert response.status_code == 200
+    (record,) = [r for r in caplog.records if "searched for as typed" in r.getMessage()]
+    assert record.levelname == "WARNING"
+    assert f"rewriting it failed ({reason})" in record.getMessage()
+    assert secret in record.getMessage(), "the error's own words, in the log only"
+    assert secret not in response.text
+    assert FOLLOW_UP not in caplog.text
+    assert FIRST not in caplog.text
+
+
+def test_a_rewrite_that_worked_or_did_not_run_logs_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with TestClient(conversing(Writing(("Sixteen weeks.", (0,))), replying(STANDALONE))) as c:
+        c.post("/ask", json={"query": FOLLOW_UP, "earlier": [FIRST]})
+        c.post("/ask", json={"query": FIRST})
+
+    assert "searched for as typed" not in caplog.text
+
+
+# A service built from the settings, as `handbook-rag serve` builds it.
+
+
+def from_the_settings(settings: Settings) -> FastAPI:
+    """The API with a stand-in search, and its answer model and its step from the settings."""
+    store, embedder, sparse_encoder = indexed_store()
+    retriever = wiring.make_retriever(
+        settings, store=store, embedder=embedder, sparse_encoder=sparse_encoder
+    )
+    return create_app(settings, retriever=retriever, store=store)
+
+
+def test_a_service_with_a_key_builds_the_step_from_its_settings() -> None:
+    settings = Settings(gemini_api_key=SecretStr("test-key-not-a-real-one"))
+    application = from_the_settings(settings)
+
+    with TestClient(application):
+        follow_ups = application.state.follow_ups
+
+    assert isinstance(follow_ups, FollowUps)
+    assert follow_ups.earlier_questions == settings.follow_up_earlier_questions
+    client = follow_ups.rewriter._client._api_client  # type: ignore[attr-defined]
+    assert client._http_options.timeout == settings.follow_up_timeout_seconds * 1000
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        Settings(),
+        Settings(gemini_api_key=SecretStr("test-key-not-a-real-one"), follow_ups=False),
+    ],
+    ids=["without a key", "switched off"],
+)
+def test_a_service_without_a_key_or_with_follow_ups_off_has_no_step(settings: Settings) -> None:
+    application = from_the_settings(settings)
+
+    with TestClient(application):
+        assert application.state.follow_ups is None
+
+
+def test_a_service_whose_step_cannot_be_built_starts_without_it_and_says_so(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def refuse(_settings: Settings) -> FollowUps:
+        raise GenerationError("The rewriting model could not be built.", reason="configuration")
+
+    monkeypatch.setattr(wiring, "make_follow_ups", refuse)
+    application = from_the_settings(Settings(gemini_api_key=SecretStr("test-key-not-a-real")))
+
+    with TestClient(application):
+        assert application.state.generator is not None
+        assert application.state.follow_ups is None
+
+    assert "follow-up questions are not rewritten" in caplog.text
+    assert "could not be built" in caplog.text

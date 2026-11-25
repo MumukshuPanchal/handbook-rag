@@ -584,6 +584,25 @@ def _for_the_log(error: BaseException) -> str:
     return str(error)
 
 
+def _log_a_failed_rewrite(searched: list[SearchedFor], run: AnswerRun) -> None:
+    """Log the rewriting step's failure, as the failure of an answer is logged.
+
+    The reply carries one fixed word for it, and a follow-up is then searched for as it
+    was typed. Without this, a step that is set up wrong, with a key the provider refuses
+    or a model it does not know, would turn every follow-up into one searched for as
+    typed and leave no trace of why. The question is not logged, as no question is.
+    """
+    if not searched or searched[0].rewrite.failure is None:
+        return
+    failure = searched[0].rewrite.failure
+    logger.warning(
+        "a follow-up was searched for as typed, because rewriting it failed (%s), trace %s: %s",
+        failure.reason,
+        run.trace_id,
+        _for_the_log(failure),
+    )
+
+
 def _trace_headers(run: AnswerRun) -> dict[str, str]:
     return {TRACE_HEADER: run.trace_id} if run.trace_id is not None else {}
 
@@ -969,6 +988,8 @@ def create_app(
         run = AnswerRun.start(write, slots)
         try:
             event = await run.next()
+            # By the first event the step has run, if it ran at all.
+            _log_a_failed_rewrite(searched, run)
             if request.stream and not isinstance(event, Failed):
                 # From here the stream owns the run, and stops it when it ends.
                 return EventStream(

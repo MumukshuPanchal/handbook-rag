@@ -550,6 +550,10 @@ def test_the_question_searched_for_is_shown_as_text_when_it_is_not_the_one_asked
     # Set as text, like everything else that comes from the API.
     assert "page.searched.textContent = line;" in show
     assert 'event.name === "searched"' in body_of("readAnswer")
+    # A follow-up that the service did not rewrite at all says so too.
+    assert 'followUp && searched.outcome === "not_asked"' in line
+    assert "this service did not rewrite the follow-up" in line
+    assert "showSearched(searched, followUp);" in body_of("readAnswer")
 
 
 def test_the_page_reads_the_fields_the_api_sends_for_the_question_searched_for() -> None:

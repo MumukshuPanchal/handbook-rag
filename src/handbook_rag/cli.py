@@ -78,7 +78,7 @@ from handbook_rag.evals.two_passage import (
     load_reasons,
     reading_of,
 )
-from handbook_rag.generate.base import GenerationError
+from handbook_rag.generate.base import GenerationError, plain_words
 from handbook_rag.generate.models import Answer, CacheHit
 from handbook_rag.generate.pricing import cost_usd
 from handbook_rag.index.compare import (
@@ -2811,9 +2811,13 @@ def ask(
         nonlocal searched
         searched = found
         # Before the answer, so that the reader knows what it answers.
-        line = _searched_line(found, given=any(q.strip() for q in earlier_questions))
+        line = _searched_line(found, given=any(plain_words(q) for q in earlier_questions))
         if line is not None:
             typer.echo(line + "\n")
+        if found.rewrite.failure is not None:
+            # Its own words go to the error output, as an answer's failure does: a step
+            # that is set up wrong is seen there, and not only as one word.
+            typer.echo(f"note: rewriting the follow-up failed: {found.rewrite.failure}", err=True)
 
     # Leaving the session sends the trace, also when the answer fails.
     with tracing_session(settings):

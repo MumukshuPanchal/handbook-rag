@@ -4549,3 +4549,71 @@ def test_ask_says_when_follow_ups_are_off_and_earlier_questions_were_given(
     assert result.exit_code == 0, result.output
     assert "follow-up questions are switched off" in result.output
     assert model.asked == ["and how many weeks"]
+
+
+@pytest.mark.parametrize(
+    ("reply", "said", "cost"),
+    [
+        (
+            "Rewritten question: and how many weeks in 2031?",
+            "because the model's reply was not usable",
+            "rewriting took 1 request, 420 tokens in, 18 out, 0.8 s",
+        ),
+        (
+            "And how many weeks?",
+            "Searched for the question as it was asked: it stands alone.",
+            "rewriting took 1 request, 420 tokens in, 18 out, 0.8 s",
+        ),
+    ],
+    ids=["unusable", "given back"],
+)
+def test_ask_says_how_the_step_came_to_the_question_when_it_did_not_rewrite_it(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pipeline: FakeEmbedder,
+    reply: str,
+    said: str,
+    cost: str,
+) -> None:
+    from handbook_rag.pipeline import FollowUps
+    from tests.rewrite.support import replying
+
+    model = AskedCanned()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: model)
+    monkeypatch.setattr(
+        "handbook_rag.wiring.make_follow_ups", lambda _settings: FollowUps(replying(reply))
+    )
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(
+        app, ["ask", "--earlier", "Who approves parental leave?", "and how many weeks"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert said in result.output
+    assert cost in result.output
+    assert "rewritten with" not in result.output
+    assert model.asked == ["and how many weeks"]
+
+
+def test_ask_puts_the_words_of_a_failed_rewrite_on_the_error_output(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder
+) -> None:
+    from handbook_rag.pipeline import FollowUps
+    from tests.rewrite.support import failing
+
+    secret = "The Gemini API rejected the credential."
+    rewriter = failing(GenerationError(secret, reason="configuration"))
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: AskedCanned())
+    monkeypatch.setattr(
+        "handbook_rag.wiring.make_follow_ups", lambda _settings: FollowUps(rewriter)
+    )
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(
+        app, ["ask", "--earlier", "Who approves parental leave?", "and how many weeks"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"note: rewriting the follow-up failed: {secret}" in result.stderr
+    assert secret not in result.stdout
+    assert "because it failed (configuration)" in result.stdout

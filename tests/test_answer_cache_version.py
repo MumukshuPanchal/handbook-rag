@@ -47,8 +47,11 @@ PINNED = {
     # Without earlier questions the code path is the one pinned before. A wrong rewrite
     # looks up and stores an answer to another question, which the reply names, as a
     # wrong question typed would. No stored answer becomes wrong, and none may be served
-    # where it could not before: the version stays as it is.
-    "pipeline.py": "5f6642374d3ceaef",
+    # where it could not before: the version stays as it is. After the review, the entry
+    # point leaves out an earlier question with no letter or digit, refuses a single string
+    # in place of the earlier questions, and bounds how many the step reads: which earlier
+    # questions reach the step, not how a question is answered. It stays.
+    "pipeline.py": "415a1f1bce966f56",
     # How a model's reply is read into statements and citations.
     "generate/base.py": "0408beccbd6450f1",
     "generate/claude.py": "f370a5e4dd209266",

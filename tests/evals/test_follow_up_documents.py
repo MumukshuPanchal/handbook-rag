@@ -1049,6 +1049,11 @@ def guide_numbers() -> dict[str, list[str]]:
         "- **No answer was written for the rewritten questions.**": [str(k["targets"])],
         "- **Model sessions, and no person.**": [str(k["set_aside"])],
         "- **Held out.** ": held_out_line(with_kinds=False),
+        "- **Read again after the change.**": [
+            str(held_out_figures()["replies"]),
+            str(held_out_figures()["after_right"]),
+            str(held_out_figures()["after_of"]),
+        ],
         "- **Few cases.**": [str(k["smallest_kind"]), str(k["smallest_kind"]), k["few"]],
         "- **Wired in, and not measured there.**": [
             WIRING_RECORD,

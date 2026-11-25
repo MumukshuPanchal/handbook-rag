@@ -386,7 +386,9 @@ class Settings(BaseSettings):
         gt=0,
         le=600,
         description=(
-            "How long the rewriting step may wait for its one request. It is asked once, "
+            "How long the rewriting step may wait in each phase of its one request: to "
+            "connect, to send, and for each read of the reply, which is not streamed and "
+            "so comes in one read once the model has finished. It is asked once, "
             "with no retry and no fallback model: when it fails or runs out of time, the "
             "question is searched for as it was typed, and the reply says so. In the "
             "measurement, on an evening the model was overloaded, the median reply took "

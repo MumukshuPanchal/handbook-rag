@@ -463,9 +463,9 @@ def make_rewriter(
 
     It is the answer model, used a second time for a much smaller request, so its name
     decides the provider as for an answer. Its SDK sends each request once, and waits
-    ``timeout_seconds`` at most for the connection and for the reply, which is not
-    streamed. Nothing asks again: the rewriting step makes one request, and an
-    evaluation tries a failed case again itself. The evaluation keeps
+    ``timeout_seconds`` at most in each phase of it: to connect, to send, and for each
+    read of the reply, which is not streamed. Nothing asks again: the rewriting step makes
+    one request, and an evaluation tries a failed case again itself. The evaluation keeps
     :data:`EVALUATION_TIMEOUT_SECONDS`, so that a slow reply is measured and not cut off;
     an answer gets the shorter limit of its settings (:func:`make_follow_ups`).
 

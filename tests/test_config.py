@@ -356,6 +356,25 @@ def test_a_follow_up_setting_out_of_its_range_is_refused(field: str, value: floa
         Settings(**options)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("follow_up_earlier_questions", 1),
+        ("follow_up_earlier_questions", 6),
+        ("follow_up_timeout_seconds", 0.001),
+        ("follow_up_timeout_seconds", 600),
+    ],
+)
+def test_a_follow_up_setting_at_the_edge_of_its_range_is_accepted(field: str, value: float) -> None:
+    options: dict[str, Any] = {field: value}
+    assert getattr(Settings(**options), field) == value
+
+
+def test_a_follow_up_time_limit_just_over_ten_minutes_is_refused() -> None:
+    with pytest.raises(ValidationError):
+        Settings(follow_up_timeout_seconds=600.1)
+
+
 def test_the_step_reads_no_more_earlier_questions_than_it_can_send() -> None:
     from handbook_rag.rewrite.models import MAX_EARLIER_TURNS
 

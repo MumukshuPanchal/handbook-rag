@@ -86,8 +86,12 @@ def record_numbers() -> dict[str, list[str]]:
             str(settings.follow_up_earlier_questions),
             str(MAX_BODY_BYTES // 1024),
             str(MAX_EARLIER_QUESTIONS),
+            # UTF-8, by its name, and the status of a body over the limit.
+            "8",
+            "413",
         ],
-        "- **Over HTTP an answer is refused, not ignored.**": ["422"],
+        "- **Over HTTP an answer sent as an answer is refused, not ignored.**": ["422"],
+        "- **A 422 names an unknown field.**": ["422"],
         "Tests hold all three.": [str(k["right"]["points_into_answer"]), str(k["into_answer"])],
         "Every piece of text that reaches the rewriting model": [
             str(k["planted"]["held_by_code"] + k["planted"]["read_held"]),

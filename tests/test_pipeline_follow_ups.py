@@ -18,7 +18,7 @@ from handbook_rag.generate.models import Answer
 from handbook_rag.index.store import ScoredChunk
 from handbook_rag.measuring import RewriteNotAllowed, measuring_the_model
 from handbook_rag.pipeline import FollowUps, SearchedFor, answer_question
-from handbook_rag.rewrite.models import Turn
+from handbook_rag.rewrite.models import MAX_EARLIER_TURNS, Turn
 from handbook_rag.rewrite.prompt import build_rewrite_prompt
 from tests.cache.support import TableVerifier, memory_answers
 from tests.cache.test_answers import Vectors
@@ -180,6 +180,52 @@ def test_the_latest_earlier_questions_are_read_and_the_oldest_dropped() -> None:
 def test_reading_no_earlier_question_is_refused_rather_than_reading_all() -> None:
     with pytest.raises(ValueError, match="at least one"):
         FollowUps(replying(STANDALONE), earlier_questions=0)
+
+
+def test_the_step_reads_three_by_default_and_from_one_to_as_many_as_it_sends() -> None:
+    rewriter = replying(STANDALONE)
+
+    assert FollowUps(rewriter).earlier_questions == 3
+    assert FollowUps(rewriter, earlier_questions=1).earlier_questions == 1
+    assert FollowUps(rewriter, earlier_questions=MAX_EARLIER_TURNS).earlier_questions == 6
+    with pytest.raises(ValueError, match="at most 6"):
+        FollowUps(rewriter, earlier_questions=MAX_EARLIER_TURNS + 1)
+
+
+def test_reading_one_earlier_question_reads_the_latest() -> None:
+    rewriter = replying(STANDALONE)
+
+    _, (searched,) = ask(
+        FOLLOW_UP, earlier=[OTHER, FIRST], follow_ups=FollowUps(rewriter, earlier_questions=1)
+    )
+
+    assert rewriter.calls == [((Turn(FIRST),), FOLLOW_UP)]
+    assert searched.earlier == 1
+
+
+@pytest.mark.parametrize("invisible", ["\u200b", "\ufeff", "\x00", "  \n", "?!"])
+def test_an_earlier_question_with_no_letter_or_digit_costs_no_request(invisible: str) -> None:
+    rewriter, model = replying(STANDALONE), Counting()
+
+    _, (searched,) = ask(
+        FOLLOW_UP, earlier=[invisible], follow_ups=FollowUps(rewriter), model=model
+    )
+
+    assert rewriter.calls == []
+    assert searched.rewrite.outcome == "not_asked"
+    assert model.asked == [FOLLOW_UP]
+    # Among real earlier questions it is left out, and the others are read.
+    ask(FOLLOW_UP, earlier=[FIRST, invisible], follow_ups=FollowUps(rewriter))
+    assert rewriter.calls == [((Turn(FIRST),), FOLLOW_UP)]
+
+
+def test_one_string_in_place_of_the_earlier_questions_is_refused() -> None:
+    rewriter = replying(STANDALONE)
+
+    with pytest.raises(TypeError, match="not one string"):
+        ask(FOLLOW_UP, earlier=FIRST, follow_ups=FollowUps(rewriter))
+
+    assert rewriter.calls == []
 
 
 def test_no_answers_reach_the_rewriting_model_only_the_earlier_questions() -> None:

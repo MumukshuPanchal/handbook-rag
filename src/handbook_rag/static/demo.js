@@ -244,8 +244,13 @@ function searchedFor(value) {
 
 // What a reader is told of the question searched for, as one line of text, or "" when
 // it is the question as asked. A follow-up that could not be rewritten is searched for as
-// it was typed, and the reader is told so: it then finds little.
-function searchedLine(searched) {
+// it was typed, and the reader is told so: it then finds little. So is a follow-up that a
+// service did not rewrite at all, because its follow-ups are switched off or it has no
+// rewriting step: earlier questions were sent, and the reply says the step did not run.
+function searchedLine(searched, followUp) {
+  if (followUp && searched.outcome === "not_asked") {
+    return "Searched for your question as you typed it: this service did not rewrite the follow-up, so your earlier questions were not used. A follow-up searched for that way may find little.";
+  }
   if (searched.outcome === "failed" || searched.outcome === "unusable") {
     const why =
       searched.outcome === "failed"
@@ -569,8 +574,8 @@ function fail(words) {
 }
 
 // Shows the question searched for above the answer, as text, when it is not the one asked.
-function showSearched(searched) {
-  const line = searchedLine(searched);
+function showSearched(searched, followUp) {
+  const line = searchedLine(searched, followUp);
   page.searched.textContent = line;
   page.searched.hidden = line === "";
 }
@@ -697,7 +702,7 @@ async function readAnswer(response, question, followUp) {
     if (event.name === "searched") {
       const searched = searchedFor(data);
       if (searched !== null) {
-        showSearched(searched);
+        showSearched(searched, followUp);
         if (followUp) {
           search(searched.question);
         }

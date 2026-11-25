@@ -1086,6 +1086,7 @@ How far this goes:
 - **One run, with one reply for each case**, most of it on a night the model was overloaded. A second run can differ.
 - **Model sessions, and no person.** One model session wrote the cases and two more sessions of the same model read them again. Two reader sessions of the same model decided the 21 rewrites that code set aside. A model's reading is not a person's review.
 - **Held out.** 20 more conversations, written later by a session that had not seen the step's replies, were asked under the rule as it stood before them: 9 of 14 follow-ups came out right, 0.643 (0.388 to 0.837), against 0.814 above, and the intervals overlap. 2 of the 5 misses were good rewrites that the checks refused, which led to a change of the rule made after the replies were seen; 3 were the model's own ([the card](../evals/follow-ups/README.md#the-held-out-cases)).
+- **Read again after the change.** The same 20 replies, copied into [`evals/runs/follow-ups/held-out-after`](../evals/runs/follow-ups/held-out-after) and read again under the rule changed after them, with no request, give 11 of 14 follow-ups. That is not held-out evidence.
 - **Few cases.** 8 cases of a kind can show little: all 8 right still leaves an interval that reaches down to 0.676.
 - **Wired in, and not measured there.** The step runs in front of `POST /ask`, the demo page and `ask --earlier` ([ADR 0024](adr/0024-follow-up-questions-in-the-service.md)). Nothing here measures it in front of `POST /ask`, with the answer cache, or in a conversation longer than 2 earlier turns.
 

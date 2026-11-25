@@ -33,14 +33,14 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from handbook_rag.cache.answers import AnswerCache, Lookup
-from handbook_rag.generate.base import GenerationError, Generator
+from handbook_rag.generate.base import GenerationError, Generator, plain_words
 from handbook_rag.generate.models import Answer
 from handbook_rag.generate.retrying import RetryingGenerator, traced_request
 from handbook_rag.ingest.models import Chunk
 from handbook_rag.measuring import refuse_a_cache, refuse_a_rewrite
 from handbook_rag.retrieve.dense import Retriever
 from handbook_rag.rewrite.base import Rewriter, standalone_question
-from handbook_rag.rewrite.models import Rewrite, Turn
+from handbook_rag.rewrite.models import MAX_EARLIER_TURNS, Rewrite, Turn
 from handbook_rag.tracing import (
     record_answer,
     record_cache_lookup,
@@ -61,9 +61,14 @@ class FollowUps:
     earlier_questions: int = 3
 
     def __post_init__(self) -> None:
-        # A slice from the end by 0 would keep every question, not none.
+        # A slice from the end by 0 would keep every question, not none. Above what the
+        # step sends, the reply would count questions the model was never given.
         if self.earlier_questions < 1:
             raise ValueError("The rewriting step reads at least one earlier question.")
+        if self.earlier_questions > MAX_EARLIER_TURNS:
+            raise ValueError(
+                f"The rewriting step sends at most {MAX_EARLIER_TURNS} earlier questions."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,10 +135,14 @@ def answer_question(
     one request, and everything after that is done with the question that came out:
     the lookup in the cache, the search and the answer. A rewrite that fails or is not
     usable leaves the question as it was asked. Without earlier questions, or without
-    ``follow_ups``, nothing is asked and nothing changes. ``on_searched`` receives the
+    ``follow_ups``, nothing is asked and nothing changes. ``earlier`` may not be a single
+    string, which would be read as a sequence of characters. ``on_searched`` receives the
     question searched for, and how the step came to it, before the lookup and the search.
     While an evaluation runs, ``follow_ups`` is refused with an error, like a ``cache``.
     """
+    if isinstance(earlier, str):
+        # A string is a sequence of strings too, and its last characters would be sent.
+        raise TypeError("earlier is a sequence of questions, not one string.")
     if cache is not None:
         refuse_a_cache("used")
     if follow_ups is not None:
@@ -186,9 +195,11 @@ def _searched_for(
     """The question to look up, search for and answer, with how it came to be.
 
     The latest earlier questions are read, as many as ``follow_ups`` says, leaving out any
-    that holds nothing but space. Each becomes a turn without an answer.
+    that holds no letter or digit, such as one of spaces, a zero-width space or a byte
+    order mark: it would cost a request and give the model nothing. Each becomes a turn
+    without an answer.
     """
-    given = [asked for asked in earlier if asked.strip()]
+    given = [asked for asked in earlier if plain_words(asked)]
     if follow_ups is None or not given:
         return SearchedFor(question, Rewrite(question=question, outcome="not_asked"))
     turns = [Turn(asked) for asked in given[-follow_ups.earlier_questions :]]

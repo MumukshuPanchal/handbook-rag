@@ -349,6 +349,22 @@ def test_the_second_variant_holds_the_same_replies_and_made_no_request_of_its_ow
     ]
 
 
+def test_the_second_variant_says_in_its_own_folder_what_it_is() -> None:
+    note = (AFTER / "README.md").read_text(encoding="utf-8")
+
+    assert "This is not a run of its own." in note
+    assert "copies of the held-out run's, byte for byte" in note
+    assert "none was made for this folder" in note
+    assert "is not held-out evidence" in note
+    assert f"count the {summary(AFTER)['attempts']} requests that run made" in note
+    added = len(load_readings(AFTER / "readings.jsonl")) - len(
+        load_readings(BEFORE / "readings.jsonl")
+    )
+    assert f"and {added} more, of the {len(REFUSED)} replies" in note
+    assert summary(AFTER)["description"] == summary(BEFORE)["description"]
+    assert "--variant held-out-after" in note
+
+
 def test_today_reads_the_second_variant_as_it_was_written() -> None:
     saved, recorded = replies(AFTER), rows(AFTER)
     for case in cases():

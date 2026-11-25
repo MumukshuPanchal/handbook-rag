@@ -1,8 +1,8 @@
 # Labelled answers for one fault: the limit an answer leaves out
 
-120 answers that test one decision of the judge and no other. Each cites a handbook passage that states a rule with a limit, an exception or a condition. Some answers keep the limit and some leave it out. The set exists because this is the one kind of fault the answer evaluation found in real answers and could not measure: the judge passed all three real cases, and the readers of [the first set](../README.md) split on them ([issue 59](https://github.com/MumukshuPanchal/handbook-rag/issues/59)). Making these examples is the first step of that issue. Measuring the judge on them is the second, and has not been done.
+120 answers that test one decision of the judge and no other. Each cites a handbook passage that states a rule with a limit, an exception or a condition. Some answers keep the limit and some leave it out. The set exists because this is the one kind of fault the answer evaluation found in real answers and could not measure: the judge passed all three real cases, and the readers of [the first set](../README.md) split on them ([issue 59](https://github.com/MumukshuPanchal/handbook-rag/issues/59)). Making these examples is the first step of that issue. Measuring the judge on them is the second: version 1 of the judge caught 13 of the 39 limits left out, and version 2, written for this fault, caught 33 ([what the judges did on it](#what-the-judges-did-on-it)).
 
-> **Status: written and labelled by one model session, and labelled again by three reader sessions that did not see those labels, each on a third of the answers. No person has read it.** One session of `claude-fable-5-2` chose the passages, wrote every answer and gave every label, on 24 November 2026. The same day, three reader sessions labelled all 197 statements again, from the passage and the rubric alone. They agree with the first labels on 196. The statement they split on is labelled `unclear` and is not counted. All four sessions are models, and a model's check is not a person's review. The judge has not been run on the file.
+> **Status: written and labelled by one model session, and labelled again by three reader sessions that did not see those labels, each on a third of the answers. No person has read it.** One session of `claude-fable-5-2` chose the passages, wrote every answer and gave every label, on 24 November 2026. The same day, three reader sessions labelled all 197 statements again, from the passage and the rubric alone. They agree with the first labels on 196. The statement they split on is labelled `unclear` and is not counted. All four sessions are models, and a model's check is not a person's review. Two versions of the judge have been checked on the file, [below](#what-the-judges-did-on-it).
 
 ## What is in it
 
@@ -154,11 +154,20 @@ What the comparison showed:
 
 ## How to use it
 
-`make eval-judge-limits` checks the first judge on this file and writes to `evals/runs/judge/limits`. It costs 120 real requests when none fails. It prints the faults caught in all and for each kind of limit. Alarms on `kept` and `harmless` answers are false alarms. `disagreements.jsonl` names the case of each, and the kind of a case is in this file.
+`make eval-judge-limits` checks the first judge on this file and writes to `evals/runs/judge/limits`. It costs 120 real requests when none fails. `make eval-judge-limits-v2` does the same for version 2 of the judge, and writes to `evals/runs/judge/limits-v2`. A check prints the faults caught in all and for each kind of limit. Alarms on `kept` and `harmless` answers are false alarms. `disagreements.jsonl` names the case of each, and the kind of a case is in this file.
 
 Two fixed points for reading a result. The check compares 196 statements and leaves out the one whose label is unclear. A judge that passes everything agrees on 157 of the 196 (0.801) and on 81 of 120 answers, and catches none of the 39. A judge that faults every statement catches all 39, and 39 of its 196 alarms are right (0.199).
 
 **For a further reading**, show only what a judge reads, as was done for the second labelling: `case`, `question`, `passages`, and of each statement `number`, `text` and `cites`. Everything else tells the label or the kind. The three answers of a passage can still be found by their passage, and laying them side by side gives the fault away. So a reader should be given one answer of each passage and no more.
+
+## What the judges did on it
+
+| Judge | Faults caught | False alarms | Kappa | Attempts | Run |
+|---|---|---|---|---|---|
+| Version 1 | 13 of 39 | 0 of 157 | 0.445 | 172 | [`judge/limits`](../../runs/judge/limits) |
+| Version 2 | 33 of 39 | 1 of 157 | 0.882 | 236 | [`judge/limits-v2`](../../runs/judge/limits-v2) |
+
+Version 1 is the judge of every published score. Version 2 was written for this fault, after the result of version 1 was known, by a session that was not shown these answers ([ADR 0023](../../../docs/adr/0023-a-second-version-of-the-support-judge-for-dropped-limits.md)). It caught every fault that version 1 caught. Of the 3 limits that stand only in a title, version 1 caught none and version 2 all 3. The faults that each caught by kind of limit, the six that version 2 missed and its one false alarm are in [the evaluation guide](../../../docs/evaluation.md#limits-that-an-answer-leaves-out). Both runs met an overloaded model, and their attempts count every failed one.
 
 ## Known limits
 

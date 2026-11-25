@@ -18,10 +18,14 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from handbook_rag.config import Settings
 from handbook_rag.evals.compare import compare_runs
 from handbook_rag.evals.dataset import load_golden_set
+from handbook_rag.evals.metrics import Estimate
 from handbook_rag.evals.two_passage import load_reasons
+from tests.evals import limit_runs
 
 ROOT = Path(__file__).parents[1]
 RUNS = ROOT / "evals" / "runs"
@@ -372,14 +376,26 @@ JUDGES = {
     "Supported by its sources": "judge/baseline",
     "Correct by the reference": "judge-correct/baseline",
 }
+# The row that version 2 of the first judge gets in that table, from its check on the same
+# labelled answers. That check is still to come (ADR 0023).
+SECOND_VERSION_ROW = "Supported by its sources, version 2"
+
+
+def judges_in_the_table() -> dict[str, str]:
+    """The judges the table must hold: version 2 too, once its check is in the repository."""
+    if not limit_runs.FIRST_SET_CHECK_V2.is_dir():
+        return dict(JUDGES)
+    first, second = JUDGES.items()
+    return dict([first, (SECOND_VERSION_ROW, limit_runs.FIRST_SET_CHECKS[2]), second])
 
 
 def test_the_judges_checks_are_the_committed_checks() -> None:
     rows = table(readme(), "| Judge | Labelled answers | Faults caught (recall) |")
+    judges = judges_in_the_table()
 
-    assert [row[0] for row in rows] == list(JUDGES)
+    assert [row[0] for row in rows] == list(judges)
     for judge, labelled, recall, precision, check in rows:
-        run = summary(JUDGES[judge])
+        run = summary(judges[judge])
         agreement = run["agreement"]
         # A check is quoted only when the judge ruled on every labelled answer.
         assert run["answers_judged"] == run["answers_labelled"], judge
@@ -391,7 +407,179 @@ def test_the_judges_checks_are_the_committed_checks() -> None:
                 str(estimate["count"]),
                 *interval_numbers(estimate),
             ], judge
-        assert link_target(check) == f"evals/runs/{JUDGES[judge]}", judge
+        assert link_target(check) == f"evals/runs/{judges[judge]}", judge
+
+
+# The rows of the table of the two versions of the first judge on the limit answers.
+LIMIT_CHECKS = {"Version 1, which gives every score above": 1, "Version 2": 2}
+# Names that are numbers in the lines below: the issue of dropped limits, the decision
+# record, and the issue of the hardening against planted instructions.
+LIMITS_ISSUE, LIMITS_RECORD, HARDENING_ISSUE = "59", "0023", "66"
+# The versions of the judge, as the prose names them: "version 1", "version 2".
+FIRST, SECOND = "1", "2"
+
+
+def limits_section() -> str:
+    return readme().split("### Answers that leave out a limit\n")[1].split("\n### ")[0]
+
+
+def share(estimate: Estimate) -> int:
+    return round(estimate.mean * estimate.count)
+
+
+def baseline_line_numbers() -> list[str]:
+    """The numbers of the line that gives version 2's score of the `baseline` answers.
+
+    The line, once that run is in the repository, in every document that gives it:
+    "- **Version 2's score of the `baseline` answers.** It calls {supported} of the
+    {answers} answers supported: {mean} ({low} to {high}). Version 1 calls {supported by
+    version 1} of them supported." With a link to the verdicts, whose target holds no
+    number that counts.
+    """
+    second, first = limit_runs.baseline_score(2), limit_runs.baseline_score(1)
+    return [
+        SECOND,
+        str(share(second)),
+        str(second.count),
+        three(second.mean),
+        three(second.low),
+        three(second.high),
+        FIRST,
+        str(share(first)),
+    ]
+
+
+def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
+    """The section on answers that leave out a limit, and its line under Limitations.
+
+    Every number in them is worked out from the two checks on the limit answers, and a line
+    with a number that nothing works out fails. ``tests/evals/test_limit_documents.py``
+    holds the other documents that give these figures in the same way.
+    """
+    first, second = limit_runs.check(1), limit_runs.check(2)
+    labelled = limit_runs.cases()
+    statements = [statement for case in labelled.values() for statement in case["statements"]]
+    same = sum(s["readers"]["first"] == s["readers"]["second"] for s in statements)
+    by_passage = Counter(case["passages"][0]["chunk_id"] for case in labelled.values())
+    readers = {case["second_session"] for case in labelled.values()}
+    real = limit_runs.real_unclear_in_the_first_set()
+    missed = Counter(labelled[case]["limit_kind"] for case, _ in second["missed"])
+    rows = table(readme(), "| Judge | Limits left out that it caught (95% interval) |")
+    section = limits_section()
+
+    assert [row[0] for row in rows] == list(LIMIT_CHECKS)
+    for row, version in zip(rows, LIMIT_CHECKS.values(), strict=True):
+        check = limit_runs.check(version)
+        assert row[1:] == [
+            f"{len(check['caught'])} of {len(check['faults'])}, {with_interval(check['recall'])}",
+            f"{len(check['false_alarms'])} of {len(check['supported'])} statements",
+            f"[`{check['run']}`](evals/runs/{check['run']})",
+        ], version
+    # What the points say in words, and what it rests on.
+    assert set(by_passage.values()) == {3}
+    assert f"the first judge passed the {in_words(len(real))} real cases" in section
+    assert f"three for each of {len(by_passage)} passages" in section
+    assert f"{in_words(len(readers))} sessions of the same model labelled them again" in section
+    assert first["caught"] <= second["caught"]
+    assert second["caught_in_title"] == second["in_title"]
+    assert not first["caught_in_title"]
+    assert "of which version 1 caught none" in section
+    assert len(second["false_alarms"]) == 1
+    assert f"**Its {in_words(len(second['missed']))} misses and its false alarm.**" in section
+    assert sorted(missed) == ["how_much", "only_if", "unless", "what"]
+    assert (
+        f"It passed {in_words(missed['unless'])} exceptions, {in_words(missed['how_much'])} "
+        f"amounts, {in_words(missed['only_if'])} condition and {in_words(missed['what'])} "
+        "limit to a product"
+    ) in section
+    found = limit_runs.FOUND_THE_LIMIT
+    assert f"in {in_words(len(found))} of these its reason names the very limit" in section
+    assert "for not naming the teams that its question names" in section
+    assert limit_runs.ratio_of_input_tokens() == 2.5
+    assert "It reads two and a half times the input tokens" in section
+    expected = {
+        "An answer can give a rule from its passage": [
+            LIMITS_ISSUE,
+            str(len(labelled)),
+            str(len(by_passage)),
+            str(same),
+            str(len(statements)),
+            LIMITS_RECORD,
+        ],
+        "- **Version 2 caught every limit that version 1 caught": [
+            SECOND,
+            FIRST,
+            str(len(second["caught"] - first["caught"])),
+            str(len(second["in_title"])),
+            FIRST,
+        ],
+        "- **It costs no more requests**": [
+            f"{second['median_seconds']:.1f}",
+            f"{first['median_seconds']:.1f}",
+        ],
+        "- **What these figures can carry.**": [
+            str(len(second["faults"])),
+            SECOND,
+            three(second["recall"]["low"]),
+            three(second["recall"]["high"]),
+            SECOND,
+            FIRST,
+        ],
+        "- **Version 1 stays the default.**": [FIRST, SECOND, SECOND, HARDENING_ISSUE],
+    }
+    if limit_runs.BASELINE_VERDICTS[2].is_file():
+        expected[limit_runs.BASELINE_LINE] = baseline_line_numbers()
+    assert_numbers(section, expected)
+
+    # And once more under Limitations, with what is not fixed.
+    limitation = line_starting(readme(), "- **Answers that leave out a limit or an exception are")
+    supported = summary("answers/baseline")["metrics"]["supported"]
+    by_version_1 = {row["case"]: row for row in limit_runs.rows(limit_runs.BASELINE_VERDICTS[1])}
+    # Each real answer the readers split on is one that the judge passed, so counting it
+    # as a fault takes one answer off the score.
+    assert all(
+        all(verdict["verdict"] != "unsupported" for verdict in by_version_1[question]["verdicts"])
+        for question in real
+    )
+    assert numbers(limitation) == [
+        str(len(labelled)),
+        FIRST,
+        str(len(first["caught"])),
+        str(len(first["faults"])),
+        SECOND,
+        str(len(second["caught"])),
+        str(len(second["supported"])),
+        three(supported["mean"]),
+        three((hits(supported) - len(real)) / supported["count"]),
+        LIMITS_RECORD,
+        LIMITS_ISSUE,
+    ]
+    assert "are measured, and not fixed.**" in limitation
+    assert f"with {in_words(len(second['false_alarms']))} false alarm in" in limitation
+    assert f"The {in_words(len(real))} real cases stay labelled unclear" in limitation
+    assert "The answers are not changed" in limitation
+
+
+@pytest.mark.skipif(
+    not limit_runs.FIRST_SET_CHECK_V2.is_dir(), reason=limit_runs.WAITS_FOR_THE_FIRST_SET_CHECK
+)
+def test_the_readme_gives_version_2s_check_on_the_first_labelled_answers() -> None:
+    # The row itself is held with the other judges' rows, by the test of the table.
+    rows = table(readme(), "| Judge | Labelled answers | Faults caught (recall) |")
+
+    assert SECOND_VERSION_ROW in [row[0] for row in rows]
+    assert limit_runs.NOT_YET_CHECKED not in readme()
+
+
+@pytest.mark.skipif(
+    not limit_runs.BASELINE_VERDICTS[2].is_file(),
+    reason=limit_runs.WAITS_FOR_THE_BASELINE_VERDICTS,
+)
+def test_the_readme_gives_version_2s_score_of_the_baseline_answers() -> None:
+    line = line_starting(limits_section(), limit_runs.BASELINE_LINE)
+
+    assert numbers(line) == baseline_line_numbers()
+    assert limit_runs.NOT_YET_RECORDED not in readme()
 
 
 def test_the_control_is_the_committed_control_run() -> None:

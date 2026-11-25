@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve mcp eval-retrieval eval-answers eval-judge eval-judge-correct eval-judge-references eval-judge-limits eval-judge-limits-v2 eval-judge-v2 eval-support eval-correct eval-adversarial eval-follow-ups eval-cache eval-compare eval-table eval-gate golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve mcp eval-retrieval eval-answers eval-judge eval-judge-correct eval-judge-references eval-judge-limits eval-judge-limits-v2 eval-judge-v2 eval-support eval-support-v2 eval-correct eval-adversarial eval-follow-ups eval-cache eval-compare eval-table eval-gate golden-check golden-review
 
 help: ## List the available commands
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -88,6 +88,9 @@ eval-judge-v2: ## Check version 2 of the support judge against the first labelle
 
 eval-support: ## Judge the saved answers of the scratch run: is each statement backed by its passage?
 	uv run handbook-rag eval-support
+
+eval-support-v2: ## Judge the baseline answers with version 2 of the support judge, with the verdicts of its check (a real request only for an answer the check did not read)
+	uv run handbook-rag eval-support --judge-version 2 --variant baseline --checked evals/runs/judge/v2
 
 eval-correct: ## Judge the saved answers of the scratch run: does each one agree with the reference answer?
 	uv run handbook-rag eval-correct

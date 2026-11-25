@@ -395,7 +395,7 @@ How far this goes:
 - One states the right answer and names no passage. That is a real fault, and "Every statement cited" had found it too.
 - The other is the false alarm described above.
 
-The [charter](charter.md) asks for at least 0.90, so the target is met. If the third reader is right about the three unclear statements, three more answers are unsupported and the score is 0.961, still above the target. **Dropped limits and exceptions are the one kind of fault this evaluation found in real answers and cannot yet measure reliably**, and they are the same kind as the answer on 22 November that gave a rule for one country as if it held everywhere.
+The [charter](charter.md) asks for at least 0.90, so the target is met. If the third reader is right about the three unclear statements, three more answers are unsupported and the score is 0.961, still above the target. **Dropped limits and exceptions are the one kind of fault this evaluation found in real answers and cannot yet measure reliably**, and they are the same kind as the answer on 22 November that gave a rule for one country as if it held everywhere. [A section below](#limits-that-an-answer-leaves-out) measures the judge on answers written to test them.
 
 Scoring cost no request: the check had already read these 129 answers, and a verdict is used again where the judge read exactly the same question, passages and statements.
 
@@ -411,6 +411,97 @@ Scoring cost no request: the check had already read these 129 answers, and a ver
 | A score from a judge with no check on record prints with a warning | An unchecked judge can be wrong in either direction |
 | An answer the judge could not rule on has no verdict | It is counted neither as supported nor as unsupported |
 | A statement labelled `unclear` is left out of every agreement figure | No verdict is forced where careful readers split |
+
+## Limits that an answer leaves out
+
+An answer can give a rule from its passage and leave out the limit that the passage puts on it. Nothing in such a statement is wrong, so a judge that checks the statement against the passage finds nothing to fault. In the first labelled answers the judge passed the three real cases, and the readers split on them ([issue 59](https://github.com/MumukshuPanchal/handbook-rag/issues/59)). This section measures the judge on answers written to test that fault alone, and describes a second version of the judge written for it. The decision is [ADR 0023](adr/0023-a-second-version-of-the-support-judge-for-dropped-limits.md).
+
+```bash
+make eval-judge-limits      # version 1 on the limit answers: 120 real requests
+make eval-judge-limits-v2   # version 2 on the same answers: 120 real requests
+make eval-judge-v2          # version 2 on the first labelled answers: 169 real requests
+make eval-support-v2        # the baseline answers judged by version 2, with the verdicts of that check
+```
+
+### The labelled set
+
+[`evals/judge/limits/`](../evals/judge/limits/README.md) holds 120 answers on 40 passages, three for each: one keeps the limit, one leaves it out, and one leaves out something that does not limit the rule, so that a judge which faults every omission is not rewarded. One model session wrote and labelled them. Three reader sessions labelled them again from the passage and the rubric alone, without seeing those labels. The two labellings agree on 196 of 197 statements, and the one they split on is labelled `unclear` and left out. So a check compares 196 statements: 39 that leave a limit out and 157 that are supported. No person has read the set. [Its card](../evals/judge/limits/README.md) says how it was made and where the rubric leaves room.
+
+### Version 2 of the judge
+
+Version 2 differs from version 1 in what it is told and in the shape of its reply ([`judge_v2.py`](../src/handbook_rag/evals/judge_v2.py)):
+
+- **The whole rubric.** Its instructions begin with [the rubric](../evals/judge/rubric.md), word for word, so it is told the two rules that version 1 lacks ([issue 58](https://github.com/MumukshuPanchal/handbook-rag/issues/58)). A test holds the two texts together.
+- **A second check that starts from the passage.** For each statement that gives a rule, it is told to find what the passage and its title say about who the rule is for, where and when it holds, how much, what it covers, on what condition and with what exception, and then to see whether the answer gives each of these.
+- **The limits first.** Each entry of its reply names the limits it found, then its reason, then its verdict, so it looks before it rules. The limits it named are kept with its reason.
+
+It is still one request for each answer, and it reads an answer in the same blocks as version 1. Its settings record its version and its own hashes of its instructions and of the layout of its requests, so neither version continues a run or a check of the other.
+
+It was written after the result of version 1 on this set was known, by a session that was not shown the set's answers. The repository does not record what else that session read. The set's card, which sorts the answers by the same seven kinds of limit that the instructions of version 2 list, was in the repository then. A check on other answers would show whether the result below carries over.
+
+### The two versions on the set
+
+| On the limit answers | Version 1 | Version 2 |
+|---|---|---|
+| Limits left out that it caught (recall) | 13 of 39, 0.333 (0.206 to 0.490) | 33 of 39, 0.846 (0.703 to 0.928) |
+| Alarms that were right (precision) | 13 of 13, 1.000 (0.772 to 1.000) | 33 of 34, 0.971 (0.851 to 0.995) |
+| Same decision as the label, unsupported or not | 170 of 196, 0.867 (0.813 to 0.908) | 189 of 196, 0.964 (0.928 to 0.983) |
+| Agreement beyond chance (Cohen's kappa) | 0.445 | 0.882 |
+| Same verdict on the whole answer | 94 of 120, 0.783 (0.701 to 0.848) | 113 of 120, 0.942 (0.884 to 0.971) |
+| Run | [`judge/limits`](../evals/runs/judge/limits) | [`judge/limits-v2`](../evals/runs/judge/limits-v2) |
+
+By kind of limit, the faults that each version caught:
+
+| Kind of limit | Faults | Version 1 | Version 2 |
+|---|---|---|---|
+| `who` | 5 | 3 | 5 |
+| `where` | 7 | 1 | 7 |
+| `when` | 4 | 3 | 4 |
+| `how_much` | 6 | 1 | 4 |
+| `unless` | 6 | 2 | 4 |
+| `only_if` | 7 | 3 | 6 |
+| `what` | 4 | 0 | 3 |
+| In the title only | 3 | 0 | 3 |
+
+- **Version 2 caught every fault that version 1 caught, and 20 more.**
+- **It missed six.** The table gives each limit in the passage's words, and what version 2 named as limits before it called the statement supported.
+
+| Case | Kind of limit | The limit the statement leaves out | What version 2 named as limits |
+|---|---|---|---|
+| `lim-014` | `unless` | Using Google for sign-in only is exempt from this policy. | Effective 2024-06-26, Google Workspace applications that connect via OAuth are blocked without prior approval. |
+| `lim-069` | `how_much` | with 3 or more valid reports | 3 or more valid reports, 1-year, up to 5 users, through a comment on one of their issues |
+| `lim-091` | `what` | This page only applies to Zendesk Global | none |
+| `lim-100` | `how_much` | under $5K (or less than $5K annually) | none |
+| `lim-101` | `only_if` | as long as the assignee and a SIRT manager agree | none |
+| `lim-114` | `unless` | unless you are doing so at the request of IT to troubleshoot a technical problem with the laptop | Under no circumstance should you perform your own disk wipe |
+
+- **In two of the misses it found the limit.** In `lim-069` it named the limit, and in `lim-101` its reason quotes it, and both times it called the statement supported.
+- **Its one false alarm** is statement 1 of `lim-086`, a `harmless` answer to "What kinds of changes should product development teams refrain from making?" that gives another rule of its passage. Version 2 called it unsupported for leaving out "Product development teams", though its own instructions say that a limit the question asks about is kept.
+
+### What it costs
+
+| What it costs | Version 1 | Version 2 |
+|---|---|---|
+| Input tokens for each answer, on average | 1,159 | 2,916 |
+| Output tokens for each answer, on average | 111 | 126 |
+| Median time of a verdict | 1.7 s | 2.0 s |
+| Attempts for the 120 answers | 172 | 236 |
+
+Version 2 reads two and a half times the input tokens of version 1, because the rubric is in its instructions. It sends the same number of requests, and on the free tier the allowance is counted in requests. Both runs met an overloaded model, and every failed attempt is counted. The runs do not record why an attempt failed, so the difference in attempts is not read as a cost of version 2.
+
+### Which judge gives the scores
+
+- **Version 1 stays the default.** Every published score is read from its files, and so is every score in an answer run's summary.
+- **Each version keeps its verdicts on an answer run in files of its own** ([what a run writes](#what-a-run-writes)). Version 2 never reads, continues or discards the files of version 1. `eval-support --judge-version 2` prints version 2's score beside the run's other scores and writes none of the run's own files, and with `--restart` it discards version 2's verdicts alone.
+- **The next measurement of the answers is to be judged by version 2.** When the instructions change with the hardening against planted instructions ([issue 66](https://github.com/MumukshuPanchal/handbook-rag/issues/66)), the answers are to be measured again, judged by version 2, and compared with version 2's score of the `baseline` answers. The default changes then, when the README's figures are rebuilt.
+
+### What is not measured
+
+- **Version 2 on the first labelled answers.** It is not yet checked on the first labelled answers, the 169 that version 1 was checked on, where it must not start faulting good answers. Until it is, no score of version 2 is quoted.
+- **Version 2's score of the `baseline` answers.** It is not yet recorded.
+- **Answers that keep their limits.** No answer was changed, and issue 59 stays open.
+- **Real faults.** The 39 were written by a model to carry the fault. The three real cases stay labelled `unclear` in the first labelled answers.
+- **Another author, and a person.** One model wrote and labelled the set, and three sessions of the same model labelled it again. No person has read it. 39 faults is a small sample, and the answers share passages, three to each, so an interval worked out as if they were independent is too narrow.
 
 ## The second judged score: correct by the reference
 

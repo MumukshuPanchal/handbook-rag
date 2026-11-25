@@ -1,0 +1,121 @@
+{
+  "description": "gemini-3.5-flash-lite (version 2) judging the labelled answers in evals/judge/support/cases.jsonl.",
+  "criterion": "support",
+  "config": {
+    "judge_model": "gemini-3.5-flash-lite",
+    "judge_max_tokens": 2000,
+    "judge_instructions": "df21bed5111c82e1",
+    "judge_request": "9e159c93b6115867",
+    "judge_version": 2
+  },
+  "answers_labelled": 169,
+  "answers_judged": 169,
+  "answers_failed": 0,
+  "attempts": 247,
+  "left_out_as_unclear": 5,
+  "agreement": {
+    "statements": 259,
+    "same_decision": {
+      "mean": 0.9884169884169884,
+      "low": 0.9665043757037907,
+      "high": 0.9960530574987826,
+      "count": 259
+    },
+    "recall": {
+      "mean": 0.975609756097561,
+      "low": 0.8740493782190663,
+      "high": 0.9956814684788643,
+      "count": 41
+    },
+    "precision": {
+      "mean": 0.9523809523809523,
+      "low": 0.8421014748159645,
+      "high": 0.9868424752096869,
+      "count": 42
+    },
+    "kappa": 0.957,
+    "caught": {
+      "added_detail": [
+        5,
+        5
+      ],
+      "name": [
+        5,
+        5
+      ],
+      "negation": [
+        5,
+        5
+      ],
+      "number": [
+        5,
+        5
+      ],
+      "other_question": [
+        5,
+        5
+      ],
+      "real": [
+        1,
+        1
+      ],
+      "scope": [
+        5,
+        5
+      ],
+      "uncited": [
+        5,
+        5
+      ],
+      "wrong_passage": [
+        4,
+        5
+      ]
+    },
+    "matrix": {
+      "supported": {
+        "supported": 213,
+        "unsupported": 2,
+        "no_claim": 0
+      },
+      "unsupported": {
+        "supported": 1,
+        "unsupported": 40,
+        "no_claim": 0
+      },
+      "no_claim": {
+        "supported": 1,
+        "unsupported": 0,
+        "no_claim": 2
+      }
+    },
+    "answers": 169,
+    "same_answer": {
+      "mean": 0.9822485207100592,
+      "low": 0.9491159411891988,
+      "high": 0.9939448328577564,
+      "count": 169
+    },
+    "answer_recall": {
+      "mean": 0.975609756097561,
+      "low": 0.8740493782190663,
+      "high": 0.9956814684788643,
+      "count": 41
+    },
+    "answer_precision": {
+      "mean": 0.9523809523809523,
+      "low": 0.8421014748159645,
+      "high": 0.9868424752096869,
+      "count": 42
+    },
+    "same_verdict": {
+      "mean": 0.9845559845559846,
+      "low": 0.9609701228883477,
+      "high": 0.9939781606446402,
+      "count": 259
+    }
+  },
+  "input_tokens": 517444,
+  "output_tokens": 20153,
+  "median_seconds": 1.8437
+}

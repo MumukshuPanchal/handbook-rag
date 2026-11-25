@@ -487,18 +487,67 @@ By kind of limit, the faults that each version caught:
 | Median time of a verdict | 1.7 s | 2.0 s |
 | Attempts for the 120 answers | 172 | 236 |
 
-Version 2 reads two and a half times the input tokens of version 1, because the rubric is in its instructions. It sends the same number of requests, and on the free tier the allowance is counted in requests. Both runs met an overloaded model, and every failed attempt is counted. The runs do not record why an attempt failed, so the difference in attempts is not read as a cost of version 2.
+Version 2 reads more than twice the input tokens of version 1, because the rubric is in its instructions, here and on the first labelled answers below. It sends the same number of requests, and on the free tier the allowance is counted in requests. Its median verdict was slower here and faster there. Both runs met an overloaded model, and every failed attempt is counted. The runs do not record why an attempt failed, so the difference in attempts is not read as a cost of version 2.
+
+### Version 2 on the first labelled answers
+
+This is the check that version 1 passed before its score was used: the [169 labelled answers](../evals/judge/README.md) of the first set, which are the 129 real answers of the first answer run and 40 copies with one planted fault each. On these answers version 2 must not start faulting good ones.
+
+| On the first labelled answers | Version 1 | Version 2 |
+|---|---|---|
+| Faults caught (recall) | 41 of 41, 1.000 (0.914 to 1.000) | 40 of 41, 0.976 (0.874 to 0.996) |
+| Alarms that were right (precision) | 41 of 42, 0.976 (0.877 to 0.996) | 40 of 42, 0.952 (0.842 to 0.987) |
+| Same decision as the label, unsupported or not | 258 of 259, 0.996 (0.978 to 0.999) | 256 of 259, 0.988 (0.967 to 0.996) |
+| Agreement beyond chance (Cohen's kappa) | 0.986 | 0.957 |
+| Same verdict on the whole answer | 168 of 169, 0.994 (0.967 to 0.999) | 166 of 169, 0.982 (0.949 to 0.994) |
+| Input tokens for each answer, on average | 1,305 | 3,062 |
+| Median time of a verdict | 2.0 s | 1.8 s |
+| Attempts for the 169 answers | 201 | 247 |
+| Run | [`judge/baseline`](../evals/runs/judge/baseline) | [`judge/v2`](../evals/runs/judge/v2) |
+
+- **Version 2 on the first labelled answers.** It caught 40 of the 41 faults: 0.976 (0.874 to 0.996). It raised 2 false alarms on the 218 statements labelled supported or without a claim, where version 1 raised 1 ([`judge/v2`](../evals/runs/judge/v2)).
+- **On these answers version 2 is worse than version 1 by every figure of agreement in the table.** The two decide differently, unsupported or not, on six statements:
+
+| Answer | Statement | Label | Version 1 | Version 2 |
+|---|---|---|---|---|
+| `b09-v1` | 2 | `unclear` | `supported` | `unsupported` |
+| `q027-v1` | 1 | `unsupported` | `unsupported` | `supported` |
+| `q062` | 1 | `supported` | `supported` | `unsupported` |
+| `q092` | 2 | `no_claim` | `unsupported` | `no_claim` |
+| `q104` | 8 | `unclear` | `supported` | `unsupported` |
+| `q131` | 2 | `supported` | `supported` | `unsupported` |
+
+- **It missed one planted fault**, the citation of the wrong passage planted in `q027-v1`. Its reason judges the statement by a passage that the statement does not cite.
+- **Its two false alarms are real answers**, `q062` and `q131`. It faulted each for leaving out a limit that its reason names, "As a people manager" and "within the GitLab production environment", where both readers called the statement supported. The one false alarm of version 1, in `q092`, version 2 calls `no_claim`, as labelled.
+- **Two of the six are labelled `unclear`, and count in no figure.** Statement 8 of `q104` is one of the three real answers that the readers split on, and version 2 faults it for a limit that the title of a passage puts on the rule. Statement 2 of `b09-v1` is the same statement as in the real answer `b09`, with the same question and passages, in a copy that differs in another statement's citation. Version 2 faults it in the copy and passes it in `b09`.
+
+### Version 2 on the answers of the `baseline` run
+
+`make eval-support-v2` judged the 129 answers of the [`baseline` run](../evals/runs/answers/baseline) with version 2. Each of them is a real answer of the first labelled answers, so each verdict was taken from the check above, and no request was sent. The verdicts are in `support-v2.jsonl`, beside those of version 1.
+
+- **Version 2's score of the `baseline` answers.** It calls 125 of the 129 answers supported: 0.969 (0.938 to 0.992). Version 1 calls 127 of them supported ([the verdicts](../evals/runs/answers/baseline/support-v2.jsonl)).
+
+These are the four statements it calls unsupported:
+
+| Answer | Statement | Version 1 | Label in the first set | Limits version 2 named |
+|---|---|---|---|---|
+| `q062` | 1 | `supported` | `supported` | As a people manager |
+| `q064` | 1 | `unsupported` | `unsupported` | none |
+| `q104` | 8 | `supported` | `unclear` | Passage 3 title: Suggested 1:1 Agenda and Daily Standup Format > Hallway |
+| `q131` | 2 | `supported` | `supported` | within the GitLab production environment |
+
+- **One is the statement that version 1 faulted too.** In `q064` it cites no passage, and the labels call it unsupported.
+- **The other three are faulted for a limit left out.** The labels call two of them supported, as both readers did, and the third unclear: `q104` is one of the three real answers the readers split on, and version 2 passes the other two. By the labels, version 2 found no fault in these answers that version 1 missed. By its reasons, three answers leave out a limit. On three statements, that is the labels' word against the judge's.
+- **The other fault of version 1**, statement 2 of `q092`, which the labels call `no_claim`, version 2 does not raise.
 
 ### Which judge gives the scores
 
-- **Version 1 stays the default.** Every published score is read from its files, and so is every score in an answer run's summary.
+- **Version 1 stays the judge of "supported by its sources".** Every published score is read from its files, and so is every score in an answer run's summary. It will score the next measurement of the answers too.
+- **Version 2 is kept as a second instrument for one fault.** It is the judge to run where the question is whether a limit was left out, and its score is reported beside version 1's, never in its place. The first plan was to judge the next measurement of the answers by version 2, when the instructions change with the hardening against planted instructions ([issue 66](https://github.com/MumukshuPanchal/handbook-rag/issues/66)), and to make it the default there. The plan changed when its runs on the first labelled answers and on the `baseline` answers came in, above ([ADR 0023](adr/0023-a-second-version-of-the-support-judge-for-dropped-limits.md)).
 - **Each version keeps its verdicts on an answer run in files of its own** ([what a run writes](#what-a-run-writes)). Version 2 never reads, continues or discards the files of version 1. `eval-support --judge-version 2` prints version 2's score beside the run's other scores and writes none of the run's own files, and with `--restart` it discards version 2's verdicts alone.
-- **The next measurement of the answers is to be judged by version 2.** When the instructions change with the hardening against planted instructions ([issue 66](https://github.com/MumukshuPanchal/handbook-rag/issues/66)), the answers are to be measured again, judged by version 2, and compared with version 2's score of the `baseline` answers. The default changes then, when the README's figures are rebuilt.
 
 ### What is not measured
 
-- **Version 2 on the first labelled answers.** It is not yet checked on the first labelled answers, the 169 that version 1 was checked on, where it must not start faulting good answers. Until it is, no score of version 2 is quoted.
-- **Version 2's score of the `baseline` answers.** It is not yet recorded.
 - **Answers that keep their limits.** No answer was changed, and issue 59 stays open.
 - **Real faults.** The 39 were written by a model to carry the fault. The three real cases stay labelled `unclear` in the first labelled answers.
 - **Another author, and a person.** One model wrote and labelled the set, and three sessions of the same model labelled it again. No person has read it. 39 faults is a small sample, and the answers share passages, three to each, so an interval worked out as if they were independent is too narrow.

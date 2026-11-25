@@ -18,8 +18,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from handbook_rag.config import Settings
 from handbook_rag.evals.compare import compare_runs
 from handbook_rag.evals.dataset import load_golden_set
@@ -371,27 +369,20 @@ def test_the_figures_quoted_about_search_are_the_committed_runs() -> None:
     assert "about seven and a half times slower" in reranking
 
 
+# The row of version 2 of the first judge in the README's table of checks, from its check
+# on the same labelled answers (ADR 0023).
+SECOND_VERSION_ROW = "Supported by its sources, version 2"
 # Each judge in the README's table, and the committed check of it.
 JUDGES = {
     "Supported by its sources": "judge/baseline",
+    SECOND_VERSION_ROW: limit_runs.FIRST_SET_CHECKS[2],
     "Correct by the reference": "judge-correct/baseline",
 }
-# The row that version 2 of the first judge gets in that table, from its check on the same
-# labelled answers. That check is still to come (ADR 0023).
-SECOND_VERSION_ROW = "Supported by its sources, version 2"
-
-
-def judges_in_the_table() -> dict[str, str]:
-    """The judges the table must hold: version 2 too, once its check is in the repository."""
-    if not limit_runs.FIRST_SET_CHECK_V2.is_dir():
-        return dict(JUDGES)
-    first, second = JUDGES.items()
-    return dict([first, (SECOND_VERSION_ROW, limit_runs.FIRST_SET_CHECKS[2]), second])
 
 
 def test_the_judges_checks_are_the_committed_checks() -> None:
     rows = table(readme(), "| Judge | Labelled answers | Faults caught (recall) |")
-    judges = judges_in_the_table()
+    judges = JUDGES
 
     assert [row[0] for row in rows] == list(judges)
     for judge, labelled, recall, precision, check in rows:
@@ -430,7 +421,7 @@ def share(estimate: Estimate) -> int:
 def baseline_line_numbers() -> list[str]:
     """The numbers of the line that gives version 2's score of the `baseline` answers.
 
-    The line, once that run is in the repository, in every document that gives it:
+    The line, in every document that gives it:
     "- **Version 2's score of the `baseline` answers.** It calls {supported} of the
     {answers} answers supported: {mean} ({low} to {high}). Version 1 calls {supported by
     version 1} of them supported." With a link to the verdicts, whose target holds no
@@ -495,8 +486,49 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
     found = limit_runs.FOUND_THE_LIMIT
     assert f"in {in_words(len(found))} of these its reason names the very limit" in section
     assert "for not naming the teams that its question names" in section
-    assert limit_runs.ratio_of_input_tokens() == 2.5
-    assert "It reads two and a half times the input tokens" in section
+    assert all(2 < ratio < 3 for ratio in limit_runs.ratios_of_input_tokens())
+    assert "It reads more than twice the input tokens" in section
+    # Version 2 on the first labelled answers: its miss, and its false alarms on real
+    # answers, faulted for a limit that both readers counted as kept.
+    on_first, on_second = limit_runs.first_set_check(1), limit_runs.first_set_check(2)
+    ((missed_case, missed_number),) = on_second["missed"]
+    assert not on_first["missed"]
+    assert limit_runs.first_set_statement((missed_case, missed_number))["planted"] == (
+        "wrong_passage"
+    )
+    assert "It missed a planted citation of the wrong passage" in section
+    alarms = on_second["false_alarm_statements"]
+    for key in alarms:
+        statement = limit_runs.first_set_statement(key)
+        assert limit_runs.first_set()[key[0]]["kind"] == "real", key
+        assert statement["readers"]["first"] == statement["readers"]["second"] == "supported"
+        assert limit_runs.named_limits(on_second["reasons"][key]) != "none", key
+    assert f"its {len(alarms)} false alarms both fault a real answer for leaving out a limit" in (
+        section
+    )
+    # The statements version 2 faults in the `baseline` answers, by version 1's verdicts
+    # and by their labels in the first labelled answers.
+    faulted = limit_runs.baseline_faulted(2)
+    both = sorted(set(faulted) & set(limit_runs.baseline_faulted(1)))
+    only = [key for key in faulted if key not in both]
+    labels = Counter(limit_runs.first_set_statement(key)["expected"] for key in only)
+    by_v2 = limit_runs.baseline_verdicts(2)
+    (both_key,) = both
+    assert limit_runs.first_set_statement(both_key)["cites"] == []
+    assert limit_runs.first_set_statement(both_key)["expected"] == "unsupported"
+    assert all(limit_runs.named_limits(by_v2[key][1]) != "none" for key in only)
+    assert labels == {"supported": 2, "unclear": 1}
+    # The one labelled unclear is one of the real answers the readers split on.
+    unclear = [
+        key[0] for key in only if limit_runs.first_set_statement(key)["expected"] == "unclear"
+    ]
+    assert set(unclear) <= set(real)
+    assert f"**The {in_words(len(faulted))} statements it faults in those answers.**" in section
+    assert f"For each of the other {in_words(len(only))}, its reason names a limit" in section
+    assert (
+        f"call {in_words(labels['supported'])} of the {in_words(len(only))} supported, as both "
+        f"readers did, and the third unclear"
+    ) in section
     expected = {
         "An answer can give a rule from its passage": [
             LIMITS_ISSUE,
@@ -516,6 +548,8 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
         "- **It costs no more requests**": [
             f"{second['median_seconds']:.1f}",
             f"{first['median_seconds']:.1f}",
+            f"{on_second['median_seconds']:.1f}",
+            f"{on_first['median_seconds']:.1f}",
         ],
         "- **What these figures can carry.**": [
             str(len(second["faults"])),
@@ -525,10 +559,23 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
             SECOND,
             FIRST,
         ],
-        "- **Version 1 stays the default.**": [FIRST, SECOND, SECOND, HARDENING_ISSUE],
+        "- **On the first labelled answers version 2 is worse than version 1**": [
+            SECOND,
+            FIRST,
+            str(on_second["false_alarms"]),
+            f"{on_second['kappa']:.3f}",
+            f"{on_first['kappa']:.3f}",
+        ],
+        limit_runs.BASELINE_LINE: baseline_line_numbers(),
+        "- **The four statements it faults in those answers.**": [FIRST, SECOND, FIRST],
+        "- **Version 1 stays the judge of every published score, also at the next": [
+            FIRST,
+            HARDENING_ISSUE,
+            SECOND,
+            FIRST,
+            LIMITS_RECORD,
+        ],
     }
-    if limit_runs.BASELINE_VERDICTS[2].is_file():
-        expected[limit_runs.BASELINE_LINE] = baseline_line_numbers()
     assert_numbers(section, expected)
 
     # And once more under Limitations, with what is not fixed.
@@ -549,20 +596,41 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
         SECOND,
         str(len(second["caught"])),
         str(len(second["supported"])),
+        str(on_second["false_alarms"]),
+        FIRST,
+        str(on_first["false_alarms"]),
+        FIRST,
+        SECOND,
+        SECOND,
         three(supported["mean"]),
         three((hits(supported) - len(real)) / supported["count"]),
         LIMITS_RECORD,
         LIMITS_ISSUE,
     ]
+    # Every false alarm of either version on the first labelled answers is on a real answer.
+    for check in (on_first, on_second):
+        assert all(
+            limit_runs.first_set()[case]["kind"] == "real"
+            for case, _ in check["false_alarm_statements"]
+        )
+        assert len(check["false_alarm_statements"]) == check["false_alarms"]
+    assert "false alarms on real answers where version 1 raised" in limitation
+    # The decision, as the runs left it: version 1 gives every published score, and version
+    # 2 is kept beside it for one fault.
+    assert "So version 1 stays the judge of every published score" in limitation
+    assert (
+        f"in the saved answers version 2 faults {in_words(len(only))} statements for it, of "
+        f"which the labels call {in_words(labels['supported'])} supported and leave the third "
+        "unclear"
+    ) in limitation
+    assert "its score is reported beside version 1's, never in its place" in section
+    assert "the plan changed when these runs came in" in section
     assert "are measured, and not fixed.**" in limitation
     assert f"with {in_words(len(second['false_alarms']))} false alarm in" in limitation
     assert f"The {in_words(len(real))} real cases stay labelled unclear" in limitation
     assert "The answers are not changed" in limitation
 
 
-@pytest.mark.skipif(
-    not limit_runs.FIRST_SET_CHECK_V2.is_dir(), reason=limit_runs.WAITS_FOR_THE_FIRST_SET_CHECK
-)
 def test_the_readme_gives_version_2s_check_on_the_first_labelled_answers() -> None:
     # The row itself is held with the other judges' rows, by the test of the table.
     rows = table(readme(), "| Judge | Labelled answers | Faults caught (recall) |")
@@ -571,10 +639,6 @@ def test_the_readme_gives_version_2s_check_on_the_first_labelled_answers() -> No
     assert limit_runs.NOT_YET_CHECKED not in readme()
 
 
-@pytest.mark.skipif(
-    not limit_runs.BASELINE_VERDICTS[2].is_file(),
-    reason=limit_runs.WAITS_FOR_THE_BASELINE_VERDICTS,
-)
 def test_the_readme_gives_version_2s_score_of_the_baseline_answers() -> None:
     line = line_starting(limits_section(), limit_runs.BASELINE_LINE)
 

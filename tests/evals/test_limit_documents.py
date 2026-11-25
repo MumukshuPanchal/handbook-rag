@@ -1,23 +1,24 @@
 """What the documents say of the limit answers and of version 2 of the judge is what the runs hold.
 
 The labelled answers have a test of their own (``test_committed_limit_cases.py``). These
-tests hold the documents written from the two checks of the judge on them: the decision
-record (ADR 0023), the section of the evaluation guide, what the two cards of labelled
-answers say of the checks, the lines of the changelog and the roadmap, the architecture
-page, and the make target that judges an answer run with version 2. The README's section
-is held by ``tests/test_readme_results.py``, with the README's other results.
+tests hold the documents written from the runs of the two versions of the support judge:
+their checks on the limit answers and on the first labelled answers, and their verdicts on
+the answers of the `baseline` run. The documents are the decision record (ADR 0023), the
+section of the evaluation guide, what the two cards of labelled answers say of the checks,
+the lines of the changelog and the roadmap, the architecture page, and the make target
+that judges the `baseline` answers with version 2. The README's section is held by
+``tests/test_readme_results.py``, with the README's other results.
 
 Every figure is worked out once, in ``tests/evals/limit_runs.py``, from the saved runs and
-the file of the answers. A table is built again from the runs. Every line of prose that
-holds a number is compared with the numbers it must hold, in their order, and a line with
-a number that no test works out fails (``test_readme_results.assert_numbers``). The prose
-names the two versions "version 1" and "version 2", so those are numbers of a line too.
-A few counts that the documents write as words are held as well.
+the files of labelled answers. A table is built again from the runs. Every line of prose
+that holds a number is compared with the numbers it must hold, in their order, and a line
+with a number that no test works out fails (``test_readme_results.assert_numbers``). The
+prose names the two versions "version 1" and "version 2", so those are numbers of a line
+too. A few counts that the documents write as words are held as well.
 
-Two runs are not in the repository yet: version 2's check on the first labelled answers,
-and the `baseline` answers judged by version 2. The tests that need one skip while it is
-absent. Once it is there, they fail until the documents give its figures and no longer
-say that it is missing.
+What these tests cannot hold is whether a statement truly leaves out a limit. Where version
+2 and the labels differ, the documents give both and say that it is the labels' word
+against the judge's.
 """
 
 import json
@@ -69,6 +70,8 @@ DATE = ["2026", "11", "25"]
 # The allowance of the free key, and what measuring the answers again takes, as the README
 # gives them.
 A_DAY, MEASURING_AGAIN = "500", "460"
+# The figures of agreement that a table of a check gives, beside kappa.
+AGREEMENT_FIGURES = ("recall", "precision", "same_decision", "same_answer")
 # What version 2 is told to look for, in the order of its instructions, and the kind of
 # limit of the labelled answers that each is.
 LOOKED_FOR = {
@@ -114,7 +117,7 @@ def share(estimate: dict[str, Any]) -> str:
 def first_set_line_numbers() -> list[str]:
     """The numbers of the line that gives version 2's check on the first labelled answers.
 
-    The line, once that check is in the repository, in the guide and the decision record:
+    The line, in the guide and the decision record:
     "- **Version 2 on the first labelled answers.** It caught {caught} of the {faults}
     faults: {mean} ({low} to {high}). It raised {false alarms} false alarms on the
     {statements} statements labelled supported or without a claim, where version 1 raised
@@ -137,29 +140,37 @@ def first_set_line_numbers() -> list[str]:
     ]
 
 
-def pending_lines() -> dict[str, list[str]]:
-    """The two lines about the runs still to come: what they hold now, and once they come.
-
-    Until a run is in the repository, its line says that it is missing, in the words of
-    :data:`limit_runs.NOT_YET_CHECKED` or :data:`limit_runs.NOT_YET_RECORDED`. Once it is,
-    the line gives its figures.
-    """
-    lines = {
-        # "It is not yet checked on the first labelled answers, the 169 that version 1 was
-        # checked on, ... no score of version 2 is quoted."
-        limit_runs.FIRST_SET_LINE: [
-            SECOND,
-            str(limit_runs.first_set_check(1)["labelled"]),
-            FIRST,
-            SECOND,
-        ],
-        limit_runs.BASELINE_LINE: [SECOND],
+def lines_of_the_two_runs() -> dict[str, list[str]]:
+    """The lines that give version 2's check on the first labelled answers, and its score
+    of the `baseline` answers, with their numbers."""
+    return {
+        limit_runs.FIRST_SET_LINE: first_set_line_numbers(),
+        limit_runs.BASELINE_LINE: baseline_line_numbers(),
     }
-    if limit_runs.FIRST_SET_CHECK_V2.is_dir():
-        lines[limit_runs.FIRST_SET_LINE] = first_set_line_numbers()
-    if limit_runs.BASELINE_VERDICTS[2].is_file():
-        lines[limit_runs.BASELINE_LINE] = baseline_line_numbers()
-    return lines
+
+
+def on_the_first_set() -> tuple[dict[str, Any], dict[str, Any]]:
+    return limit_runs.first_set_check(1), limit_runs.first_set_check(2)
+
+
+def disputed() -> list[tuple[str, int]]:
+    """The statements of the `baseline` answers that version 2 faults and version 1 does
+    not, as the documents list them: those both readers called supported, then the one they
+    split on."""
+    return sorted(
+        baseline_counts()["only"],
+        key=lambda key: (limit_runs.first_set_statement(key)["expected"] == "unclear", key),
+    )
+
+
+def baseline_counts() -> dict[str, Any]:
+    """Version 2's four faulted statements of the `baseline` answers, sorted as the
+    documents sort them: the one version 1 faulted too, and the others by their label."""
+    faulted = limit_runs.baseline_faulted(2)
+    both = [key for key in faulted if key in limit_runs.baseline_faulted(1)]
+    only = [key for key in faulted if key not in both]
+    labels = Counter(limit_runs.first_set_statement(key)["expected"] for key in only)
+    return {"faulted": faulted, "both": both, "only": only, "labels": labels}
 
 
 def the_set() -> dict[str, Any]:
@@ -284,9 +295,18 @@ def versions_rows(runs: str) -> list[list[str]]:
     ]
 
 
+def worse_on_every_figure_of_agreement(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    """Whether the second check is below the first on every figure of agreement it gives."""
+    return (
+        all(second[name]["mean"] < first[name]["mean"] for name in AGREEMENT_FIGURES)
+        and second["kappa"] < first["kappa"]
+    )
+
+
 def decision_record_numbers() -> dict[str, list[str]]:
     """The numbers of every line of the decision record that holds one, in their order."""
     first, second = limit_runs.check(1), limit_runs.check(2)
+    on_first, on_second = on_the_first_set()
     known = the_set()
     recall = first["recall"]
     return {
@@ -309,18 +329,21 @@ def decision_record_numbers() -> dict[str, list[str]]:
             str(len(first["in_title"])),
         ],
         "- **A second version of the support judge, beside the first**": [SECOND, FIRST, RUBRIC],
-        "- **Version 1 stays the default, unchanged.**": [FIRST],
+        '- **Version 1 stays the judge of "supported by its sources", unchanged.**': [FIRST],
+        "- **Version 2 is kept as a second instrument for one fault.**": [SECOND, FIRST, FIRST],
+        "**How the decision came about.**": [
+            FIRST,
+            SECOND,
+            SECOND,
+            FIRST,
+            str(len({case for case, _ in limit_runs.baseline_verdicts(2)})),
+            FIRST,
+        ],
         "- **Each version keeps its verdicts on an answer run in files of its own.**": [
             FIRST,
             SECOND,
             FIRST,
             FIRST,
-        ],
-        "- **The next measurement of the answers is to be judged by version 2.**": [
-            SECOND,
-            HARDENING,
-            SECOND,
-            SECOND,
         ],
         "- **Version 2 caught every limit that version 1 caught, and": [
             SECOND,
@@ -329,19 +352,46 @@ def decision_record_numbers() -> dict[str, list[str]]:
             str(len(second["in_title"])),
         ],
         "- **Change the instructions of version 1.**": [FIRST],
-        "- **Make version 2 the default now.**": [SECOND],
+        "- **Make version 2 the default, now or at the next measurement": [
+            SECOND,
+            SECOND,
+            FIRST,
+            FIRST,
+        ],
         "- **A second request for each answer, for limits alone.**": [A_DAY],
         "- **Change the answering instructions first.**": [MEASURING_AGAIN, A_DAY],
         "- **A judge of another model family.**": [LAYERS_RECORD, TIERS],
-        **pending_lines(),
-        "- **Answers that keep their limits.**": [LIMITS],
+        **lines_of_the_two_runs(),
+        "- **There it is worse than version 1.**": [
+            FIRST,
+            f"{on_second['kappa']:.3f}",
+            f"{on_first['kappa']:.3f}",
+            str(limit_runs.hits(on_second["same_answer"])),
+            str(on_second["same_answer"]["count"]),
+            str(limit_runs.hits(on_first["same_answer"])),
+        ],
+        "- **The four statements it faults there.**": [FIRST, SECOND, FIRST],
+        "What issue 59 still needs, as plans:": [LIMITS],
+        "- **How often the assistant's own answers leave out a limit.**": [
+            str(len({case for case, _ in limit_runs.baseline_verdicts(2)})),
+            str(known["passages"]),
+            SECOND,
+        ],
+        "- **The change to the answering instructions**": [HARDENING],
+        "- **A person's reading**": [str(number) for _, number in disputed()],
+        "- **A judge that catches dropped limits and faults no statement": [SECOND, FIRST],
         "- **Faults that a model makes by itself.**": [str(len(first["faults"]))],
         "- **Another author, and a person.**": [str(len(first["faults"]))],
         "- **A set that did not guide version 2.**": [SECOND, SECOND, FIRST, FIRST, SECOND],
-        "- **The six misses and the false alarm.**": [SECOND],
+        "- **The misses and the false alarms.**": [SECOND],
         "- Every published score is as it was": [FIRST],
+        "- The next measurement of the answers will be scored by version 1": [
+            FIRST,
+            SECOND,
+            FIRST,
+        ],
         "- `eval-support --judge-version 2` writes": [SECOND, SECOND, SECOND],
-        "- Version 2 reads two and a half times": [SECOND, FIRST],
+        "- Version 2 reads more than twice the input tokens": [SECOND, FIRST],
         "- Issue 59 stays open.": [LIMITS],
     }
 
@@ -369,17 +419,41 @@ def test_what_the_decision_record_says_in_words_is_what_the_runs_hold() -> None:
     assert f"**It missed {in_words(len(second['missed']))}.**" in text
     assert f"In {in_words(len(limit_runs.FOUND_THE_LIMIT))} of them its reason names" in text
     assert f"**Its {in_words(len(second['false_alarms']))} false alarm**" in text
-    assert f"**The {in_words(len(second['missed']))} misses and the false alarm.**" in text
     assert f"{in_words(len(real)).capitalize()} real answers of the first answer run did" in text
     assert f"The {in_words(len(real))} real cases stay labelled `unclear`" in text
-    assert limit_runs.ratio_of_input_tokens() == 2.5
-    assert text.count("two and a half times the input tokens") == 2
+    assert all(2 < ratio < 3 for ratio in limit_runs.ratios_of_input_tokens())
+    assert text.count("more than twice the input tokens") == 2
+    # On the first labelled answers, and on the real answers of the `baseline` run.
+    on_first, on_second = on_the_first_set()
+    counts = baseline_counts()
+    assert worse_on_every_figure_of_agreement(on_first, on_second)
+    assert "It missed a planted citation of the wrong passage" in text
+    assert "both its false alarms fault a real answer for leaving out a limit" in text
+    assert f"**The {in_words(len(counts['faulted']))} statements it faults there.**" in text
+    assert f"Each of the other {in_words(len(counts['only']))} it faults for a limit" in text
+    assert (
+        f"The labels call {in_words(counts['labels']['supported'])} of those supported and the "
+        "third unclear."
+    ) in text
+    assert counts["labels"] == {"supported": 2, "unclear": 1}
+    assert "By the labels, version 2 found no fault in the real answers that version 1 missed" in (
+        text
+    )
     # The allowance and the cost of measuring again, as the README gives them.
     assert f"{A_DAY} a day" in readme
     assert f"about {MEASURING_AGAIN} requests" in readme
     # What was not done is said, and so is what is a plan.
     assert "- Status: Accepted" in text
-    assert "This is a plan, not something done." in text
+    assert "The default does not change." in text
+    assert "its score is reported beside the score of version 1, never in its place" in text
+    assert "A decision is allowed to follow the evidence, and this one did." in text
+    assert "No figure, label or rule of scoring was changed after it was seen." in text
+    assert "That was the plan at the start." in text
+    # The three statements of the plans are the disputed ones, as the files have them.
+    assert "three statements, all disputed" in text
+    assert len(disputed()) == 3
+    for case, number in disputed():
+        assert f"statement {number} of `{case}`" in text
     assert "No person has read the set." in text
     assert "by a session that was not shown the set's answers" in text
     assert "The repository does not record what else that session read" in text
@@ -392,6 +466,12 @@ def test_what_the_decision_record_says_in_words_is_what_the_runs_hold() -> None:
 def guide_numbers() -> dict[str, list[str]]:
     """The numbers of every line of the guide's section that holds one, in their order."""
     first, second = limit_runs.check(1), limit_runs.check(2)
+    on_first, _ = on_the_first_set()
+    real_unclear, copy_unclear = unclear_of_the_six()
+    baseline = {case for case, _ in limit_runs.baseline_verdicts(2)}
+    (other_fault,) = [
+        key for key in limit_runs.baseline_faulted(1) if key not in limit_runs.baseline_faulted(2)
+    ]
     known = the_set()
     faults = len(first["faults"])
     return {
@@ -423,8 +503,27 @@ def guide_numbers() -> dict[str, list[str]]:
             second["false_alarms"][0][0].split("-")[1],
             SECOND,
         ],
-        "Version 2 reads two and a half times": [SECOND, FIRST, SECOND],
-        "- **Version 1 stays the default.**": [FIRST],
+        "Version 2 reads more than twice the input tokens": [SECOND, FIRST, SECOND],
+        "This is the check that version 1 passed": [
+            FIRST,
+            str(on_first["labelled"]),
+            str(sum(case["kind"] == "real" for case in limit_runs.first_set().values())),
+            str(sum(case["kind"] != "real" for case in limit_runs.first_set().values())),
+            SECOND,
+        ],
+        "- **On these answers version 2 is worse than version 1": [SECOND, FIRST],
+        "- **Its two false alarms are real answers**": [FIRST, SECOND],
+        "- **Two of the six are labelled `unclear`": [
+            str(real_unclear[1]),
+            SECOND,
+            str(copy_unclear[1]),
+            SECOND,
+        ],
+        "`make eval-support-v2` judged the": [str(len(baseline)), SECOND, FIRST],
+        "- **One is the statement that version 1 faulted too.**": [FIRST],
+        "- **The other three are faulted for a limit left out.**": [SECOND, SECOND, FIRST],
+        "- **The other fault of version 1**": [FIRST, str(other_fault[1]), SECOND],
+        '- **Version 1 stays the judge of "supported by its sources".**': [FIRST],
         "- **Each version keeps its verdicts on an answer run in files of its own**": [
             SECOND,
             FIRST,
@@ -432,17 +531,31 @@ def guide_numbers() -> dict[str, list[str]]:
             SECOND,
             SECOND,
         ],
-        "- **The next measurement of the answers is to be judged by version 2.**": [
+        "- **Version 2 is kept as a second instrument for one fault.**": [
+            SECOND,
+            FIRST,
             SECOND,
             HARDENING,
-            SECOND,
-            SECOND,
+            RECORD,
         ],
-        **pending_lines(),
+        **lines_of_the_two_runs(),
         "- **Answers that keep their limits.**": [LIMITS],
         "- **Real faults.**": [str(faults)],
         "- **Another author, and a person.**": [str(faults)],
     }
+
+
+def unclear_of_the_six() -> tuple[tuple[str, int], tuple[str, int]]:
+    """Of the statements the two versions decide differently, the two labelled unclear:
+    the one of a real answer, and the one of a copy."""
+    unclear = [
+        key
+        for key in limit_runs.decided_differently()
+        if limit_runs.first_set_statement(key)["expected"] == "unclear"
+    ]
+    (real,) = [key for key in unclear if limit_runs.first_set()[key[0]]["kind"] == "real"]
+    (copy,) = [key for key in unclear if key != real]
+    return real, copy
 
 
 def test_the_tables_of_the_guide_are_the_runs() -> None:
@@ -495,6 +608,166 @@ def test_the_tables_of_the_guide_are_the_runs() -> None:
         [f"Attempts for the {first['answers']} answers", *(str(k["attempts"]) for k in both)],
     ]
     assert first["answers"] == second["answers"]
+
+
+def test_the_guides_tables_of_the_first_labelled_answers_and_of_the_baseline_are_the_runs() -> None:
+    text = guide_section()
+    on_first, on_second = on_the_first_set()
+    both = (on_first, on_second)
+    by_v1, by_v2 = limit_runs.baseline_verdicts(1), limit_runs.baseline_verdicts(2)
+
+    def label(key: tuple[str, int]) -> str:
+        return f"`{limit_runs.first_set_statement(key)['expected']}`"
+
+    assert table(text, "| On the first labelled answers | Version 1 | Version 2 |") == [
+        ["Faults caught (recall)", *(share(k["recall"]) for k in both)],
+        ["Alarms that were right (precision)", *(share(k["precision"]) for k in both)],
+        [
+            "Same decision as the label, unsupported or not",
+            *(share(k["same_decision"]) for k in both),
+        ],
+        ["Agreement beyond chance (Cohen's kappa)", *(f"{k['kappa']:.3f}" for k in both)],
+        ["Same verdict on the whole answer", *(share(k["same_answer"]) for k in both)],
+        [
+            "Input tokens for each answer, on average",
+            *(wrote(round(k["input_per_answer"])) for k in both),
+        ],
+        ["Median time of a verdict", *(f"{k['median_seconds']:.1f} s" for k in both)],
+        [f"Attempts for the {on_first['judged']} answers", *(str(k["attempts"]) for k in both)],
+        ["Run", *(f"[`{k['run']}`](../evals/runs/{k['run']})" for k in both)],
+    ]
+    assert on_first["judged"] == on_second["judged"] == on_first["labelled"]
+    assert table(text, "| Answer | Statement | Label | Version 1 | Version 2 |") == [
+        [
+            f"`{case}`",
+            str(number),
+            label((case, number)),
+            f"`{on_first['verdicts'][(case, number)]}`",
+            f"`{on_second['verdicts'][(case, number)]}`",
+        ]
+        for case, number in limit_runs.decided_differently()
+    ]
+    assert table(text, "| Answer | Statement | Version 1 | Label in the first set |") == [
+        [
+            f"`{case}`",
+            str(number),
+            f"`{by_v1[(case, number)][0]}`",
+            label((case, number)),
+            limit_runs.named_limits(by_v2[(case, number)][1]),
+        ]
+        for case, number in limit_runs.baseline_faulted(2)
+    ]
+
+
+def test_what_the_guide_says_of_the_first_labelled_answers_and_of_the_baseline() -> None:
+    text = guide_section()
+    on_first, on_second = on_the_first_set()
+    differ = limit_runs.decided_differently()
+    real = limit_runs.real_unclear_in_the_first_set()
+    real_unclear, copy_unclear = unclear_of_the_six()
+    counts = baseline_counts()
+    first_set = limit_runs.first_set()
+
+    # Worse by every figure of agreement, and where: the statements the two decide
+    # differently are those of the table.
+    assert worse_on_every_figure_of_agreement(on_first, on_second)
+    assert "version 2 is worse than version 1 by every figure of agreement in the table" in text
+    assert f"unsupported or not, on {in_words(len(differ))} statements" in text
+    # Its one miss: a planted citation of the wrong passage, judged by a passage that the
+    # statement does not cite.
+    (missed,) = on_second["missed"]
+    statement = limit_runs.first_set_statement(missed)
+    named = {int(n) for n in re.findall(r"passage (\d+)", on_second["reasons"][missed])}
+    assert statement["planted"] == "wrong_passage"
+    assert named
+    assert not named & set(statement["cites"])
+    assert f"the citation of the wrong passage planted in `{missed[0]}`" in text
+    # Its false alarms: real answers, each faulted for the limit its reason names, where both
+    # readers called the statement supported.
+    alarms = on_second["false_alarm_statements"]
+    assert f"**Its {in_words(len(alarms))} false alarms are real answers**" in text
+    for key in alarms:
+        readers = limit_runs.first_set_statement(key)["readers"]
+        assert first_set[key[0]]["kind"] == "real", key
+        assert readers["first"] == readers["second"] == "supported", key
+        assert f'"{limit_runs.named_limits(on_second["reasons"][key])}"' in text, key
+    # Version 1's one false alarm, which version 2 calls as it is labelled.
+    (alarm_of_version_1,) = on_first["false_alarm_statements"]
+    labelled = limit_runs.first_set_statement(alarm_of_version_1)["expected"]
+    assert on_second["verdicts"][alarm_of_version_1] == labelled
+    assert (
+        f"The one false alarm of version 1, in `{alarm_of_version_1[0]}`, version 2 calls "
+        f"`{labelled}`, as labelled."
+    ) in text
+    # The two of the six that are labelled unclear: a real answer the readers split on, and a
+    # copy of another, with the same statement, faulted in the copy and passed in the real one.
+    assert f"**Two of the {in_words(len(differ))} are labelled `unclear`" in text
+    assert real_unclear[0] in real
+    assert (
+        f"Statement {real_unclear[1]} of `{real_unclear[0]}` is one of the "
+        f"{in_words(len(real))} real answers that the readers split on"
+    ) in text
+    original = copy_unclear[0].removesuffix("-v1")
+    in_original = limit_runs.first_set_statement((original, copy_unclear[1]))
+    in_copy = limit_runs.first_set_statement(copy_unclear)
+    assert first_set[original]["question"] == first_set[copy_unclear[0]]["question"]
+    assert first_set[original]["passages"] == first_set[copy_unclear[0]]["passages"]
+    assert (in_original["text"], in_original["cites"]) == (in_copy["text"], in_copy["cites"])
+    assert [s["cites"] for s in first_set[original]["statements"]] != [
+        s["cites"] for s in first_set[copy_unclear[0]]["statements"]
+    ]
+    assert on_second["verdicts"][copy_unclear] == "unsupported"
+    assert on_second["verdicts"][(original, copy_unclear[1])] == "supported"
+    assert (
+        f"Statement {copy_unclear[1]} of `{copy_unclear[0]}` is the same statement as in the "
+        f"real answer `{original}`"
+    ) in text
+    # The `baseline` answers: real answers of the first set, every verdict from the check.
+    state = json.loads((limit_runs.BASELINE / SUPPORT_V2.state_file).read_text(encoding="utf-8"))
+    read_by_the_check = {
+        row["fingerprint"]
+        for row in limit_runs.rows(limit_runs.FIRST_SET_CHECK_V2 / "judgements.jsonl")
+    }
+    verdict_rows = limit_runs.rows(limit_runs.BASELINE_VERDICTS[2])
+    assert state["attempts"] == 0
+    assert all(row["fingerprint"] in read_by_the_check for row in verdict_rows)
+    assert all(first_set[row["case"]]["kind"] == "real" for row in verdict_rows)
+    assert "so each verdict was taken from the check above, and no request was sent" in text
+    # The four statements, and what the labels say of each.
+    assert f"These are the {in_words(len(counts['faulted']))} statements it calls unsupported" in (
+        text
+    )
+    (both_key,) = counts["both"]
+    assert limit_runs.first_set_statement(both_key)["cites"] == []
+    assert limit_runs.first_set_statement(both_key)["expected"] == "unsupported"
+    assert f"In `{both_key[0]}` it cites no passage, and the labels call it unsupported." in text
+    assert f"**The other {in_words(len(counts['only']))} are faulted for a limit left out.**" in (
+        text
+    )
+    assert counts["labels"] == {"supported": 2, "unclear": 1}
+    assert f"The labels call {in_words(counts['labels']['supported'])} of them supported" in text
+    (unclear_key,) = [
+        key
+        for key in counts["only"]
+        if limit_runs.first_set_statement(key)["expected"] == "unclear"
+    ]
+    assert unclear_key[0] in real
+    # Version 2 passes the statements of the other real answers the readers split on.
+    split_on = [
+        (case, s["number"])
+        for case in real
+        for s in first_set[case]["statements"]
+        if s["expected"] == "unclear" and case != unclear_key[0]
+    ]
+    assert [on_second["verdicts"][key] for key in split_on] == ["supported"] * len(split_on)
+    assert f"version 2 passes the other {in_words(len(split_on))}" in text
+    # The fault of version 1 that version 2 does not raise.
+    (other,) = [key for key in limit_runs.baseline_faulted(1) if key not in counts["faulted"]]
+    assert limit_runs.first_set_statement(other)["expected"] == "no_claim"
+    assert (
+        f"statement {other[1]} of `{other[0]}`, which the labels call `no_claim`, version 2 does "
+        "not raise"
+    ) in text
 
 
 def test_every_number_of_the_guides_section_is_worked_out_from_the_runs() -> None:
@@ -639,13 +912,23 @@ def test_the_card_of_the_first_set_says_what_the_judges_did_on_the_further_file(
 
 def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
     first, second = limit_runs.check(1), limit_runs.check(2)
+    on_first, on_second = on_the_first_set()
+    by_second, by_first = limit_runs.baseline_score(2), limit_runs.baseline_score(1)
+    # "it calls 125 of the 129 answers of the `baseline` run supported, where version 1
+    # calls 127"
+    scores = [
+        str(round(by_second.mean * by_second.count)),
+        str(by_second.count),
+        FIRST,
+        str(round(by_first.mean * by_first.count)),
+    ]
     known = the_set()
     changelog = read(CHANGELOG).split("## [Unreleased]")[1].split("\n## [")[0]
     roadmap = read(ROADMAP)
     labelled = line_starting(changelog, "- Labelled answers for one fault, `evals/judge/limits/`")
     judge = line_starting(changelog, "- Version 2 of the support judge, `--judge-version 2`")
     files = line_starting(changelog, "- Each version of a judge keeps its verdicts")
-    item = line_starting(roadmap, "3. **Reduce the answers that leave out a limit")
+    item = line_starting(roadmap, "3. **Measure how often the answers leave out a limit")
     started = line_starting(roadmap, "- **Answers that leave out a limit**")
 
     assert numbers(labelled) == [
@@ -665,6 +948,13 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
         FIRST,
         str(len(first["caught"])),
         str(len(second["supported"])),
+        str(on_second["caught"]),
+        str(on_second["faults"]),
+        str(on_second["false_alarms"]),
+        FIRST,
+        str(on_first["caught"]),
+        str(on_first["false_alarms"]),
+        *scores,
         FIRST,
         LIMITS,
         RECORD,
@@ -679,7 +969,18 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
     # The roadmap: what is left of issue 59, and what was started and is not finished.
     # The item of the hardening against planted instructions is item 2.
     assert line_starting(roadmap, "2. **Harden the assistant against planted instructions")
-    assert numbers(item) == ["3", LIMITS, "2", SECOND, SECOND, FIRST, FIRST, RUBRIC]
+    assert numbers(item) == [
+        "3",
+        LIMITS,
+        str(len({case for case, _ in limit_runs.baseline_verdicts(2)})),
+        str(known["passages"]),
+        SECOND,
+        "2",
+        SECOND,
+        FIRST,
+        FIRST,
+        RUBRIC,
+    ]
     assert numbers(started) == [
         LIMITS,
         str(known["answers"]),
@@ -692,6 +993,12 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
         str(len(second["supported"])),
         RECORD,
         FIRST,
+        str(on_second["false_alarms"]),
+        FIRST,
+        str(on_first["false_alarms"]),
+        *scores,
+        FIRST,
+        SECOND,
         "2",
     ]
     assert f"with {in_words(len(second['false_alarms']))} false alarm in" in started
@@ -739,12 +1046,9 @@ def test_every_link_of_the_new_documents_leads_somewhere() -> None:
                 assert anchor in anchors(read(linked)), (path.name, target)
 
 
-# The two runs still to come
+# Version 2's check on the first labelled answers, and its verdicts on the `baseline` answers
 
 
-@pytest.mark.skipif(
-    not limit_runs.FIRST_SET_CHECK_V2.is_dir(), reason=limit_runs.WAITS_FOR_THE_FIRST_SET_CHECK
-)
 def test_version_2s_check_on_the_first_labelled_answers_is_whole_and_of_the_judge_built() -> None:
     second, first = limit_runs.first_set_check(2), limit_runs.first_set_check(1)
     saved = json.loads((limit_runs.FIRST_SET_CHECK_V2 / "run.json").read_text(encoding="utf-8"))
@@ -756,9 +1060,6 @@ def test_version_2s_check_on_the_first_labelled_answers_is_whole_and_of_the_judg
     assert second["not_faults"] == first["not_faults"]
 
 
-@pytest.mark.skipif(
-    not limit_runs.FIRST_SET_CHECK_V2.is_dir(), reason=limit_runs.WAITS_FOR_THE_FIRST_SET_CHECK
-)
 def test_the_documents_give_version_2s_check_on_the_first_labelled_answers() -> None:
     for text in (guide_section(), read(ADR)):
         line = line_starting(text, limit_runs.FIRST_SET_LINE)
@@ -767,10 +1068,6 @@ def test_the_documents_give_version_2s_check_on_the_first_labelled_answers() -> 
         assert limit_runs.NOT_YET_CHECKED not in read(path), path.name
 
 
-@pytest.mark.skipif(
-    not limit_runs.BASELINE_VERDICTS[2].is_file(),
-    reason=limit_runs.WAITS_FOR_THE_BASELINE_VERDICTS,
-)
 def test_the_baseline_verdicts_of_version_2_are_of_the_judge_built_and_quote_its_check() -> None:
     state = json.loads((limit_runs.BASELINE / SUPPORT_V2.state_file).read_text(encoding="utf-8"))
     check = json.loads((limit_runs.BASELINE / SUPPORT_V2.check_file).read_text(encoding="utf-8"))
@@ -782,10 +1079,6 @@ def test_the_baseline_verdicts_of_version_2_are_of_the_judge_built_and_quote_its
     assert judged == {row["case"] for row in limit_runs.rows(limit_runs.BASELINE_VERDICTS[1])}
 
 
-@pytest.mark.skipif(
-    not limit_runs.BASELINE_VERDICTS[2].is_file(),
-    reason=limit_runs.WAITS_FOR_THE_BASELINE_VERDICTS,
-)
 def test_the_documents_give_version_2s_score_of_the_baseline_answers() -> None:
     for text in (guide_section(), read(ADR)):
         line = line_starting(text, limit_runs.BASELINE_LINE)

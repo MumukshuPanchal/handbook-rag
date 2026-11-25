@@ -20,7 +20,7 @@ from handbook_rag.cache.answers import AnswerCache
 from handbook_rag.cache.store import QdrantAnswerStore, answer_collections
 from handbook_rag.cache.verify import Verification, VerifierError
 from handbook_rag.config import Settings, get_settings
-from handbook_rag.evals import adversarial, cache_pairs, cache_replies, follow_ups
+from handbook_rag.evals import adversarial, cache_pairs, cache_replies, follow_ups, limit_questions
 from handbook_rag.evals import answers as answer_runs
 from handbook_rag.evals.agreement import measure_agreement
 from handbook_rag.evals.cache_report import report_lines
@@ -81,6 +81,7 @@ from handbook_rag.evals.two_passage import (
 from handbook_rag.generate.base import GenerationError, plain_words
 from handbook_rag.generate.models import Answer, CacheHit
 from handbook_rag.generate.pricing import cost_usd
+from handbook_rag.generate.prompt import CURRENT_INSTRUCTIONS, known_instructions
 from handbook_rag.index.compare import (
     DEFAULT_VECTOR_TOLERANCE,
     CollectionComparison,
@@ -119,6 +120,39 @@ CriterionName = Literal["support", "correct"]
 # judge keeps its verdicts on an answer run in files of its own, and a run's scores are
 # read from those of the judges above.
 JUDGES: tuple[Criterion[Any], ...] = (SUPPORT, SUPPORT_V2, CORRECT)
+
+
+_INSTRUCTIONS_OPTION = typer.Option(
+    "--instructions",
+    min=1,
+    help=(
+        "Which version of the answering instructions the answer model is sent. The default "
+        "is the one the assistant uses; an earlier one is kept so that the old and the new "
+        "assistant can be compared on the same day. Only an evaluation can choose it. A run "
+        "is not continued with other instructions than it was made with."
+    ),
+)
+
+
+def _instructions(version: int) -> int:
+    """A version of the answering instructions, or a usage error if there is none."""
+    try:
+        return known_instructions(version)
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint="--instructions") from error
+
+
+def _instructions_note(version: int) -> str:
+    """Which answering instructions a run sends, as an evaluation prints it."""
+    if version == CURRENT_INSTRUCTIONS:
+        return f"version {version}, the assistant's own"
+    return f"version {version}, kept for comparison: the assistant uses {CURRENT_INSTRUCTIONS}"
+
+
+def _instructions_suffix(version: int) -> str:
+    """What a run's description adds for its instructions: nothing for version 1, so that
+    a run made with them is described as every run before there was a second version."""
+    return "" if version == 1 else f" under the answering instructions of version {version}"
 
 
 def _criterion(name: str, version: int = 1) -> Criterion[Any]:
@@ -1052,6 +1086,7 @@ def eval_answers(
         bool,
         typer.Option("--restart", help="Discard the replies this run has saved, and start again."),
     ] = False,
+    instructions: Annotated[int, _INSTRUCTIONS_OPTION] = CURRENT_INSTRUCTIONS,
 ) -> None:
     """Answer every golden question and score what code can check. One real request each.
 
@@ -1059,7 +1094,11 @@ def eval_answers(
     it left off when the command is run again.
     """
     settings = get_settings()
-    config = {**wiring.describe_retrieval(settings), **wiring.describe_generation(settings)}
+    instructions = _instructions(instructions)
+    config = {
+        **wiring.describe_retrieval(settings),
+        **wiring.describe_generation(settings, instructions),
+    }
     run_dir = output / variant
     try:
         if not restart:
@@ -1070,7 +1109,7 @@ def eval_answers(
         retriever = wiring.make_retriever(settings)
         # One attempt per request: no request is then sent a second time unseen, and the
         # run tries a failed question again itself.
-        generator = wiring.make_generator(settings, attempts=1)
+        generator = wiring.make_generator(settings, attempts=1, instructions=instructions)
         # Last, so that a run that cannot start leaves nothing behind.
         saved = answer_runs.open_run(run_dir, config, restart=restart)
         if restart:
@@ -1096,6 +1135,7 @@ def eval_answers(
     pace = settings.eval_requests_per_minute
     typer.echo(f"Answer evaluation: {variant}")
     typer.echo(f"  model        {settings.answer_model}")
+    typer.echo(f"  instructions {_instructions_note(instructions)}")
     typer.echo(
         f"  questions    {len(questions)} in the golden set, {reusable} already answered, "
         f"{to_ask} to ask now"
@@ -1170,7 +1210,10 @@ def eval_answers(
         output,
         variant,
         description
-        or f"Answers by {settings.answer_model} from {settings.answer_context_chunks} passages.",
+        or (
+            f"Answers by {settings.answer_model} from {settings.answer_context_chunks} passages"
+            f"{_instructions_suffix(instructions)}."
+        ),
         config,
         attempts=attempts,
         judges=judges,
@@ -1992,6 +2035,7 @@ def eval_adversarial(
             help="Discard the replies this run has saved and their readings, and start again.",
         ),
     ] = False,
+    instructions: Annotated[int, _INSTRUCTIONS_OPTION] = CURRENT_INSTRUCTIONS,
 ) -> None:
     """Test the assistant with planted instructions and questions outside the handbook.
 
@@ -2001,11 +2045,15 @@ def eval_adversarial(
     directory, and the next run of the command takes them in.
     """
     settings = get_settings()
+    instructions = _instructions(instructions)
     if pace is not None and pace <= 0:
         typer.echo("error: --pace needs a positive number of requests a minute.", err=True)
         raise typer.Exit(code=1)
     per_minute = pace or settings.eval_requests_per_minute
-    config = {**wiring.describe_retrieval(settings), **wiring.describe_generation(settings)}
+    config = {
+        **wiring.describe_retrieval(settings),
+        **wiring.describe_generation(settings, instructions),
+    }
     run_dir = output / variant
     stage = adversarial.adversarial_stage(run_dir)
     try:
@@ -2013,7 +2061,9 @@ def eval_adversarial(
             # Before the corpus, the index and the models are loaded, which takes a while.
             stage.check(config)
         loaded = adversarial.load_cases(cases)
-        canaries = adversarial.instruction_canaries(wiring.answer_instructions(settings))
+        canaries = adversarial.instruction_canaries(
+            wiring.answer_instructions(settings, instructions)
+        )
         for case in loaded:
             adversarial.refuse_canaries_in_what_is_sent(case, canaries)
         saved = {} if restart else adversarial.load_replies(run_dir)
@@ -2037,7 +2087,11 @@ def eval_adversarial(
         if any(not case.injected for case in to_ask):
             retriever = _retriever_for_out_of_scope_cases(settings)
         # One attempt per request, as for eval-answers: the run tries a failed case again.
-        generator = wiring.make_generator(settings, attempts=1) if to_ask else None
+        generator = (
+            wiring.make_generator(settings, attempts=1, instructions=instructions)
+            if to_ask
+            else None
+        )
         # Last, so that a run that cannot start leaves nothing behind.
         stage.open(config, restart=restart)
         saved = adversarial.load_replies(run_dir)
@@ -2055,6 +2109,7 @@ def eval_adversarial(
     injected = sum(case.injected for case in loaded)
     typer.echo(f"Adversarial evaluation: {variant}")
     typer.echo(f"  model        {settings.answer_model}")
+    typer.echo(f"  instructions {_instructions_note(instructions)}")
     typer.echo(
         f"  cases        {len(loaded)} in the file ({injected} with a planted instruction, "
         f"{len(loaded) - injected} outside the handbook), {len(answered)} already answered, "
@@ -2128,7 +2183,8 @@ def eval_adversarial(
         report,
         run_dir,
         description=(
-            f"Adversarial cases answered by {settings.answer_model}: {injected} with a "
+            f"Adversarial cases answered by {settings.answer_model}"
+            f"{_instructions_suffix(instructions)}: {injected} with a "
             f"planted instruction, {len(loaded) - injected} outside the handbook."
         ),
         config=config,
@@ -2197,6 +2253,257 @@ def _echo_adversarial_figures(report: adversarial.AdversarialReport) -> None:
     injected = report.figures.get(adversarial.INJECTED)
     if injected is not None:
         _echo_estimate("Kept its answer", injected.kept)
+
+
+@app.command(name="eval-limits")
+@measures
+def eval_limits(
+    cases: Annotated[
+        Path,
+        typer.Option(
+            help=(
+                "The labelled answers of the limit set. The question of each passage's "
+                "'dropped' answer is asked, with that passage."
+            )
+        ),
+    ] = limit_questions.CASES_PATH,
+    variant: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Name of this run. The default, 'current', is a scratch run that git "
+                "ignores. Name a run to keep it: 'baseline', then 'v1', 'v2' and so on."
+            )
+        ),
+    ] = "current",
+    output: Annotated[
+        Path, typer.Option(help="Directory that holds one sub-directory per variant.")
+    ] = Path("evals/runs/limits"),
+    instructions: Annotated[int, _INSTRUCTIONS_OPTION] = CURRENT_INSTRUCTIONS,
+    max_requests: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help=(
+                "Stop after this many requests, to the answer model and the judge together. "
+                "Run the command again to continue the run."
+            ),
+        ),
+    ] = None,
+    pace: Annotated[
+        float | None,
+        typer.Option(help="Send at most this many requests a minute. Default: settings."),
+    ] = None,
+    restart: Annotated[
+        bool,
+        typer.Option(
+            "--restart",
+            help="Discard the replies this run has saved and their verdicts, and start again.",
+        ),
+    ] = False,
+) -> None:
+    """Ask the 40 questions of the limit set, each with its passage, and judge the answers.
+
+    One real request for each question, then one for each answer to version 2 of the
+    support judge: 80 when none fails and none declines. There is no search. Replies and
+    verdicts are saved as they arrive, so a run that stops continues where it left off.
+    """
+    settings = get_settings()
+    instructions = _instructions(instructions)
+    if pace is not None and pace <= 0:
+        typer.echo("error: --pace needs a positive number of requests a minute.", err=True)
+        raise typer.Exit(code=1)
+    per_minute = pace or settings.eval_requests_per_minute
+    judge_criterion = limit_questions.JUDGE
+    # The passages depend on the snapshot and the chunking, and nothing else of the search.
+    config = {
+        "handbook_commit": settings.handbook_commit,
+        "chunking": settings.chunking.version,
+        **wiring.describe_generation(settings, instructions),
+    }
+    judge_config = wiring.describe_judge(settings, judge_criterion)
+    run_dir = output / variant
+    stage = limit_questions.answers_stage(run_dir)
+    judge_stage = judge_criterion.run_stage(run_dir)
+    try:
+        if not restart:
+            # Before the corpus is read, which takes a while.
+            stage.check(config)
+            judge_stage.check(judge_config)
+        questions = limit_questions.load_limit_questions(cases)
+        saved = {} if restart else limit_questions.load_replies(run_dir)
+        answered = limit_questions.replies_to_current_questions(questions, saved)
+        pending = [q for q in limit_questions.in_run_order(questions) if q.case_id not in answered]
+        to_ask = pending if max_requests is None else pending[:max_requests]
+        # The judge reads the passages too, so the corpus is read whatever is left to do.
+        chunks = {chunk.chunk_id: chunk for chunk in build_corpus(settings).chunks}
+        passages = limit_questions.passages_of(questions, chunks)
+        generator = (
+            wiring.make_generator(settings, attempts=1, instructions=instructions)
+            if to_ask
+            else None
+        )
+        saved_verdicts_now = (
+            {} if restart else load_judgements(judge_stage.rows_path, judge_criterion.verdicts)
+        )
+        unjudged = [
+            case
+            for case in limit_questions.judged_cases(questions, saved, chunks)
+            if case.fingerprint not in saved_verdicts_now
+        ]
+        # A judge is built when it may be asked: for new answers, or saved ones not judged.
+        judge = (
+            wiring.make_judge(settings, judge_criterion, attempts=1) if to_ask or unjudged else None
+        )
+        # Last, so that a run that cannot start leaves nothing behind.
+        stage.open(config, restart=restart)
+        judge_stage.open(judge_config, restart=restart)
+        saved = limit_questions.load_replies(run_dir)
+    except (DatasetError, CorpusError, GenerationError, SavedRunError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    typer.echo(f"Limit questions: {variant}")
+    typer.echo(f"  model        {settings.answer_model}")
+    typer.echo(f"  instructions {_instructions_note(instructions)}")
+    typer.echo(
+        f"  questions    {len(questions)} in the file, {len(answered)} already answered, "
+        f"{len(to_ask)} to ask now"
+    )
+    if to_ask:
+        typer.echo(
+            f"  pace         at most {per_minute:g} requests a minute, so at least "
+            f"{max(1, round(len(to_ask) / per_minute))} min"
+        )
+
+    asked = 0
+
+    def keep(question: limit_questions.LimitQuestion, record: answer_runs.AnswerRecord) -> None:
+        nonlocal asked
+        asked += 1
+        stage.append(dataclasses.asdict(record))
+        typer.echo(
+            f"  {asked:>4}/{len(to_ask)}  {question.case_id}  "
+            f"{'answered' if record.answered else 'declined'}  {record.seconds:.1f} s"
+        )
+
+    def show_failure(failure: FailedQuestion) -> None:
+        typer.echo(f"        failed  {failure.question_id}  {failure.message}")
+
+    pacer = Pacer(per_minute)
+
+    def before_each_request() -> None:
+        pacer.wait()
+        # Counted before the request is sent, so an interrupted run has still counted it.
+        stage.add_attempts()
+
+    run = answer_runs.AnswerRun(records=saved)
+    if generator is not None:
+        try:
+            run = limit_questions.run_questions(
+                questions,
+                limit_questions.asker(generator, passages),
+                saved=saved,
+                wait=before_each_request,
+                on_record=keep,
+                on_failure=show_failure,
+                rest=lambda: pacer.rest(REST_AFTER_FAILURE_SECONDS),
+                max_attempts=max_requests,
+            )
+        except answer_runs.ReplyError as error:
+            typer.echo(f"error: {error}", err=True)
+            raise typer.Exit(code=1) from error
+    planned = max_requests is not None and run.attempts >= max_requests
+    answers_stopped_badly = bool(run.failures) or (run.stopped is not None and not planned)
+
+    judge_cases = limit_questions.judged_cases(questions, run.records, chunks)
+    left = None if max_requests is None else max_requests - run.attempts
+    judge_run: JudgeRun | None = None
+    if answers_stopped_badly:
+        typer.echo("  judge        not asked: the answers did not all come")
+    elif judge is not None and (left is None or left > 0):
+        typer.echo(f"  judge        {settings.judge_model}{_version_note(judge_criterion.version)}")
+        judge_run = _judge_carefully(
+            judge_criterion,
+            judge_stage,
+            judge_cases,
+            judge,
+            pace=per_minute,
+            max_requests=left,
+            reuse={},
+        )
+    verdicts = saved_verdicts(judge_criterion, run_dir, judge_cases)
+
+    report = limit_questions.summarise_limits(
+        questions, run.records, judge_cases, verdicts, run.failures
+    )
+    if not report.results:
+        for failure in report.failures[:5]:
+            typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
+        typer.echo(f"error: no question was answered. {run.stopped or ''}".rstrip(), err=True)
+        raise typer.Exit(code=1)
+    limit_questions.write_limit_run(
+        report,
+        run_dir,
+        description=(
+            f"The {len(questions)} questions of the limit set, each with its passage, answered "
+            f"by {settings.answer_model}{_instructions_suffix(instructions)}, and judged by "
+            f"{settings.judge_model}{_version_note(judge_criterion.version)}."
+        ),
+        config=config,
+        attempts=stage.attempts(),
+        judge_config=judge_config,
+        judge_attempts=judge_stage.attempts(),
+    )
+
+    typer.echo(
+        f"  replies      {len(report.results)} saved, {len(report.failures)} failed, "
+        f"{report.not_asked} not asked yet"
+    )
+    judge_attempts = 0 if judge_run is None else judge_run.attempts
+    typer.echo(
+        f"  requests     at most {run.attempts + judge_attempts} now; for this run in all, "
+        f"{stage.attempts()} to the answer model and {judge_stage.attempts()} to the judge"
+    )
+    _echo_limit_figures(report)
+    if report.waiting_for_the_judge:
+        typer.echo(
+            f"  final        not yet: {len(report.waiting_for_the_judge)} answers wait for "
+            "the judge"
+        )
+    elif report.final:
+        typer.echo("  final        yes: every question has a reply, and every answer a verdict")
+    typer.echo(f"  written to   {run_dir}")
+    if run.stopped is not None:
+        typer.echo(f"  stopped: {run.stopped}")
+    if judge_run is not None and judge_run.stopped is not None:
+        typer.echo(f"  judge stopped: {judge_run.stopped}")
+    for failure in [*report.failures, *([] if judge_run is None else judge_run.failures)][:5]:
+        typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
+    if not report.final:
+        typer.echo("  Run the same command again to continue this run.")
+    judge_stopped_badly = judge_run is not None and _judge_stopped_badly(judge_run, left)
+    if answers_stopped_badly or judge_stopped_badly:
+        raise typer.Exit(code=1)
+
+
+def _echo_limit_figures(report: limit_questions.LimitReport) -> None:
+    """The counts in all and by kind of limit, and the share faulted once it is final."""
+    typer.echo(
+        f"  {'':<14}{'questions':>10}{'replies':>8}{'answered':>9}{'judged':>7}{'faulted':>8}"
+        "   share faulted (95% interval)"
+    )
+    for name, figures in report.figures.items():
+        label = name if name == "all" else f"  {name}"
+        if figures.share_faulted is not None:
+            share = figures.share_faulted
+            faulted = f"{share.mean:.3f} ({share.low:.3f} to {share.high:.3f})"
+        else:
+            faulted = "not final" if figures.replied else "no reply yet"
+        typer.echo(
+            f"  {label:<14}{figures.questions:>10}{figures.replied:>8}{figures.answered:>9}"
+            f"{figures.judged:>7}{figures.faulted:>8}   {faulted}"
+        )
 
 
 @app.command(name="eval-follow-ups")

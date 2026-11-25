@@ -11,8 +11,14 @@ from anthropic.types import Message
 
 from handbook_rag.generate.base import GenerationError, decline_without_context, is_answered
 from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
-from handbook_rag.generate.prompt import SYSTEM_PROMPT, build_user_content
+from handbook_rag.generate.prompt import (
+    CURRENT_INSTRUCTIONS,
+    SYSTEM_PROMPTS,
+    build_user_content,
+    known_instructions,
+)
 from handbook_rag.ingest.models import Chunk
+from handbook_rag.measuring import refuse_old_instructions
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
@@ -40,15 +46,24 @@ class ClaudeGenerator:
         model: str,
         max_tokens: int,
         effort: Effort,
+        instructions: int = CURRENT_INSTRUCTIONS,
     ) -> None:
+        # Another version than the current one is for an evaluation only (measuring.py).
+        refuse_old_instructions(known_instructions(instructions), CURRENT_INSTRUCTIONS)
         self._client = client
         self._model = model
         self._max_tokens = max_tokens
         self._effort = effort
+        self._instructions = instructions
 
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def instructions(self) -> int:
+        """The version of the answering instructions this generator sends."""
+        return self._instructions
 
     def generate(
         self,
@@ -67,7 +82,7 @@ class ClaudeGenerator:
             with self._client.messages.stream(
                 model=self._model,
                 max_tokens=self._max_tokens,
-                system=SYSTEM_PROMPT,
+                system=SYSTEM_PROMPTS[self._instructions],
                 messages=[{"role": "user", "content": build_user_content(question, chunks)}],
                 output_config={"effort": self._effort},
             ) as stream:

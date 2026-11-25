@@ -23,8 +23,13 @@ from handbook_rag.evals.adversarial import (
     AdversarialCase,
     find_canaries,
     instruction_canaries,
+    key_fact_stated,
     load_cases,
+    load_readings,
+    load_replies,
     planted_passages,
+    reply_fingerprint,
+    summarise_adversarial,
 )
 from handbook_rag.evals.dataset import load_golden_set
 from handbook_rag.evals.support import passage_hash
@@ -34,6 +39,7 @@ from handbook_rag.ingest.build import build_corpus
 ROOT = Path(__file__).parents[2]
 CASES = ROOT / "evals" / "adversarial" / "cases.jsonl"
 BASELINE = ROOT / "evals" / "runs" / "answers" / "baseline"
+ADVERSARIAL_BASELINE = ROOT / "evals" / "runs" / "adversarial" / "baseline"
 SNAPSHOT = ROOT / "data" / "handbook"
 CANARIES = instruction_canaries(MARKER_SYSTEM_PROMPT)
 
@@ -166,6 +172,58 @@ def test_a_forged_boundary_closes_every_tag_the_passages_are_wrapped_in() -> Non
         )
         assert [tag.lower() for tag in closed] == ["content", "search_result", "search_results"]
         assert re.search(r"system", case.planted or "", re.IGNORECASE), case.case_id
+
+
+def test_every_injected_case_has_the_key_fact_of_its_golden_question() -> None:
+    # The loader refuses two key facts for one golden question; this asks for one at all.
+    facts = {case.source: case.key_fact for case in injected()}
+
+    assert len(facts) == 4
+    assert all(fact is not None for fact in facts.values())
+
+
+def test_each_key_fact_is_in_the_reference_answer_and_in_the_reply_judged_correct() -> None:
+    golden = {
+        question.id: question
+        for question in load_golden_set(ROOT / "evals" / "golden" / "questions.jsonl")
+    }
+    answers = baseline("answers.jsonl")
+    for case in injected():
+        assert case.source is not None
+        reply = "".join(s["text"] for s in answers[case.source]["statements"])
+        assert key_fact_stated(case, golden[case.source].reference_answer), case.case_id
+        # The first answer run's reply, which the second judge called correct.
+        assert key_fact_stated(case, reply), case.case_id
+
+
+def test_the_saved_adversarial_baseline_is_decided_by_the_rule_of_today() -> None:
+    """Its results are what the code makes of its replies and readings now, with the key
+    facts, so a figure read from it is a figure of the rule the documents describe."""
+    cases = load_cases(CASES)
+    report = summarise_adversarial(
+        cases,
+        load_replies(ADVERSARIAL_BASELINE),
+        CANARIES,
+        load_readings(ADVERSARIAL_BASELINE / "readings.jsonl"),
+    )
+    rows = map(json.loads, (ADVERSARIAL_BASELINE / "results.jsonl").read_text().splitlines())
+    saved = {row["case"]: row for row in rows}
+
+    assert report.final
+    assert len(saved) == len(report.results) == len(cases)
+    for result in report.results:
+        row = saved[result.case.case_id]
+        stated = key_fact_stated(result.case, result.record.text)
+        assert [row["by_code"], row["reason"], row["outcome"]] == [
+            result.by_code,
+            result.reason,
+            result.outcome,
+        ], result.case.case_id
+        assert row["reply_fingerprint"] == reply_fingerprint(result.record)
+        expected = None if result.case.key_fact is None else stated is not None
+        assert row["states_key_fact"] == expected, result.case.case_id
+    summary = json.loads((ADVERSARIAL_BASELINE / "summary.json").read_text())
+    assert set(summary["key_facts"]) == {case.source for case in injected()}
 
 
 @pytest.mark.slow

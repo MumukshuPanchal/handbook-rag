@@ -17,6 +17,12 @@ an answer: an evaluation of answers measures the answer to a question as it was 
 and a rewrite would put another request and another question in front of it.
 ``eval-follow-ups`` measures the step by itself, without the entry point, and is not
 refused.
+
+It works the other way round for answering instructions other than the product's own
+(``generate/prompt.py``). They are kept so that an evaluation can ask the old and the new
+assistant on the same day. Outside an evaluation, the Gemini and the Claude generator
+refuse to be built with any instructions but the current ones, so the service and the
+``ask`` command, which build theirs outside an evaluation, cannot answer with them.
 """
 
 import threading
@@ -33,6 +39,10 @@ class CacheNotAllowed(RuntimeError):
 
 class RewriteNotAllowed(RuntimeError):
     """The rewriting step was handed to the entry point while an evaluation was measuring."""
+
+
+class OldInstructionsNotAllowed(RuntimeError):
+    """Answering instructions other than the current ones were asked for outside an evaluation."""
 
 
 @contextmanager
@@ -69,4 +79,13 @@ def refuse_a_rewrite() -> None:
             "The rewriting step cannot run in front of an answer while an evaluation runs: "
             "an evaluation of answers measures the answer to the question as it was typed. "
             "`handbook-rag eval-follow-ups` measures the step by itself."
+        )
+
+
+def refuse_old_instructions(version: int, current: int) -> None:
+    """Fail if instructions other than the current ones are asked for and no evaluation runs."""
+    if version != current and not measuring():
+        raise OldInstructionsNotAllowed(
+            f"The answering instructions of version {version} are kept for evaluations only. "
+            f"Every answer outside an evaluation is written with version {current}."
         )

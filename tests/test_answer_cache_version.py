@@ -54,9 +54,15 @@ PINNED = {
     "pipeline.py": "415a1f1bce966f56",
     # How a model's reply is read into statements and citations.
     "generate/base.py": "0408beccbd6450f1",
-    "generate/claude.py": "f370a5e4dd209266",
-    "generate/gemini.py": "e62ce63965091596",
-    "generate/markers.py": "915fe465e97fc690",
+    # The answering instructions got versions (issue 66): a generator is given one, the
+    # current one unless an evaluation names another, and refuses any other outside an
+    # evaluation. With none named it sends the very text and layout it sent before, and
+    # reads the reply as before. No stored answer becomes wrong, and none may be served
+    # where it could not before: the version stays as it is. When the current version
+    # changes, its text is part of the cache's name (wiring.describe_answer_cache).
+    "generate/claude.py": "6cdf82ad13255fad",
+    "generate/gemini.py": "5d71dbf7fbccdb38",
+    "generate/markers.py": "1869080ca1d7c1d4",
     "generate/models.py": "2a9bfbd98d0828a1",
     # How passages are found: the question's vectors, the search, and what orders them.
     "index/embedder.py": "42df4fad32f4e53d",
@@ -87,9 +93,11 @@ PINNED_FUNCTIONS = {
         "make_sparse_encoder": "d5a50d71900c780a",
         "make_reranker": "218b8bc4eb480919",
         "make_retriever": "60c64124baf7cf64",
-        "make_generator": "e6b04c84df123dd4",
-        "_model_generator": "c9dfe91f30cf9a08",
-        "_make_claude_generator": "89a6b7e2538f22ac",
+        # Pass on the version of the instructions (issue 66), as for generate/ above:
+        # the service and the ask command name none and get the current one.
+        "make_generator": "98556be4096d518b",
+        "_model_generator": "ced800452a4d24ac",
+        "_make_claude_generator": "353fa128aa1dea61",
     },
 }
 

@@ -32,7 +32,7 @@ from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
 from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT, build_numbered_prompt
 from handbook_rag.generate.models import Answer, Segment
-from handbook_rag.generate.prompt import SYSTEM_PROMPT
+from handbook_rag.generate.prompt import CURRENT_INSTRUCTIONS, SYSTEM_PROMPT
 from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.store import QdrantVectorStore
 from handbook_rag.wiring import (
@@ -336,7 +336,9 @@ def test_reworded_instructions_are_recorded_as_a_different_system(
 ) -> None:
     before = describe_generation(Settings())["instructions"]
 
-    monkeypatch.setattr(wiring, "MARKER_SYSTEM_PROMPT", MARKER_SYSTEM_PROMPT + " Be kind.")
+    monkeypatch.setattr(
+        wiring, "MARKER_SYSTEM_PROMPTS", {CURRENT_INSTRUCTIONS: MARKER_SYSTEM_PROMPT + " Be kind."}
+    )
 
     assert describe_generation(Settings())["instructions"] != before
 
@@ -604,10 +606,16 @@ def test_other_instructions_another_layout_of_the_request_or_a_new_version_give_
         return (now[0] != before[0], now[1] != before[1])
 
     with monkeypatch.context() as patch:
-        patch.setattr(wiring, "MARKER_SYSTEM_PROMPT", MARKER_SYSTEM_PROMPT + "\n- Be brief.")
+        patch.setattr(
+            wiring,
+            "MARKER_SYSTEM_PROMPTS",
+            {CURRENT_INSTRUCTIONS: MARKER_SYSTEM_PROMPT + "\n- Be brief."},
+        )
         assert renamed() == (True, False), "the instructions a Gemini model is given"
     with monkeypatch.context() as patch:
-        patch.setattr(wiring, "SYSTEM_PROMPT", SYSTEM_PROMPT + "\n- Be brief.")
+        patch.setattr(
+            wiring, "SYSTEM_PROMPTS", {CURRENT_INSTRUCTIONS: SYSTEM_PROMPT + "\n- Be brief."}
+        )
         assert renamed() == (False, True), "the instructions a Claude model is given"
     with monkeypatch.context() as patch:
         patch.setattr(wiring, "build_numbered_prompt", lambda question, chunks: "laid out anew")

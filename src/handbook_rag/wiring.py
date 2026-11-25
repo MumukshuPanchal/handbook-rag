@@ -25,8 +25,13 @@ from handbook_rag.evals.judging import Criterion, Judge, JudgedCase
 from handbook_rag.generate.base import GenerationError, Generator
 from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
-from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT, build_numbered_prompt
-from handbook_rag.generate.prompt import SYSTEM_PROMPT, build_user_content
+from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPTS, build_numbered_prompt
+from handbook_rag.generate.prompt import (
+    CURRENT_INSTRUCTIONS,
+    SYSTEM_PROMPTS,
+    build_user_content,
+    known_instructions,
+)
 from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.embedder import Embedder, SentenceTransformerEmbedder
 from handbook_rag.index.sparse import Bm25Encoder, SparseEncoder
@@ -399,7 +404,9 @@ def make_retriever(
     return retriever
 
 
-def make_generator(settings: Settings, *, attempts: int | None = None) -> Generator:
+def make_generator(
+    settings: Settings, *, attempts: int | None = None, instructions: int = CURRENT_INSTRUCTIONS
+) -> Generator:
     """Build the answer generator for the configured model.
 
     The model's name decides the provider: ``gemini-...`` is served by the Gemini API and
@@ -425,15 +432,25 @@ def make_generator(settings: Settings, *, attempts: int | None = None) -> Genera
     answer model may find its credential in the SDK's own places, so a missing one is not
     seen here: its first request fails as a ``configuration`` error instead. Building
     sends no request, so a key that is present but wrong is found only by a request.
+
+    ``instructions`` is the version of the answering instructions. Any but the current
+    one is for an evaluation, which passes ``attempts=1``, and is refused otherwise. The
+    generator itself refuses it too while no evaluation is running (``measuring.py``).
     """
     if attempts is not None and attempts < 1:
         raise ValueError("A request has to be sent at least once.")
+    if known_instructions(instructions) != CURRENT_INSTRUCTIONS and attempts != 1:
+        raise ValueError(
+            f"The answering instructions of version {instructions} are for an evaluation, "
+            "which sends each request once."
+        )
     if attempts == 1:
         return _model_generator(
             settings,
             settings.answer_model,
             timeout_seconds=EVALUATION_TIMEOUT_SECONDS,
             for_evaluation=True,
+            instructions=instructions,
         )
     answer_model = _model_generator(
         settings, settings.answer_model, timeout_seconds=settings.answer_timeout_seconds
@@ -516,38 +533,56 @@ def make_follow_ups(settings: Settings) -> "FollowUps | None":
     )
 
 
-def describe_generation(settings: Settings) -> dict[str, object]:
+def describe_generation(
+    settings: Settings, instructions: int = CURRENT_INSTRUCTIONS
+) -> dict[str, object]:
     """The settings that decide what an answer looks like, for recording with a run.
 
     The instructions are recorded as a short hash. A reworded instruction is a different
     system, and two runs are comparable only if they name the same one.
+
+    A later version of the instructions also records its number, so that a saved run says
+    in plain words which version answered. Version 1 records none: every run saved before
+    there was a second version holds exactly the settings below, and could not be
+    continued or read again if version 1 described itself in other words. The hash is
+    what tells one version from another, the number is there for the reader, as for the
+    versions of a judge (:func:`describe_judge`).
     """
     gemini = settings.answer_model.startswith("gemini-")
-    instructions = answer_instructions(settings)
+    text = answer_instructions(settings, instructions)
     described: dict[str, object] = {
         "answer_model": settings.answer_model,
         "answer_max_tokens": settings.answer_max_tokens,
         "answer_context_chunks": settings.answer_context_chunks,
         "citations": "numbered markers" if gemini else "from the provider's API",
-        "instructions": hashlib.sha256(instructions.encode("utf-8")).hexdigest()[:16],
+        "instructions": hashlib.sha256(text.encode("utf-8")).hexdigest()[:16],
     }
+    if instructions != 1:
+        described["instructions_version"] = instructions
     if not gemini:
         described["answer_effort"] = settings.answer_effort
     return described
 
 
-def answer_instructions(settings: Settings) -> str:
+def answer_instructions(settings: Settings, instructions: int = CURRENT_INSTRUCTIONS) -> str:
     """The instructions the configured answer model is sent with every question.
 
     A Gemini model cites by numbered markers, so its instructions say how to write them.
+    ``instructions`` is their version: the current one unless an evaluation chooses
+    another (``generate/prompt.py``).
     """
     if settings.answer_model.startswith("gemini-"):
-        return MARKER_SYSTEM_PROMPT
-    return SYSTEM_PROMPT
+        return MARKER_SYSTEM_PROMPTS[known_instructions(instructions)]
+    return SYSTEM_PROMPTS[known_instructions(instructions)]
 
 
 def _model_generator(
-    settings: Settings, model: str, *, timeout_seconds: float, for_evaluation: bool = False
+    settings: Settings,
+    model: str,
+    *,
+    timeout_seconds: float,
+    for_evaluation: bool = False,
+    instructions: int = CURRENT_INSTRUCTIONS,
 ) -> Generator:
     """The generator of one model, named as the settings name a model.
 
@@ -560,9 +595,14 @@ def _model_generator(
             _gemini_client(settings, 1, timeout_seconds=timeout_seconds),
             model=model,
             max_tokens=settings.answer_max_tokens,
+            instructions=instructions,
         )
     return _make_claude_generator(
-        settings, model, timeout_seconds=timeout_seconds, for_evaluation=for_evaluation
+        settings,
+        model,
+        timeout_seconds=timeout_seconds,
+        for_evaluation=for_evaluation,
+        instructions=instructions,
     )
 
 
@@ -656,7 +696,12 @@ def describe_judge[C: JudgedCase](settings: Settings, criterion: Criterion[C]) -
 
 
 def _make_claude_generator(
-    settings: Settings, model: str, *, timeout_seconds: float, for_evaluation: bool
+    settings: Settings,
+    model: str,
+    *,
+    timeout_seconds: float,
+    for_evaluation: bool,
+    instructions: int = CURRENT_INSTRUCTIONS,
 ) -> ClaudeGenerator:
     key = settings.anthropic_api_key
     # The SDK counts the tries after the first one, so none means one request.
@@ -675,4 +720,5 @@ def _make_claude_generator(
         model=model,
         max_tokens=settings.answer_max_tokens,
         effort=settings.answer_effort,
+        instructions=instructions,
     )

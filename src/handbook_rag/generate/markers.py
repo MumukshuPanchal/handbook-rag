@@ -11,7 +11,9 @@ passage the model was really given (ADR 0013).
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Final
 
 from handbook_rag.generate.models import Citation, Segment
 from handbook_rag.generate.prompt import SYSTEM_PROMPT
@@ -25,6 +27,10 @@ result that supports it in square brackets, like [2] or [1][3]. Use only the num
 search results you were given, and do not add a list of sources at the end.
 """
 )
+
+MARKER_SYSTEM_PROMPTS: Final[Mapping[int, str]] = MappingProxyType({1: MARKER_SYSTEM_PROMPT})
+"""The instructions of each version for a model that cites by numbered markers. A test
+holds that every version of ``prompt.SYSTEM_PROMPTS`` has its markers here, and no other."""
 
 # Everything the parser has to recognise has a largest size. That is what keeps its work
 # per piece of text small, however long the text is or however oddly a model behaves: no

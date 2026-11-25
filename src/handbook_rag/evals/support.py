@@ -46,35 +46,49 @@ def support_cases(
     cases: list[SupportCase] = []
     for question in questions:
         record = records.get(question.id)
-        if record is None or not record.answered:
+        if record is None:
             continue
-        passages = []
-        for passage in record.passages:
-            if passage.number not in record.cited:
-                continue
-            chunk = chunks.get(passage.chunk_id)
-            if chunk is None:
-                raise DatasetError(
-                    f"The reply to {question.id} cites passage {passage.chunk_id}, which is "
-                    "not in the corpus. The run was made with another snapshot or chunking."
-                )
-            passages.append(JudgedPassage(passage.number, chunk.context_header, chunk.text))
-        spoken = [s for s in record.statements if any(c.isalnum() for c in s.text)]
-        if not spoken:
-            # Nothing in the reply says anything, so there is nothing to judge.
-            continue
-        cases.append(
-            SupportCase(
-                case_id=question.id,
-                question=question.question,
-                passages=tuple(passages),
-                statements=tuple(
-                    JudgedStatement(number, statement.text.strip(), statement.cites)
-                    for number, statement in enumerate(spoken, start=1)
-                ),
-            )
-        )
+        case = support_case(question.id, question.question, record, chunks)
+        if case is not None:
+            cases.append(case)
     return cases
+
+
+def support_case(
+    case_id: str, question: str, record: AnswerRecord, chunks: Mapping[str, Chunk]
+) -> SupportCase | None:
+    """One saved reply as the judge reads it, or ``None`` if there is nothing to judge.
+
+    A reply that declined has nothing to judge, and nor has one in which no statement
+    says anything. Apart from the golden set, the 40 questions of the limit set are
+    judged this way too (``evals/limit_questions.py``).
+    """
+    if not record.answered:
+        return None
+    passages = []
+    for passage in record.passages:
+        if passage.number not in record.cited:
+            continue
+        chunk = chunks.get(passage.chunk_id)
+        if chunk is None:
+            raise DatasetError(
+                f"The reply to {case_id} cites passage {passage.chunk_id}, which is "
+                "not in the corpus. The run was made with another snapshot or chunking."
+            )
+        passages.append(JudgedPassage(passage.number, chunk.context_header, chunk.text))
+    spoken = [s for s in record.statements if any(c.isalnum() for c in s.text)]
+    if not spoken:
+        # Nothing in the reply says anything, so there is nothing to judge.
+        return None
+    return SupportCase(
+        case_id=case_id,
+        question=question,
+        passages=tuple(passages),
+        statements=tuple(
+            JudgedStatement(number, statement.text.strip(), statement.cites)
+            for number, statement in enumerate(spoken, start=1)
+        ),
+    )
 
 
 def load_labelled_cases(path: Path, chunks: Mapping[str, Chunk]) -> list[LabelledCase[SupportCase]]:

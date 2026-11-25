@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve mcp eval-retrieval eval-answers eval-judge eval-judge-correct eval-judge-references eval-judge-limits eval-judge-limits-v2 eval-judge-v2 eval-support eval-support-v2 eval-correct eval-adversarial eval-follow-ups eval-follow-ups-held-out eval-cache eval-compare eval-table eval-gate golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve mcp eval-retrieval eval-answers eval-judge eval-judge-correct eval-judge-references eval-judge-limits eval-judge-limits-v2 eval-judge-v2 eval-support eval-support-v2 eval-correct eval-adversarial eval-limits eval-follow-ups eval-follow-ups-held-out eval-cache eval-compare eval-table eval-gate golden-check golden-review
 
 help: ## List the available commands
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -97,6 +97,9 @@ eval-correct: ## Judge the saved answers of the scratch run: does each one agree
 
 eval-adversarial: ## Plant instructions in passages and ask questions outside the handbook (one real request each)
 	uv run handbook-rag eval-adversarial
+
+eval-limits: ## Ask the 40 questions of the limit set with their passages, and judge the answers with version 2 of the support judge (80 real requests)
+	uv run handbook-rag eval-limits
 
 eval-follow-ups: ## Rewrite follow-up questions so that they stand alone, and measure it (82 real requests)
 	uv run handbook-rag eval-follow-ups

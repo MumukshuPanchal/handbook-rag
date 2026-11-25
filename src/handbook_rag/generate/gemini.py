@@ -16,9 +16,15 @@ from google import genai
 from google.genai import errors, types
 
 from handbook_rag.generate.base import GenerationError, decline_without_context, is_answered
-from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPT, MarkerParser, build_numbered_prompt
+from handbook_rag.generate.markers import (
+    MARKER_SYSTEM_PROMPTS,
+    MarkerParser,
+    build_numbered_prompt,
+)
 from handbook_rag.generate.models import Answer, TokenUsage
+from handbook_rag.generate.prompt import CURRENT_INSTRUCTIONS, known_instructions
 from handbook_rag.ingest.models import Chunk
+from handbook_rag.measuring import refuse_old_instructions
 
 # The SDK passes failures of the connection on unchanged, from whichever HTTP library it
 # runs on. The first group means the API went silent for longer than the client's time
@@ -64,14 +70,29 @@ class GeminiGenerator:
     provider = "gcp.gemini"
     operation = "generate_content"
 
-    def __init__(self, client: genai.Client, *, model: str, max_tokens: int) -> None:
+    def __init__(
+        self,
+        client: genai.Client,
+        *,
+        model: str,
+        max_tokens: int,
+        instructions: int = CURRENT_INSTRUCTIONS,
+    ) -> None:
+        # Another version than the current one is for an evaluation only (measuring.py).
+        refuse_old_instructions(known_instructions(instructions), CURRENT_INSTRUCTIONS)
         self._client = client
         self._model = model
         self._max_tokens = max_tokens
+        self._instructions = instructions
 
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def instructions(self) -> int:
+        """The version of the answering instructions this generator sends."""
+        return self._instructions
 
     def generate(
         self,
@@ -97,7 +118,7 @@ class GeminiGenerator:
         # reported as a reply that could not be read.
         prompt = build_numbered_prompt(question, chunks)
         config = types.GenerateContentConfig(
-            system_instruction=MARKER_SYSTEM_PROMPT,
+            system_instruction=MARKER_SYSTEM_PROMPTS[self._instructions],
             max_output_tokens=self._max_tokens,
             # No follow-up requests. Left on, the SDK sends the request again by itself
             # when a reply stops at the API's size limit or the stream drops, which would

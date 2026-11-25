@@ -981,6 +981,7 @@ An answer run under `evals/runs/answers/` has the same files, with two differenc
 | `support.jsonl`, `support.json` | The judge's verdict on every statement of every answer, with its reasons, and the judge that made them |
 | `support_check.json` | The agreement with labelled answers that was measured for that judge |
 | `correct.jsonl`, `correct.json`, `correct_check.json` | The same three for the second judge: its verdict on every answer that has a reference answer |
+| `support-v2.jsonl`, `support-v2.json`, `support_check-v2.json` | The same three for version 2 of the first judge (`eval-support --judge-version 2`), beside those of version 1 and never in their place. No score in `summary.json` or `results.jsonl` is read from them |
 
 There is no `retrieved.jsonl`: `answers.jsonl` already lists the passages.
 

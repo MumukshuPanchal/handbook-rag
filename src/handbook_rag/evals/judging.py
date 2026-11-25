@@ -117,12 +117,34 @@ class Criterion[C: JudgedCase]:
     """Beside a run's verdicts: how far the judge that made them agreed with the labels."""
     version: int = 1
     """Which version of this criterion's judge it is. A later version is told other words,
-    so it is another judge: it keeps its verdicts apart from those of the first, and its
-    agreement with the labels has to be measured for itself. It decides the same thing
-    and saves into the same files, so that a run holds the verdicts of one version."""
+    so it is another judge: its agreement with the labels has to be measured for itself.
+    It decides the same thing, and keeps its verdicts on an answer run in files named by
+    its version, beside those of version 1. Version 1 keeps the names its saved verdicts
+    have always had, and every score a run's summary gives is read from its files."""
+
+    def __post_init__(self) -> None:
+        # Two versions given one file would read, continue or discard each other's
+        # verdicts. So a later version must name every file it writes by its number.
+        if self.version != 1:
+            mark = f"-v{self.version}."
+            unnamed = [
+                name
+                for name in (self.rows_file, self.state_file, self.check_file)
+                if mark not in name
+            ]
+            if unnamed:
+                raise ValueError(
+                    f"Version {self.version} of the judge for '{self.name}' keeps its verdicts "
+                    f"in files named by its version, such as {self.name}{mark}jsonl, not in "
+                    f"{', '.join(unnamed)}."
+                )
 
     def run_stage(self, run_dir: Path) -> Stage:
-        """The files in which an answer run keeps this judge's verdicts on its replies."""
+        """The files in which an answer run keeps this judge's verdicts on its replies.
+
+        Each version of a judge has files of its own, so a restart discards the verdicts of
+        this version alone.
+        """
         return Stage(
             run_dir,
             self.rows_file,

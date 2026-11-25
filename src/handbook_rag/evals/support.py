@@ -229,14 +229,17 @@ SUPPORT_V2: Criterion[SupportCase] = dataclasses.replace(
     instructions=SUPPORT_INSTRUCTIONS_V2,
     request_fingerprint=request_fingerprint_v2,
     judge=GeminiSupportJudgeV2,
+    rows_file="support-v2.jsonl",
+    state_file="support-v2.json",
+    check_file="support_check-v2.json",
 )
 """The same criterion with version 2 of its judge (:mod:`handbook_rag.evals.judge_v2`).
 
-Only the judge differs: what it is told, the shape of its reply, and so the settings that
-are recorded with its verdicts. It rules on the same answers, gives the same verdicts and
-saves into the same files. The settings keep the two apart: a run that holds the verdicts
-of one version is not continued by the other.
+The judge differs: what it is told, the shape of its reply, and so the settings that are
+recorded with its verdicts. It rules on the same answers and gives the same verdicts. Its
+verdicts on an answer run are kept in files of its own, beside those of version 1, so
+that judging a run with it never reads, continues or discards what version 1 saved there.
 
 Version 1 stays the judge a command means when it names no version. Every saved run was
-made by it.
+made by it, and every score a run's summary gives is read from its files.
 """

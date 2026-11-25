@@ -1,9 +1,11 @@
+import contextlib
 import dataclasses
 import hashlib
 import json
+import os
 import re
 import shutil
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +15,10 @@ from typer.testing import CliRunner
 
 from handbook_rag import __version__, wiring
 from handbook_rag.cache.store import Entry, QdrantAnswerStore, answer_collections
-from handbook_rag.cli import app
+from handbook_rag.cli import CRITERIA, JUDGES, app
 from handbook_rag.config import Settings, get_settings
 from handbook_rag.evals import adversarial
+from handbook_rag.evals import answers as answer_runs
 from handbook_rag.evals.adversarial import INSTRUCTION_CANARIES
 from handbook_rag.evals.careful import Pacer
 from handbook_rag.evals.correctness import CORRECT, CorrectnessCase
@@ -2282,15 +2285,18 @@ def test_restarting_the_answer_run_discards_the_verdicts_on_its_replies(
 ) -> None:
     monkeypatch.setattr("handbook_rag.wiring.make_judge", FakeJudge().build)
     assert runner.invoke(app, judged_run["support"]).exit_code == 0
+    # Version 2 of the judge has ruled on the same replies, in files of its own.
+    assert runner.invoke(app, [*judged_run["support"], "--judge-version", "2"]).exit_code == 0
     run_dir = judged_run["run_dir"]
     assert (run_dir / "support.jsonl").exists()
+    assert (run_dir / "support-v2.jsonl").exists()
 
     monkeypatch.setattr("handbook_rag.wiring.make_generator", EvalModel().build)
     restarted = runner.invoke(app, [*judged_run["answers"], "--restart"])
 
     assert restarted.exit_code == 0, restarted.output
-    assert not (run_dir / "support.jsonl").exists()
-    assert not (run_dir / "support.json").exists()
+    # The verdicts of both versions go with the replies they were on.
+    assert sorted(path.name for path in run_dir.iterdir() if path.name.startswith("support")) == []
     assert "Supported by its sources" not in restarted.output
     assert "judges" not in json.loads((run_dir / "summary.json").read_text())
 
@@ -2674,74 +2680,281 @@ def test_a_check_of_another_version_that_no_judge_of_today_made_is_still_not_con
     assert len(judge.asked) == 2
 
 
-def test_eval_support_judges_with_version_2_when_asked_and_the_run_records_it(
+# The files in which version 1 of the support judge keeps its verdicts on an answer run,
+# and those of version 2. The committed verdicts behind every published score are in
+# files of the first names.
+FIRST_VERSION_FILES = ("support.jsonl", "support.json", "support_check.json")
+SECOND_VERSION_FILES = ("support-v2.jsonl", "support-v2.json", "support_check-v2.json")
+# A time that no file written today has: 9 September 2001, in nanoseconds.
+LONG_AGO = 1_000_000_000 * 10**9
+
+
+def files_now(directory: Path) -> dict[str, tuple[bytes, int, int]]:
+    """Every file under a directory, by its path in it: its bytes, its inode and its time."""
+    return {
+        str(path.relative_to(directory)): (
+            path.read_bytes(),
+            path.stat().st_ino,
+            path.stat().st_mtime_ns,
+        )
+        for path in sorted(directory.rglob("*"))
+        if path.is_file()
+    }
+
+
+def files_aged(directory: Path) -> dict[str, tuple[bytes, int, int]]:
+    """Give every file under a directory a time long past, and return :func:`files_now`.
+
+    A file that is then written, even with the bytes it held, takes today's time. One that
+    is replaced, or removed and written anew, has another inode as well. So a file that
+    compares equal afterwards was not touched.
+    """
+    for path in directory.rglob("*"):
+        if path.is_file():
+            os.utime(path, ns=(LONG_AGO, LONG_AGO))
+    return files_now(directory)
+
+
+@contextlib.contextmanager
+def files_opened() -> Iterator[list[str]]:
+    """The name of each file opened through pathlib while the block runs, to read or write."""
+    opened: list[str] = []
+    real_open = Path.open
+
+    def recording_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+        opened.append(self.name)
+        return real_open(self, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Path, "open", recording_open)
+        yield opened
+
+
+def of_the_first_version(opened: Sequence[str]) -> list[str]:
+    """The files of version 1 among those opened, and any written to take their place."""
+    return [name for name in opened if name.startswith(FIRST_VERSION_FILES)]
+
+
+class FaultsUnderVersion2(FakeJudge):
+    """Version 1 faults what says "eighteen", as the stand-in does. Version 2 faults all.
+
+    So the two versions give the one answer of a run different verdicts, and a score read
+    from the files of the other version shows.
+    """
+
+    version = 1
+
+    def build(self, _settings: Settings, criterion: Criterion[Any], **options: Any) -> "FakeJudge":
+        self.version = criterion.version
+        return super().build(_settings, criterion, **options)
+
+    def _faults(self, text: str) -> bool:
+        return self.version == 2 or super()._faults(text)
+
+
+def test_every_judge_keeps_its_verdicts_on_an_answer_run_in_files_of_its_own(
+    tmp_path: Path,
+) -> None:
+    files = {
+        (judge.name, judge.version): (stage.rows_file, stage.state_file, *stage.outputs)
+        for judge in JUDGES
+        for stage in [judge.run_stage(tmp_path)]
+    }
+
+    # Version 1 of each judge keeps the names that its committed verdicts have. Version 2
+    # has names of its own, so that nothing it does is done to a file of version 1.
+    assert files == {
+        ("support", 1): FIRST_VERSION_FILES,
+        ("support", 2): SECOND_VERSION_FILES,
+        ("correct", 1): ("correct.jsonl", "correct.json", "correct_check.json"),
+    }
+    answers = answer_runs.answers_stage(tmp_path)
+    every = [
+        *(name for names in files.values() for name in names),
+        answers.rows_file,
+        answers.state_file,
+        *answers.outputs,
+    ]
+    assert len(every) == len(set(every))
+    # A run's scores are read from the first version of each judge.
+    assert CRITERIA == (SUPPORT, CORRECT)
+
+
+def test_eval_support_with_version_2_reads_and_writes_nothing_of_version_1s(
     monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
 ) -> None:
-    judge = FakeJudge()
+    judge = FaultsUnderVersion2()
     monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    run_dir = judged_run["run_dir"]
+    # Version 1 has judged the run and been checked, and the second criterion's judge has
+    # judged it too.
+    assert runner.invoke(app, [*judged_run["judge"], "--variant", "baseline"]).exit_code == 0
+    first_check = str(judged_run["checks"] / "baseline")
+    assert runner.invoke(app, [*judged_run["support"], "--checked", first_check]).exit_code == 0
+    assert runner.invoke(app, judged_run["correct"]).exit_code == 0
+    assert {path.name for path in run_dir.iterdir()} >= set(FIRST_VERSION_FILES)
+    asked = len(judge.asked)
+    before = files_aged(run_dir.parent)
     second = [*judged_run["support"], "--judge-version", "2"]
 
-    result = runner.invoke(app, second)
+    with files_opened() as opened:
+        result = runner.invoke(app, second)
 
     assert result.exit_code == 0, result.output
-    assert (judge.built_for, judge.built_versions) == (["support"], [2])
-    assert judge.asked == ["q001"]
-    assert "Supported by its sources     1.000" in result.output
-    # The version is named where the judge is introduced and where its verdicts are counted.
-    assert "judge        gemini-3.5-flash-lite (version 2)\n" in result.output
+    assert judge.built_versions[-1] == 2
+    # It takes no verdict of version 1 for its own: it judges the answer itself.
+    assert len(judge.asked) == asked + 1
+    assert "1 to read, 0 already judged, 1 to judge now" in result.output
+    # It prints its own score, beside the scores that the run's files hold ...
+    assert "Supported by its sources     0.000  (95% interval" in result.output
     assert (
-        "judge        gemini-3.5-flash-lite (version 2) read 1 answers: 1 statements supported, "
-        "0 unsupported, 0 without a claim" in result.output
+        "judge        gemini-3.5-flash-lite (version 2) read 1 answers: 0 statements "
+        "supported, 1 unsupported, 0 without a claim" in result.output
     )
-    # The advice names it too: a check of version 1 would be a check of another judge.
+    assert "Correct by the reference     1.000" in result.output
     assert (
         "Run eval-judge --judge-version 2, then eval-support --judge-version 2 --checked."
         in result.output
     )
-    run_dir = judged_run["run_dir"]
-    expected = wiring.describe_judge(get_settings(), SUPPORT_V2)
-    assert json.loads((run_dir / "support.json").read_text())["config"] == expected
-    summary = json.loads((run_dir / "summary.json").read_text())
-    assert summary["judges"]["supported"]["config"] == expected
-    assert summary["judges"]["supported"]["config"]["judge_version"] == 2
-    assert summary["metrics"]["supported"]["count"] == 1
-
-    # Version 1 does not continue the run, and asks nothing.
-    first = runner.invoke(app, judged_run["support"])
-
-    assert first.exit_code == 1
     assert (
-        "was made with other settings (judge_instructions, judge_request, judge_version)"
-        in first.output
+        f"written to   {run_dir}, in the files of version 2 alone: support-v2.jsonl, "
+        "support-v2.json\n" in result.output
     )
-    assert "Discard the saved verdicts with --restart, or use the judge that made them." in (
-        first.output
+    assert (
+        "kept apart   'Supported by its sources' is version 2's score here. The run's summary "
+        "and the files of version 1 were left as they were." in result.output
     )
-    assert judge.asked == ["q001"]
-    assert json.loads((run_dir / "support.json").read_text())["config"] == expected
+    # ... and reads, writes and discards nothing of version 1's, nor any other file of the
+    # run: its summary, its scores and its replies are as they were, byte for byte.
+    assert of_the_first_version(opened) == []
+    after = files_now(run_dir.parent)
+    assert {name: after[name] for name in before} == before
+    assert sorted(set(after) - set(before)) == [
+        "baseline/support-v2.json",
+        "baseline/support-v2.jsonl",
+    ]
+    assert json.loads((run_dir / "support-v2.json").read_text()) == {
+        "config": wiring.describe_judge(get_settings(), SUPPORT_V2),
+        "attempts": 1,
+    }
 
-    # Scoring the run again says which version judged it, from what the run saved.
-    rescored = runner.invoke(app, judged_run["answers"])
-    assert rescored.exit_code == 0, rescored.output
-    assert "gemini-3.5-flash-lite (version 2) read 1 answers" in rescored.output
-    assert "then eval-support --judge-version 2 --checked." in rescored.output
-
-    # Version 2 continues its own run without a request.
-    again = runner.invoke(app, second)
+    # Each version continues its own verdicts, and neither asks again.
+    with files_opened() as opened:
+        again = runner.invoke(app, second)
     assert again.exit_code == 0, again.output
     assert "1 to read, 1 already judged, 0 to judge now" in again.output
-    assert judge.asked == ["q001"]
+    assert "Supported by its sources     0.000" in again.output
+    assert of_the_first_version(opened) == []
+    after_again = files_now(run_dir.parent)
+    assert {name: after_again[name] for name in before} == before
+    first = runner.invoke(app, judged_run["support"])
+    assert first.exit_code == 0, first.output
+    assert "1 to read, 1 already judged, 0 to judge now" in first.output
+    assert "Supported by its sources     1.000" in first.output
+    assert "(version" not in first.output
+    assert len(judge.asked) == asked + 1
 
-    # Version 1 takes the run over only when told to discard what the other version saved.
-    restarted = runner.invoke(app, [*judged_run["support"], "--restart"])
+
+def test_after_version_2_has_judged_a_run_its_scores_are_still_version_1s(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FaultsUnderVersion2()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    run_dir = judged_run["run_dir"]
+    runs = run_dir.parent
+    # A second answer run of the same questions, to compare the first with.
+    assert runner.invoke(app, [*judged_run["answers"][:-1], "v1"]).exit_code == 0
+    for variant in ("baseline", "v1"):
+        assert runner.invoke(app, [*judged_run["support"][:-1], variant]).exit_code == 0
+    # Version 2 faults the one answer of the baseline, which version 1 called supported.
+    assert runner.invoke(app, [*judged_run["support"], "--judge-version", "2"]).exit_code == 0
+
+    rescored = runner.invoke(app, judged_run["answers"])
+    table = runner.invoke(app, ["eval-table", "--runs", str(runs), "--metric", "supported"])
+    compared = runner.invoke(app, ["eval-compare", "baseline", "v1", "--runs", str(runs)])
+
+    # The answer run's summary, written again from what the run holds, is version 1's ...
+    assert rescored.exit_code == 0, rescored.output
+    assert "Supported by its sources     1.000" in rescored.output
+    assert "(version 2)" not in rescored.output
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["metrics"]["supported"]["mean"] == 1.0
+    assert summary["judges"]["supported"]["config"] == wiring.describe_judge(
+        get_settings(), SUPPORT
+    )
+    rows = [json.loads(line) for line in (run_dir / "results.jsonl").read_text().splitlines()]
+    assert {row["prompt_id"]: row["grade"].get("supported") for row in rows} == {
+        "q001": 1.0,
+        "u001": None,
+    }
+    # ... and so is what the table of runs and the comparison of two runs read from it.
+    assert table.exit_code == 0, table.output
+    assert (
+        "| baseline | Answers by gemini-3.5-flash-lite from 5 passages. | 2 | "
+        "1.000 (1.000 to 1.000) |" in table.output
+    )
+    assert compared.exit_code == 0, compared.output
+    (supported,) = [line for line in compared.output.splitlines() if "Supported by" in line]
+    assert "Supported by its sources     1.000     1.000   +0.000" in supported
+
+
+def test_restarting_version_2_discards_its_own_verdicts_and_nothing_of_version_1s(
+    monkeypatch: pytest.MonkeyPatch, judged_run: dict[str, Any]
+) -> None:
+    judge = FaultsUnderVersion2()
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    run_dir = judged_run["run_dir"]
+    second = [*judged_run["support"], "--judge-version", "2"]
+    assert runner.invoke(app, [*judged_run["judge"], "--variant", "baseline"]).exit_code == 0
+    first_check = str(judged_run["checks"] / "baseline")
+    assert runner.invoke(app, [*judged_run["support"], "--checked", first_check]).exit_code == 0
+    assert runner.invoke(app, second).exit_code == 0
+    before = files_aged(run_dir.parent)
+    others = {
+        name: state
+        for name, state in before.items()
+        if not Path(name).name.startswith(SECOND_VERSION_FILES)
+    }
+    asked = len(judge.asked)
+
+    with files_opened() as opened:
+        restarted = runner.invoke(app, [*second, "--restart"])
+
     assert restarted.exit_code == 0, restarted.output
-    assert judge.built_versions[-1] == 1
-    assert judge.asked == ["q001", "q001"]
-    assert "(version" not in restarted.output
-    assert "Run eval-judge, then eval-support --checked." in restarted.output
-    saved = json.loads((run_dir / "support.json").read_text())["config"]
-    assert saved == wiring.describe_judge(get_settings(), SUPPORT)
-    assert "judge_version" not in saved
+    # Its own verdict is discarded and made again ...
+    assert len(judge.asked) == asked + 1
+    assert "1 to read, 0 already judged, 1 to judge now" in restarted.output
+    # ... and every other file of the run is as it was, version 1's among them.
+    assert of_the_first_version(opened) == []
+    after = files_now(run_dir.parent)
+    assert set(after) == set(before)
+    assert {name: after[name] for name in others} == others
+
+    # A restart of version 2 that then fails takes nothing with it but version 2's
+    # verdicts. The run's score never rested on them, and stays.
+    failing = FakeJudge(error=JudgeError("The Gemini API returned an error (503): Overloaded."))
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", failing.build)
+    with files_opened() as opened:
+        failed = runner.invoke(app, [*second, "--restart"])
+    assert failed.exit_code == 1
+    assert "no answer was judged" in failed.output
+    assert not (run_dir / "support-v2.jsonl").exists()
+    assert of_the_first_version(opened) == []
+    after = files_now(run_dir.parent)
+    assert {name: after[name] for name in others} == others
+    assert json.loads((run_dir / "summary.json").read_text())["metrics"]["supported"] == {
+        "mean": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "count": 1,
+    }
+
+    # The other way round: a restart of version 1 discards nothing of version 2's.
+    monkeypatch.setattr("handbook_rag.wiring.make_judge", judge.build)
+    assert runner.invoke(app, second).exit_code == 0
+    kept = {name: (run_dir / name).read_bytes() for name in SECOND_VERSION_FILES[:2]}
+    assert runner.invoke(app, [*judged_run["support"], "--restart"]).exit_code == 0
+    assert {name: (run_dir / name).read_bytes() for name in kept} == kept
 
 
 def test_eval_support_quotes_a_check_only_of_the_version_of_the_judge_that_rules(
@@ -2772,9 +2985,14 @@ def test_eval_support_quotes_a_check_only_of_the_version_of_the_judge_that_rules
     )
     assert reverse.exit_code == 1
     assert "Check this judge with eval-judge, or leave --checked out." in reverse.output
-    assert not (judged_run["run_dir"] / "support.jsonl").exists()
+    run_dir = judged_run["run_dir"]
+    assert not (run_dir / "support.jsonl").exists()
+    assert not (run_dir / "support-v2.jsonl").exists()
     assert len(judge.asked) == asked_by_the_checks
 
+    # Each version is scored with a check of its own, side by side in one run.
+    assert runner.invoke(app, [*judged_run["support"], "--checked", first_check]).exit_code == 0
+    kept = {name: (run_dir / name).read_bytes() for name in (*FIRST_VERSION_FILES, "summary.json")}
     result = runner.invoke(app, [*second, "--checked", second_check])
 
     assert result.exit_code == 0, result.output
@@ -2785,9 +3003,18 @@ def test_eval_support_quotes_a_check_only_of_the_version_of_the_judge_that_rules
         "judge check  it caught 1 of 1 statements labelled unsupported, and 0 of its 1 alarms "
         f"were false ({second_check})" in result.output
     )
-    summary = json.loads((judged_run["run_dir"] / "summary.json").read_text())
-    assert summary["judges"]["supported"]["check"]["run"] == second_check
-    assert summary["judges"]["supported"]["config"]["judge_version"] == 2
+    assert (
+        "in the files of version 2 alone: support-v2.jsonl, support-v2.json, "
+        "support_check-v2.json\n" in result.output
+    )
+    quoted = json.loads((run_dir / "support_check-v2.json").read_text())
+    assert quoted["run"] == second_check
+    assert quoted["config"] == wiring.describe_judge(get_settings(), SUPPORT_V2)
+    # Version 1's check, and the run's summary that quotes it, are as they were.
+    assert {name: (run_dir / name).read_bytes() for name in kept} == kept
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["judges"]["supported"]["check"]["run"] == first_check
+    assert "judge_version" not in summary["judges"]["supported"]["config"]
 
 
 def test_a_version_that_a_judge_does_not_have_is_a_usage_error(
@@ -2814,6 +3041,7 @@ def test_a_version_that_a_judge_does_not_have_is_a_usage_error(
     assert not judged_run["checks"].exists()
     assert not judged_run["correct_checks"].exists()
     assert not (judged_run["run_dir"] / "support.jsonl").exists()
+    assert not (judged_run["run_dir"] / "support-v2.json").exists()
 
 
 def test_the_commands_that_take_a_version_of_the_judge_say_so() -> None:

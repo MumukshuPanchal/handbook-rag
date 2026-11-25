@@ -115,7 +115,9 @@ DEFAULT_CRITERION = SUPPORT
 CriterionName = Literal["support", "correct"]
 # Every judge a command can build: the judge of each criterion, in each of its versions.
 # A criterion above stands for the first version of its judge, which is the one a
-# command means when it names no version, and the one every saved run was made by.
+# command means when it names no version, and the one every saved run was made by. Each
+# judge keeps its verdicts on an answer run in files of its own, and a run's scores are
+# read from those of the judges above.
 JUDGES: tuple[Criterion[Any], ...] = (SUPPORT, SUPPORT_V2, CORRECT)
 
 
@@ -1072,9 +1074,9 @@ def eval_answers(
         # Last, so that a run that cannot start leaves nothing behind.
         saved = answer_runs.open_run(run_dir, config, restart=restart)
         if restart:
-            # Verdicts on the discarded replies go with them.
-            for criterion in CRITERIA:
-                criterion.run_stage(run_dir).discard()
+            # Verdicts on the discarded replies go with them, those of every version.
+            for judge in JUDGES:
+                judge.run_stage(run_dir).discard()
     except (
         DatasetError,
         CorpusError,
@@ -1193,21 +1195,33 @@ def eval_answers(
         raise typer.Exit(code=1)
 
 
+def _scored_by(criterion: Criterion[Any]) -> tuple[Criterion[Any], ...]:
+    """The judges whose verdicts give a run's judged scores, with this one in its place.
+
+    For the first version of a judge, these are the judges whose scores a run's files hold.
+    A later version stands in for the first one only in what a command prints.
+    """
+    return tuple(criterion if other.name == criterion.name else other for other in CRITERIA)
+
+
 def _score_answers(
     run_dir: Path,
     questions: Sequence[GoldenQuestion],
     records: Mapping[str, answer_runs.AnswerRecord],
     failures: Sequence[FailedQuestion],
     chunks: Sequence[Chunk],
+    criteria: Sequence[Criterion[Any]] = CRITERIA,
 ) -> tuple[answer_runs.AnswerReport, dict[str, dict[str, Judgement]]]:
     """Score a run's replies, with the judges' verdicts on them where they have any.
 
-    The verdicts come back by the id of the score they give, and then by question.
+    The verdicts are read from the files of ``criteria``: by default the first version of
+    each judge, which every score in a run's files comes from. They come back by the id
+    of the score they give, and then by question.
     """
     records = answer_runs.replies_to_current_labels(questions, records)
     by_id = {chunk.chunk_id: chunk for chunk in chunks}
     judged: dict[str, dict[str, Judgement]] = {}
-    for criterion in CRITERIA:
+    for criterion in criteria:
         if criterion.run_stage(run_dir).rows_path.is_file():
             cases = criterion.cases(questions, records, by_id)
             verdicts = saved_verdicts(criterion, run_dir, cases)
@@ -1218,7 +1232,7 @@ def _score_answers(
             question_id: criterion.passed(judgement)
             for question_id, judgement in judged[criterion.metric].items()
         }
-        for criterion in CRITERIA
+        for criterion in criteria
         if criterion.metric in judged
     }
     report = answer_runs.summarise_answers(questions, records, failures, judged=passed or None)
@@ -1226,11 +1240,13 @@ def _score_answers(
 
 
 def _judge_records(
-    run_dir: Path, judged: Mapping[str, Mapping[str, Judgement]]
+    run_dir: Path,
+    judged: Mapping[str, Mapping[str, Judgement]],
+    criteria: Sequence[Criterion[Any]] = CRITERIA,
 ) -> dict[str, dict[str, object]]:
     """For each judged score of a run: who judged, what it cost, and how it was checked."""
     records: dict[str, dict[str, object]] = {}
-    for criterion in CRITERIA:
+    for criterion in criteria:
         record = judge_record(criterion, run_dir, judged.get(criterion.metric, {}))
         if record is not None:
             records[criterion.metric] = record
@@ -1246,7 +1262,9 @@ def _echo_estimate(label: str, estimate: Estimate | None) -> None:
 
 
 def _echo_answer_scores(
-    report: answer_runs.AnswerReport, judges: Mapping[str, Mapping[str, Any]]
+    report: answer_runs.AnswerReport,
+    judges: Mapping[str, Mapping[str, Any]],
+    criteria: Sequence[Criterion[Any]] = CRITERIA,
 ) -> None:
     for metric in answer_runs.METRICS:
         _echo_estimate(metric["label"], report.summary.get(metric["id"]))
@@ -1267,7 +1285,7 @@ def _echo_answer_scores(
             f"  tokens       {report.tokens['input_mean']:,.0f} in and "
             f"{report.tokens['output_mean']:,.0f} out per question"
         )
-    for criterion in CRITERIA:
+    for criterion in criteria:
         if criterion.metric in judges:
             _echo_judge_record(criterion, judges[criterion.metric])
 
@@ -1500,8 +1518,9 @@ _JUDGE_VERSION_OPTION = typer.Option(
     help=(
         "Which version of the judge to use. 1 is the judge that every saved run was made "
         "by. 2, which only 'support' has, is told the whole rubric and how to look for a "
-        "limit that an answer leaves out. A run made by one version cannot be continued "
-        "by the other."
+        "limit that an answer leaves out. Neither version continues a check or a run of the "
+        "other. On an answer run, version 2 keeps its verdicts in files of its own, and the "
+        "run's scores stay those of version 1."
     ),
 )
 
@@ -1699,7 +1718,11 @@ def _judge_answers(
     max_requests: int | None,
     restart: bool,
 ) -> None:
-    """Judge a run's saved answers by one criterion, and add its score to the run."""
+    """Judge a run's saved answers by one criterion, and add its score to the run.
+
+    A later version of a judge keeps its verdicts in files of its own, and its score is
+    printed, not added: the run's scores are those of version 1 (see :func:`_scored_by`).
+    """
     settings = get_settings()
     config = wiring.describe_judge(settings, criterion)
     run_dir = runs / variant
@@ -1752,25 +1775,29 @@ def _judge_answers(
         max_requests=max_requests,
         reuse=reuse,
     )
+    criteria = _scored_by(criterion)
     report, all_judged = _score_answers(
-        run_dir, questions, records, answer_runs.load_failures(run_dir), corpus.chunks
+        run_dir, questions, records, answer_runs.load_failures(run_dir), corpus.chunks, criteria
     )
     judged = all_judged.get(criterion.metric, {})
-    judges = _judge_records(run_dir, all_judged)
-    answers_stage = answer_runs.answers_stage(run_dir)
-    # Written whether or not this judge ruled on anything. After a restart, or when no
-    # saved reply is to a question as it is labelled now, the run's files must not go on
-    # showing a score that nothing stands behind.
-    answer_runs.write_answer_run(
-        report,
-        runs,
-        variant,
-        answer_runs.saved_description(run_dir)
-        or f"Answers by {answers_stage.config().get('answer_model', 'a model')}.",
-        answers_stage.config(),
-        attempts=answers_stage.attempts(),
-        judges=judges,
-    )
+    judges = _judge_records(run_dir, all_judged, criteria)
+    if criterion.version == 1:
+        answers_stage = answer_runs.answers_stage(run_dir)
+        # Written whether or not this judge ruled on anything. After a restart, or when no
+        # saved reply is to a question as it is labelled now, the run's files must not go
+        # on showing a score that nothing stands behind.
+        answer_runs.write_answer_run(
+            report,
+            runs,
+            variant,
+            answer_runs.saved_description(run_dir)
+            or f"Answers by {answers_stage.config().get('answer_model', 'a model')}.",
+            answers_stage.config(),
+            attempts=answers_stage.attempts(),
+            judges=judges,
+        )
+    # A later version writes none of the run's own files. No score in them is read from
+    # its verdicts, so nothing it does can leave one of them standing on nothing.
     if not judged:
         for failure in run.failures[:5]:
             typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
@@ -1786,8 +1813,24 @@ def _judge_answers(
     typer.echo(
         f"  requests     at most {run.attempts} now, {stage.attempts()} for this stage in all"
     )
-    _echo_answer_scores(report, judges)
-    typer.echo(f"  written to   {run_dir}")
+    _echo_answer_scores(report, judges, criteria)
+    if criterion.version == 1:
+        typer.echo(f"  written to   {run_dir}")
+    else:
+        own = [
+            name
+            for name in (stage.rows_file, stage.state_file, *stage.outputs)
+            if (run_dir / name).is_file()
+        ]
+        label = next(m["label"] for m in answer_runs.METRICS if m["id"] == criterion.metric)
+        typer.echo(
+            f"  written to   {run_dir}, in the files of version {criterion.version} alone: "
+            f"{', '.join(own)}"
+        )
+        typer.echo(
+            f"  kept apart   '{label}' is version {criterion.version}'s score here. The run's "
+            "summary and the files of version 1 were left as they were."
+        )
     if run.stopped is not None:
         typer.echo(f"  stopped: {run.stopped}")
     for failure in run.failures[:5]:
@@ -1812,7 +1855,7 @@ _MAX_REQUESTS_OPTION = typer.Option(
     min=1, help="Stop after this many requests. Run the command again to continue."
 )
 _RESTART_OPTION = typer.Option(
-    "--restart", help="Discard the verdicts saved for this run, and start again."
+    "--restart", help="Discard the verdicts this judge has saved for this run, and start again."
 )
 
 

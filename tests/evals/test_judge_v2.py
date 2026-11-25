@@ -45,6 +45,7 @@ from handbook_rag.evals.judging import (
     judge_record,
     judge_version,
     judgement_row,
+    saved_verdicts,
 )
 from handbook_rag.evals.stage import SavedRunError
 from handbook_rag.evals.support import SUPPORT, SUPPORT_V2
@@ -395,8 +396,16 @@ def test_version_2_has_a_fingerprint_of_its_own_that_changes_with_the_layout(
     assert request_fingerprint() == first
 
 
-def test_version_2_is_the_same_criterion_with_another_judge() -> None:
-    differs = {"version", "instructions", "request_fingerprint", "judge"}
+def test_version_2_is_the_same_criterion_with_another_judge_and_files_of_its_own() -> None:
+    differs = {
+        "version",
+        "instructions",
+        "request_fingerprint",
+        "judge",
+        "rows_file",
+        "state_file",
+        "check_file",
+    }
 
     for field in dataclasses.fields(SUPPORT):
         if field.name in differs:
@@ -404,9 +413,53 @@ def test_version_2_is_the_same_criterion_with_another_judge() -> None:
         else:
             assert getattr(SUPPORT_V2, field.name) == getattr(SUPPORT, field.name), field.name
     assert SUPPORT_V2.version == 2
-    # The same files in a run, so that a run holds the verdicts of one version.
+    # Version 1 keeps the names that the committed verdicts of the first answer run have.
+    assert (SUPPORT.rows_file, SUPPORT.state_file, SUPPORT.check_file) == (
+        "support.jsonl",
+        "support.json",
+        "support_check.json",
+    )
+    for name in (SUPPORT.state_file, SUPPORT.check_file, SUPPORT.rows_file):
+        assert (ROOT / "evals" / "runs" / "answers" / "baseline" / name).is_file(), name
+    # Version 2 has its own, named by its version, so that its verdicts lie beside those of
+    # version 1 in one answer run, and a restart of one discards nothing of the other.
+    assert (SUPPORT_V2.rows_file, SUPPORT_V2.state_file, SUPPORT_V2.check_file) == (
+        "support-v2.jsonl",
+        "support-v2.json",
+        "support_check-v2.json",
+    )
     run = Path("run")
-    assert SUPPORT_V2.run_stage(run) == SUPPORT.run_stage(run)
+    first, second = SUPPORT.run_stage(run), SUPPORT_V2.run_stage(run)
+    assert not {first.rows_file, first.state_file, *first.outputs} & {
+        second.rows_file,
+        second.state_file,
+        *second.outputs,
+    }
+
+
+def test_a_later_version_of_a_judge_cannot_be_made_with_files_not_named_by_it() -> None:
+    refused = "keeps its verdicts in files named by its version"
+
+    # A copy of version 1 called version 2, which would write into version 1's files.
+    with pytest.raises(ValueError, match=refused):
+        dataclasses.replace(SUPPORT, version=2)
+    # A third version made from the second, which would write into the second one's.
+    with pytest.raises(ValueError, match=refused):
+        dataclasses.replace(SUPPORT_V2, version=3)
+    # One that names all its files by its number but one.
+    with pytest.raises(ValueError, match=refused):
+        dataclasses.replace(
+            SUPPORT_V2, version=3, rows_file="support-v3.jsonl", state_file="support-v3.json"
+        )
+    # Named by its number, it is made.
+    third = dataclasses.replace(
+        SUPPORT_V2,
+        version=3,
+        rows_file="support-v3.jsonl",
+        state_file="support-v3.json",
+        check_file="support_check-v3.json",
+    )
+    assert third.run_stage(Path("run")).rows_file == "support-v3.jsonl"
 
 
 def test_verdicts_of_version_2_record_the_version_and_its_two_hashes() -> None:
@@ -477,19 +530,66 @@ def test_a_run_judged_by_version_2_says_so_in_its_record(tmp_path: Path) -> None
     stage = SUPPORT_V2.run_stage(tmp_path)
     stage.open(config)
     stage.append(judgement_row(CASE, judgement))
-    # A check of version 1 lies beside the verdicts. It is a check of another judge.
+    # A check of version 1 lies in the run, in version 1's file. It is a check of another
+    # judge, and version 2 does not read it.
     other = {"run": "a check", "config": describe_judge(Settings(), SUPPORT), "agreement": {}}
     (tmp_path / SUPPORT.check_file).write_text(json.dumps(other))
 
-    # The record is made for the criterion, whichever version of its judge ruled.
-    record = judge_record(SUPPORT, tmp_path, {"q001": judgement})
+    record = judge_record(SUPPORT_V2, tmp_path, {"q001": judgement})
 
     assert record is not None
     assert record["config"] == config
     assert judge_version(cast(dict[str, object], record["config"])) == 2
     assert record["check"] is None
 
-    (tmp_path / SUPPORT.check_file).write_text(json.dumps({**other, "config": config}))
-    quoted = judge_record(SUPPORT, tmp_path, {"q001": judgement})
+    # Copied into version 2's own file, it is still a check of another judge.
+    (tmp_path / SUPPORT_V2.check_file).write_text(json.dumps(other))
+    copied = judge_record(SUPPORT_V2, tmp_path, {"q001": judgement})
+    assert copied is not None
+    assert copied["check"] is None
+    # A check of version 2 in its own file is quoted.
+    (tmp_path / SUPPORT_V2.check_file).write_text(json.dumps({**other, "config": config}))
+    quoted = judge_record(SUPPORT_V2, tmp_path, {"q001": judgement})
     assert quoted is not None
     assert quoted["check"] == {"run": "a check", "answers": None, "agreement": {}}
+
+
+def test_the_verdicts_of_both_versions_lie_side_by_side_in_one_run(tmp_path: Path) -> None:
+    settings = Settings()
+    first_config = describe_judge(settings, SUPPORT)
+    second_config = describe_judge(settings, SUPPORT_V2)
+    first, second = SUPPORT.run_stage(tmp_path), SUPPORT_V2.run_stage(tmp_path)
+    # Version 1 has judged the run and been checked: its three files are there.
+    first.open(first_config)
+    supported = tuple(StatementVerdict(n, "supported", "A reason.") for n in (1, 2, 3))
+    first.append(judgement_row(CASE, Judgement("q001", supported, MODEL)))
+    check = {"run": "a check", "config": first_config, "agreement": {}}
+    (tmp_path / SUPPORT.check_file).write_text(json.dumps(check))
+    names = (SUPPORT.rows_file, SUPPORT.state_file, SUPPORT.check_file)
+    kept = {name: (tmp_path / name).read_bytes() for name in names}
+
+    # Version 2 finds no verdict of its own there, and judges the answer itself.
+    assert second.open(second_config) == []
+    second.append(judgement_row(CASE, judge_with(FakeClient(response(GOOD_REPLY))).judge(CASE)))
+
+    def verdicts(criterion: Criterion[SupportCase]) -> list[str]:
+        (judgement,) = saved_verdicts(criterion, tmp_path, [CASE]).values()
+        return [verdict.verdict for verdict in judgement.verdicts]
+
+    # Each version reads its own verdicts, and each continues its own run.
+    assert verdicts(SUPPORT) == ["supported", "supported", "supported"]
+    assert verdicts(SUPPORT_V2) == ["supported", "unsupported", "no_claim"]
+    assert len(first.open(first_config)) == len(second.open(second_config)) == 1
+    first_record = judge_record(SUPPORT, tmp_path, saved_verdicts(SUPPORT, tmp_path, [CASE]))
+    second_record = judge_record(SUPPORT_V2, tmp_path, saved_verdicts(SUPPORT_V2, tmp_path, [CASE]))
+    assert first_record is not None
+    assert second_record is not None
+    assert (first_record["config"], second_record["config"]) == (first_config, second_config)
+    assert (first_record["check"] is None, second_record["check"] is None) == (False, True)
+
+    # Restarting version 2 discards its own verdicts, and nothing of version 1's.
+    second.open(second_config, restart=True)
+
+    assert not second.rows_path.exists()
+    assert {name: (tmp_path / name).read_bytes() for name in names} == kept
+    assert verdicts(SUPPORT) == ["supported", "supported", "supported"]

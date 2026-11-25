@@ -1,0 +1,20 @@
+{
+  "config": {
+    "handbook_commit": "e645aac6dc6fbb0b759b92ed32f016aaed5ef4b8",
+    "chunking": "v1-max320-min60-overlap40",
+    "collection": "handbook-e645aac6-baai-bge-small-en-v1-5-qdrant-bm25-v1-max320-min60-overlap40",
+    "retrieval_mode": "hybrid",
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "sparse_model": "Qdrant/bm25",
+    "fusion_candidates": 30,
+    "rrf_k": 60,
+    "rerank": false,
+    "answer_model": "gemini-3.5-flash-lite",
+    "answer_max_tokens": 4000,
+    "answer_context_chunks": 5,
+    "citations": "numbered markers",
+    "instructions": "880b0c9f82f4d566",
+    "instructions_version": 2
+  },
+  "attempts": 37
+}

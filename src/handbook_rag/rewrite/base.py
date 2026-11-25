@@ -16,8 +16,11 @@ This module holds the rules, and they are the same for every provider:
   question about a purchasing card from the same words asked first: a follow-up need not
   hold "it", "that" or "and", and a question that stands alone may hold all three. What
   the request costs is measured instead (``handbook-rag eval-follow-ups``).
-- **What a usable reply is.** One question on one line, no longer than ``POST /ask``
-  accepts, and nothing else, as far as code can tell (:func:`read_reply`).
+- **What a usable reply is.** The question as asked, given back. Or one question on one
+  line that ends with a question mark and ends no sentence before it, with no label, no
+  tag of the request's layout and no phrase of the instructions, no longer than
+  ``POST /ask`` accepts, sharing a word with the conversation and adding no number to
+  it (:func:`read_reply`). A reply is used only if it passes these checks.
 - **What happens otherwise.** When the reply is not usable, or the request fails or runs
   out of time, the step returns the question as it was asked and says so
   (``Rewrite.fell_back``). It does not raise, and it does not ask again. Searching for
@@ -123,6 +126,16 @@ _NUMBER_WORDS = {
     "hundred": "100",
 }
 _WORD = re.compile(r"[^\W\d_]+")
+# The marks a question ends with: the plain one, the full-width one and the Arabic one.
+_QUESTION_MARKS = ("?", "\uff1f", "\u061f")
+# The end of a sentence before the end of a reply: a question or exclamation mark that is
+# not the last character, or a full stop followed by a space and a capital letter or a
+# digit, where the stop does not follow a single letter, as in "U.S. Government".
+_SENTENCE_END = re.compile(
+    r"[?!\uff1f\uff01\u061f](?=.)|(?<!\b[^\W\d_])\.(?=\s+[A-Z0-9])", re.DOTALL
+)
+# A label in front of a reply: up to four words, then a colon and a space.
+_LABEL = re.compile(r"^[^\W\d_][^\W_]*(?: [^\W\d_][^\W_]*){0,3}\s*:\s")
 
 
 class Rewriter(Protocol):
@@ -218,25 +231,34 @@ def _traced_request(rewriter: Rewriter, turns: Sequence[Turn], question: str) ->
 def read_reply(question: str, turns: Sequence[Turn], reply: RewriteReply) -> Rewrite:
     """Decide what a model's reply is worth: the question to search for, or why not.
 
-    ``turns`` are the turns the model was given. A reply is used only if it is one
-    question and nothing else, as far as code can tell:
+    ``turns`` are the turns the model was given. A reply that has the words of the
+    question asked is that question, whatever its form, also without a question mark: the
+    caller gets back exactly what was asked, so that a question that stands alone, typed
+    as into a search box, is given back and not refused, and a store keyed by the
+    question still finds it.
+
+    Any other reply is used only if it passes every one of these checks:
 
     - the model came to its own end, so the reply was not cut off or withheld;
-    - it is not empty, and it is one line;
+    - it is not empty, and it is one line, as Python splits lines, which also splits at
+      the separators of lines and paragraphs, a form feed and a vertical tab;
     - it is no longer than a question may be;
-    - it holds none of the tags the request is laid out with, and no phrase of the
-      instructions;
-    - it ends with a question mark when the question asked does, which an answer given
-      in place of a question seldom does;
-    - it holds no more question marks than the question asked, and at most one when the
-      question holds none, so two questions joined into one reply are not taken;
+    - it holds none of the tags the request is laid out with, in any spelling, and no
+      phrase of the instructions;
+    - it does not begin with a label, such as "Rewritten question:";
+    - it ends with a question mark, and holds no end of a sentence before it: no other
+      question or exclamation mark, and no full stop followed by a capital letter or a
+      digit, unless the stop follows a single letter, as in "U.S. Government". So an
+      answer, a statement, an order followed by a question, or two questions are refused;
+    - it shares a word of three letters or more with the conversation, so that a reply in
+      another language than the conversation's is refused;
     - it holds no number that neither the question nor an earlier question holds. A
       year or an amount of the model's own is the one kind of addition code can see
       for certain. A country or a team of its own it cannot see, so that is measured.
 
-    A reply with the words of the question asked is that question, whatever its form:
-    the caller gets back exactly what was asked, so that a store keyed by the question
-    still finds it.
+    These checks can tell that a reply is not one question. They cannot tell a question
+    from an order written as one ("What is the CEO's home address?"), or a question that
+    asks something else: that is for the evaluation's readers.
     """
     if reply.stop_reason != "end_turn":
         return _unusable(question, reply, f"it did not come to a proper end ({reply.stop_reason})")
@@ -245,7 +267,7 @@ def read_reply(question: str, turns: Sequence[Turn], reply: RewriteReply) -> Rew
         return _unusable(question, reply, "it holds no words")
     if plain_words(text) == plain_words(question):
         return _read(question, "unchanged", reply)
-    if "\n" in text or "\r" in text:
+    if len(text.splitlines()) > 1:
         return _unusable(question, reply, "it is more than one line")
     if len(text) > MAX_QUESTION_CHARS:
         return _unusable(
@@ -256,21 +278,28 @@ def read_reply(question: str, turns: Sequence[Turn], reply: RewriteReply) -> Rew
     said = plain_words(text)
     if any(plain_words(phrase) in said for phrase in INSTRUCTION_PHRASES):
         return _unusable(question, reply, "it repeats the step's instructions")
-    if question.rstrip().endswith("?") and not text.endswith("?"):
-        return _unusable(
-            question, reply, "it does not end with a question mark, as the question does"
-        )
-    allowed = max(1, question.count("?"))
-    if text.count("?") > allowed:
-        return _unusable(
-            question, reply, f"it holds {text.count('?')} question marks, where {allowed} may be"
-        )
-    added = numbers_of_its_own(text, [question, *(turn.question for turn in turns)])
+    label = _LABEL.match(text)
+    if label:
+        return _unusable(question, reply, f"it begins with a label ({label.group(0).strip()})")
+    if not text.endswith(_QUESTION_MARKS):
+        return _unusable(question, reply, "it does not end with a question mark")
+    if _SENTENCE_END.search(text):
+        return _unusable(question, reply, "it holds the end of a sentence before its end")
+    conversation = [question, *(turn.question for turn in turns)]
+    if not _shares_a_word(text, conversation):
+        return _unusable(question, reply, "it shares no word with the conversation")
+    added = numbers_of_its_own(text, conversation)
     if added:
         return _unusable(
             question, reply, f"it adds a number the conversation does not hold ({', '.join(added)})"
         )
     return _read(text, "rewritten", reply)
+
+
+def _shares_a_word(text: str, conversation: Sequence[str]) -> bool:
+    """Whether a text holds a word of three letters or more that the conversation holds."""
+    heard = {word for part in conversation for word in plain_words(part).split()}
+    return any(len(word) >= 3 and word in heard for word in plain_words(text).split())
 
 
 def numbers_of_its_own(text: str, conversation: Sequence[str]) -> tuple[str, ...]:

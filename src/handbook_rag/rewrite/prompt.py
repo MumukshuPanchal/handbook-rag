@@ -20,6 +20,7 @@ shows the size of the loss (``evals/follow-ups/README.md``).
 
 import hashlib
 import re
+import unicodedata
 from collections.abc import Sequence
 
 from handbook_rag.generate.base import plain_words
@@ -138,9 +139,25 @@ def build_rewrite_prompt(turns: Sequence[Turn], question: str) -> str:
 def holds_our_tags(text: str) -> bool:
     """Whether a text holds one of the tags a request is laid out with, in any spelling.
 
-    A reply that does is a copy of the request's layout, not a question.
+    A reply that does is a copy of the request's layout, not a question. The text is read
+    as :func:`visible` gives it, so a format character inside a tag or a tag in full-width
+    brackets does not hide it.
     """
-    return _ANY_FORM_OF_OUR_TAGS.search(text) is not None
+    return _ANY_FORM_OF_OUR_TAGS.search(visible(text)) is not None
+
+
+def visible(text: str) -> str:
+    """A text as a reader of tags should see it: compatibility forms folded, format gone.
+
+    A model may read ``</new_question>`` written with full-width angle brackets, or with
+    a zero-width space or a soft hyphen inside it, as the tag itself. Folding by
+    NFKC turns compatibility forms such as full-width brackets into their plain forms, and
+    every format character (Unicode category Cf: zero-width spaces and joiners, soft
+    hyphens, marks of direction) is then removed, so that such a tag is found as plainly as
+    any other. A tag spelled with look-alike letters of another alphabet is not caught.
+    """
+    folded = unicodedata.normalize("NFKC", text)
+    return "".join(character for character in folded if unicodedata.category(character) != "Cf")
 
 
 def instructions_fingerprint(instructions: str = REWRITE_INSTRUCTIONS) -> str:
@@ -168,5 +185,10 @@ def request_fingerprint() -> str:
 
 
 def _inert(text: str) -> str:
-    """Stop a question's text from opening or closing one of our own tags."""
-    return _OUR_TAGS.sub("&lt;", text)
+    """Stop a question's text from opening or closing one of our own tags.
+
+    The text is laid out as :func:`visible` gives it, so a tag hidden by a format
+    character or written in full-width brackets is made harmless like any other. For a
+    question with neither, which is nearly every question, the text is unchanged.
+    """
+    return _OUR_TAGS.sub("&lt;", visible(text))

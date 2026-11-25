@@ -123,6 +123,15 @@ def test_the_reply_is_read_as_an_answers_reply_is() -> None:
     assert reply.seconds >= 0
 
 
+def test_the_reply_carries_the_wait_for_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = iter([100.0, 102.5])
+    monkeypatch.setattr("handbook_rag.rewrite.gemini.time.perf_counter", lambda: next(clock))
+
+    reply = rewriter_for(FakeClient()).rewrite([UK], "And in Finland?")
+
+    assert reply.seconds == 2.5
+
+
 @pytest.mark.parametrize(
     ("outcome", "stop_reason"),
     [

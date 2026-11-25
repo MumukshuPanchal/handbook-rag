@@ -13,6 +13,7 @@ from anthropic.types import Message
 
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.generate.claude import ClaudeGenerator
+from handbook_rag.rewrite.base import standalone_question
 from handbook_rag.rewrite.claude import ClaudeRewriter
 from handbook_rag.rewrite.models import MAX_REPLY_TOKENS, Turn
 from handbook_rag.rewrite.prompt import REWRITE_INSTRUCTIONS, build_rewrite_prompt
@@ -97,6 +98,21 @@ def test_a_reply_that_did_not_come_to_its_end_says_why(stop_reason: str) -> None
     rewriter, _ = rewriter_for(message([{"type": "text", "text": "How"}], stop_reason=stop_reason))
 
     assert rewriter.rewrite([UK], "And in Finland?").stop_reason == stop_reason
+
+
+def test_a_reply_without_a_stop_reason_is_not_taken_for_a_whole_one() -> None:
+    finland = "How many days of paid annual leave do team members in Finland get?"
+    unfinished = message([{"type": "text", "text": finland}]).model_copy(
+        update={"stop_reason": None}
+    )
+    rewriter, _ = rewriter_for(unfinished)
+
+    rewrite = standalone_question("And in Finland?", [UK], rewriter=rewriter)
+
+    assert rewrite.reply is not None
+    assert rewrite.reply.stop_reason == "unknown"
+    assert rewrite.outcome == "unusable"
+    assert rewrite.question == "And in Finland?"
 
 
 FAILURES: list[BaseException] = [

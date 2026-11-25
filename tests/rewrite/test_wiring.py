@@ -3,10 +3,16 @@
 No request is sent: building a client sends nothing.
 """
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import anthropic
 import pytest
 from pydantic import SecretStr
 
+import handbook_rag
 from handbook_rag.config import Settings
 from handbook_rag.generate.base import GenerationError
 from handbook_rag.rewrite.claude import ClaudeRewriter
@@ -68,3 +74,27 @@ def test_a_claude_answer_model_may_find_its_credential_in_the_sdks_own_places() 
     rewriter = make_rewriter(Settings(answer_model="claude-haiku-5-5"))
 
     assert isinstance(rewriter, ClaudeRewriter)
+
+
+def test_building_the_parts_of_a_service_that_only_answers_loads_no_rewriting_code(
+    tmp_path: Path,
+) -> None:
+    # In a process of its own, since this one has loaded the step for the tests above.
+    script = (
+        "import sys, handbook_rag.wiring\n"
+        "print(sorted(name for name in sys.modules if name.startswith('handbook_rag.rewrite')))"
+    )
+    environment = {**os.environ, "PYTHONPATH": str(Path(handbook_rag.__file__).parents[1])}
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "[]"

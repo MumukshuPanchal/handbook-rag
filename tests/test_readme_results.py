@@ -851,10 +851,11 @@ def test_the_follow_up_section_is_the_committed_run() -> None:
 
     Every number in them is worked out from the saved run, as
     ``tests/evals/test_follow_up_documents.py`` works out the other documents that give
-    these figures, and a line with a number that nothing works out fails.
+    these figures: those of the first run, as today's code reads it, and the cases' of the
+    whole file. A line with a number that nothing works out fails.
     """
     # Imported here: that module imports this one's helpers.
-    from handbook_rag.evals.follow_ups import FOLLOW_UP, KINDS, PLANTED, STANDALONE
+    from handbook_rag.evals.follow_ups import FOLLOW_UP, PLANTED, STANDALONE
     from tests.evals import test_follow_up_documents as documents
 
     k = documents.figures()
@@ -862,27 +863,24 @@ def test_the_follow_up_section_is_the_committed_run() -> None:
     rows = table(readme(), "| | Right | Of | Share (95% interval) |")
     planted = k["planted"]
 
-    def right(group: str) -> str:
-        return str(sum(k["right"][kind] for kind in KINDS[group]))
-
     assert rows == [
         [
             "Follow-ups rewritten to a question that means an acceptable form",
-            right(FOLLOW_UP),
-            str(k["groups"][FOLLOW_UP]),
+            str(k["follow_right"]),
+            str(k["first_groups"][FOLLOW_UP]),
             documents.shown(k["follow"]["same"]),
         ],
         [
             "Questions that stand alone, left alone",
-            right(STANDALONE),
-            str(k["groups"][STANDALONE]),
+            str(k["alone_right"]),
+            str(k["first_groups"][STANDALONE]),
             documents.shown(k["alone"]["same"]),
         ],
         [
-            "Planted instructions not followed",
-            str(planted["held_by_code"] + planted["read_held"]),
-            str(k["groups"][PLANTED]),
-            documents.shown(planted["held"]),
+            "Follow-ups with a planted instruction that still got a question that stands alone",
+            str(k["planted_right"]),
+            str(k["first_groups"][PLANTED]),
+            documents.shown(planted["same"]),
         ],
     ]
     assert_numbers(
@@ -892,10 +890,13 @@ def test_the_follow_up_section_is_the_committed_run() -> None:
                 documents.RECORD,
                 documents.FOLLOW_UPS,
                 str(k["cases"]),
+                str(k["read_twice"]),
+                str(k["first_cases"]),
                 *documents.NIGHT,
                 *k["model"],
                 str(k["decided"]),
                 str(k["set_aside"]),
+                str(k["added"]),
             ],
             "- **A follow-up that leans on an earlier question was rewritten right in": [
                 str(k["leaning_right"]),
@@ -905,13 +906,18 @@ def test_the_follow_up_section_is_the_committed_run() -> None:
                 str(k["needs_answer"]),
                 str(k["into_answer"]),
             ],
+            "- **One question that stood alone was changed.**": [
+                str(planted["held_by_code"]),
+                str(k["first_groups"][PLANTED]),
+                str(planted["instruction_set_aside"]),
+            ],
             "- **A follow-up costs one more request.**": [k["median"], k["p95"]],
         },
     )
     assert "no person has read them" in section
     assert "No answer was written for the rewritten questions" in section
     assert (planted["broke_by_code"], planted["reached_search"]) == (0, 0)
-    assert "no planted instruction was followed or reached the search" in section
+    assert "No reply held a canary of a planted instruction, and none reached the search" in section
     # Under Limitations: the step is not wired in.
     limitation = line_starting(readme(), "- **A follow-up question is still answered by itself.**")
     assert numbers(limitation) == [documents.RECORD, documents.FOLLOW_UPS]

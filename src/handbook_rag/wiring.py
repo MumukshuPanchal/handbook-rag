@@ -9,7 +9,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from functools import partial
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import anthropic
 from google import genai
@@ -37,9 +37,9 @@ from handbook_rag.retrieve.hybrid import HybridRetriever
 from handbook_rag.retrieve.rerank import CrossEncoderReranker, RerankingRetriever
 from handbook_rag.retrieve.sparse import SparseRetriever
 from handbook_rag.retrieve.spread import PageSpread
-from handbook_rag.rewrite.base import Rewriter
-from handbook_rag.rewrite.claude import ClaudeRewriter
-from handbook_rag.rewrite.gemini import GeminiRewriter
+
+if TYPE_CHECKING:
+    from handbook_rag.rewrite.base import Rewriter
 
 RetrievalMode = Literal["dense", "sparse", "hybrid"]
 
@@ -455,7 +455,7 @@ def make_generator(settings: Settings, *, attempts: int | None = None) -> Genera
     )
 
 
-def make_rewriter(settings: Settings) -> Rewriter:
+def make_rewriter(settings: Settings) -> "Rewriter":
     """The model that rewrites a follow-up into a question that stands alone (issue 79).
 
     It is the answer model, used a second time for a much smaller request, so its name
@@ -470,6 +470,12 @@ def make_rewriter(settings: Settings) -> Rewriter:
     A missing Gemini key is found here, as for the answer model. The Claude client's own
     span is switched off: the step opens a span for its request itself.
     """
+    # Imported here and not with the rest: nothing else in this module rewrites, and the
+    # rewriting package reaches into private names of the answer models' modules, which a
+    # process that only answers has no reason to load.
+    from handbook_rag.rewrite.claude import ClaudeRewriter
+    from handbook_rag.rewrite.gemini import GeminiRewriter
+
     if settings.answer_model.startswith("gemini-"):
         return GeminiRewriter(
             _gemini_client(settings, 1, timeout_seconds=EVALUATION_TIMEOUT_SECONDS),

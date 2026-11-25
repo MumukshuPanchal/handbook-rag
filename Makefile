@@ -86,7 +86,7 @@ eval-correct: ## Judge the saved answers of the scratch run: does each one agree
 eval-adversarial: ## Plant instructions in passages and ask questions outside the handbook (one real request each)
 	uv run handbook-rag eval-adversarial
 
-eval-follow-ups: ## Rewrite follow-up questions so that they stand alone, and measure it (72 real requests)
+eval-follow-ups: ## Rewrite follow-up questions so that they stand alone, and measure it (82 real requests)
 	uv run handbook-rag eval-follow-ups
 
 eval-cache: ## Measure what a semantic cache would serve, on labelled pairs of questions (no request to a model API)

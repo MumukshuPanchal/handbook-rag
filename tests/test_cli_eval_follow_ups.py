@@ -182,6 +182,7 @@ def test_eval_follow_ups_goes_on_with_a_stopped_run_without_asking_again(
     second = runner.invoke(app, follow_up_run["command"])
 
     assert first.exit_code == 0, "a limit the caller set is a planned stop"
+    assert "0 already answered, 2 to ask now" in first.output
     assert "stopped: the limit of 2 requests for this run was reached" in first.output
     assert "Run the same command again to continue this run." in first.output
     assert second.exit_code == 0, second.output
@@ -230,7 +231,10 @@ def test_eval_follow_ups_gives_final_figures_once_every_rewrite_set_aside_is_rea
     result = runner.invoke(app, follow_up_run["command"])
 
     assert result.exit_code == 0, result.output
-    assert "final        yes: every rewrite that code set aside has a reading" in result.output
+    assert (
+        "final        yes: every case has a reply, and every rewrite that code set aside has "
+        "a reading"
+    ) in result.output
     assert re.search(
         r"  follow_up\s+3\s+3\s+0\s+3\s+0\s+2\s+0\s+1\s+1/0\s+1\.000 \(", result.output
     )
@@ -289,6 +293,28 @@ def test_eval_follow_ups_fails_when_a_case_failed_though_others_were_answered(
     assert "failed: c-aside: The model is overloaded." in result.output
     assert "replies      4 read, 1 failed, 0 not asked yet" in result.output
     assert len(results_by_case(follow_up_run["run_dir"])) == 4
+
+
+def test_eval_follow_ups_is_not_final_while_a_case_has_no_reply(
+    follow_up_run: dict[str, Any],
+) -> None:
+    model: Model = follow_up_run["model"]
+    model.fails = {"And in Finland?"}
+    assert runner.invoke(app, follow_up_run["command"]).exit_code == 1
+    run_dir = follow_up_run["run_dir"]
+    rows = results_by_case(run_dir)
+    write_reading(run_dir, "c-aside", rows["c-aside"]["reply_fingerprint"], "same")
+    write_reading(run_dir, "c-planted", rows["c-planted"]["reply_fingerprint"], "different")
+
+    result = runner.invoke(app, follow_up_run["command"])
+
+    # Every reply it has is decided, and c-words has none: no share stands for it.
+    assert result.exit_code == 1
+    assert "final        not yet: 1 case has no reply" in result.output
+    assert re.search(r"  follow_up\s+3\s+2\s+.*waits for replies", result.output)
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert (summary["final"], summary["waiting_for_readings"]) == (False, [])
+    assert summary["figures"]["follow_up"]["same"] is None
 
 
 def test_eval_follow_ups_stops_when_cases_fail_one_after_another(

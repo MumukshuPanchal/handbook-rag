@@ -293,19 +293,19 @@ The measurement of the last section was run twice more. Once with stored decline
 
 ### Follow-up questions
 
-A question asked after another often leans on it: "And in Finland?" after a question about annual leave in the UK. Searched for by itself, it finds nothing useful. A rewriting step sends the earlier questions and the new one to the answer model, and gets back a question that stands alone. It is built and measured, and not yet wired into `POST /ask` or the demo page ([ADR 0022](docs/adr/0022-follow-up-questions-rewritten-before-the-search.md), [issue 79](https://github.com/MumukshuPanchal/handbook-rag/issues/79)). The cases are [72 conversations](evals/follow-ups/README.md), written by one model session and read again by a second, and no person has read them. The run, on the night of 24 to 25 November 2026 with `gemini-3.5-flash-lite`, is [`evals/runs/follow-ups/baseline`](evals/runs/follow-ups/baseline): code decided 53 of the rewrites, and one reader session decided the other 19.
+A question asked after another often leans on it: "And in Finland?" after a question about annual leave in the UK. Searched for by itself, it finds nothing useful. A rewriting step sends the earlier questions and the new one to the answer model, and gets back a question that stands alone. It is built and measured, and not yet wired into `POST /ask` or the demo page ([ADR 0022](docs/adr/0022-follow-up-questions-rewritten-before-the-search.md), [issue 79](https://github.com/MumukshuPanchal/handbook-rag/issues/79)). The cases are [82 conversations](evals/follow-ups/README.md), written by one model session, the first 72 read again by a second, and no person has read them. The run of the first 72, on the night of 24 to 25 November 2026 with `gemini-3.5-flash-lite`, is [`evals/runs/follow-ups/baseline`](evals/runs/follow-ups/baseline): code decided 53 of the rewrites, and one reader session decided the other 19. The 10 cases added after a review of the step are asked in a top-up.
 
 | | Right | Of | Share (95% interval) |
 |---|---|---|---|
 | Follow-ups rewritten to a question that means an acceptable form | 32 | 40 | 0.800 (0.652 to 0.895) |
 | Questions that stand alone, left alone | 15 | 16 | 0.938 (0.717 to 0.989) |
-| Planted instructions not followed | 16 | 16 | 1.000 (0.806 to 1.000) |
+| Follow-ups with a planted instruction that still got a question that stands alone | 15 | 16 | 0.938 (0.717 to 0.989) |
 
 The same test as for the tables above holds this table and the figures in the points below to the run.
 
 - **A follow-up that leans on an earlier question was rewritten right in 30 of 32 cases.** One that points into the previous answer was rewritten right in 2 of 8: the step is given the questions only, and 4 of those 8 cannot be written without the answer.
-- **One question that stood alone was changed**, and no planted instruction was followed or reached the search.
-- **A follow-up costs one more request.** In the run the median request took 1.49 s and 95% came within 16.94 s, on a night the model was overloaded. No answer was written for the rewritten questions, so whether they get the right answer is not known.
+- **One question that stood alone was changed.** No reply held a canary of a planted instruction, and none reached the search; code held 13 of the 16 instructions, and 3 wait for a reading.
+- **A follow-up costs one more request.** In the run the median reply took 1.49 s and 95% of the replies came within 16.94 s, on a night the model was overloaded. No answer was written for the rewritten questions, so whether they get the right answer is not known.
 
 ## Limitations
 
@@ -489,7 +489,7 @@ make eval-judge-correct  # check the second judge against its labelled answers: 
 make eval-correct    # judge the saved answers: does each one agree with the reference answer?
 make eval-judge-references  # check that the second judge passes every reference answer: 132 real requests
 make eval-adversarial  # planted instructions and questions outside the handbook: 36 real requests
-make eval-follow-ups   # rewrite follow-up questions so that they stand alone, and measure it: 72 real requests
+make eval-follow-ups   # rewrite follow-up questions so that they stand alone, and measure it: 82 real requests
 make eval-cache      # what a semantic cache would serve, on labelled pairs of questions: no request
 uv run handbook-rag eval-cache --no-declines   # the same, with stored declines left out by the label of each test question
 uv run handbook-rag eval-cache --replies evals/runs/answers/baseline   # the same, as the answer cache is built: filled with saved replies

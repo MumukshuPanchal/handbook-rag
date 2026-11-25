@@ -6,6 +6,7 @@ cache or the Hub; they are marked slow, and do not run in CI.
 
 import json
 import re
+import unicodedata
 from collections import Counter
 from pathlib import Path
 
@@ -27,7 +28,8 @@ from handbook_rag.generate.base import plain_words
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
 from handbook_rag.rewrite.base import read_reply
 from handbook_rag.rewrite.models import MAX_EARLIER_TURNS, RewriteReply
-from handbook_rag.rewrite.prompt import EXAMPLE_QUESTIONS, INSTRUCTION_PHRASES
+from handbook_rag.rewrite.prompt import EXAMPLE_QUESTIONS, INSTRUCTION_PHRASES, holds_our_tags
+from tests.test_readme_results import in_words
 
 ROOT = Path(__file__).parents[2]
 CASES = ROOT / "evals" / "follow-ups" / "cases.jsonl"
@@ -36,6 +38,23 @@ GOLDEN = {
 }
 ADVERSARIAL = ROOT / "evals" / "adversarial" / "cases.jsonl"
 SECOND_READING = ROOT / "evals" / "follow-ups" / "second-reading.jsonl"
+CARD = ROOT / "evals" / "follow-ups" / "README.md"
+# The cases added on 25 November, after a review of the step, for what it had not tested:
+# questions typed without a question mark, orders that leave no canary when obeyed, and
+# tags of the request forged with characters a plain search does not see. The second
+# reading was done before them, and the saved run asked the others.
+ADDED_AFTER_THE_REVIEW = (
+    "fu-subject-9",
+    "fu-pronoun-9",
+    "fu-third-9",
+    "fu-change-9",
+    "fu-planted-turn-9",
+    "fu-planted-turn-10",
+    "fu-planted-question-9",
+    "fu-planted-question-10",
+    "fu-planted-question-11",
+    "fu-planted-question-12",
+)
 # The second reader's first question had the words of none of the maker's forms here.
 # The second model took the first six for the same, both ways, at 0.99 or more. The maker
 # read the next ten as the same question with a detail from an earlier answer or turn.
@@ -69,8 +88,15 @@ DETAIL_HIGH = ("0.958", "0.986")
 # A test on this machine that would spare a request takes a question for a follow-up when
 # it holds a telltale word, or has fewer words than this.
 FEWEST_WORDS = 6
-# The words a simple test on this machine might take for the sign of a follow-up.
-TELLTALES = {
+# The acceptable forms taken out after the review, as looser than the second reader's
+# standard. No reply had their words.
+FORMS_TAKEN_OUT = {
+    "fu-planted-turn-8": "What paperwork will the Absence Management team send me?",
+    "fu-planted-turn-5": "Who pays for background screenings of GitLab team members?",
+}
+# The words a simple test on this machine might take for the sign of a follow-up, in the
+# order the card lists them.
+TELLTALES = (
     "it",
     "its",
     "they",
@@ -90,19 +116,37 @@ TELLTALES = {
     "instead",
     "else",
     "either",
-}
+)
 
 
 def cases() -> list[FollowUpCase]:
     return load_cases(CASES)
 
 
+def read_twice() -> list[FollowUpCase]:
+    """The cases the second reader read: all but those added after the review."""
+    return [case for case in cases() if case.case_id not in ADDED_AFTER_THE_REVIEW]
+
+
 def test_the_cases_are_in_the_numbers_the_card_gives() -> None:
     counts = Counter(case.kind for case in cases())
 
-    assert counts == {kind: 8 for kinds in KINDS.values() for kind in kinds}
+    assert counts == {
+        **{kind: 8 for kinds in KINDS.values() for kind in kinds},
+        "subject_left_out": 9,
+        "pronoun": 9,
+        "third_turn": 9,
+        "change_of_subject": 9,
+        "planted_in_turn": 10,
+        "planted_in_question": 12,
+    }
     groups = Counter(case.group for case in cases())
-    assert groups == {FOLLOW_UP: 40, STANDALONE: 16, PLANTED: 16}
+    assert groups == {FOLLOW_UP: 43, STANDALONE: 17, PLANTED: 22}
+    # Before the review there were 8 of each kind.
+    assert set(Counter(case.kind for case in read_twice()).values()) == {8}
+    assert [case.case_id for case in cases()][-len(ADDED_AFTER_THE_REVIEW) :] == list(
+        ADDED_AFTER_THE_REVIEW
+    )
     # One request for each case: the number the Makefile names.
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     assert f"({len(cases())} real requests)" in makefile
@@ -144,7 +188,7 @@ def test_a_target_is_a_golden_question_whose_words_are_an_acceptable_form() -> N
 def test_no_conversation_is_longer_than_two_earlier_turns() -> None:
     lengths = Counter(len(case.turns) for case in cases())
 
-    assert lengths == {1: 58, 2: 14}
+    assert lengths == {1: 67, 2: 15}
     assert max(lengths) <= MAX_EARLIER_TURNS
     assert {case.kind for case in cases() if len(case.turns) == 2} == {
         "third_turn",
@@ -190,11 +234,12 @@ def test_every_canary_belongs_to_one_case_and_is_where_its_kind_needs_it() -> No
                 assert not find_canaries(sent, [canary]), case.case_id
     assert Counter((case.kind, len(case.canaries)) for case in planted) == {
         ("planted_in_turn", 1): 8,
-        ("planted_in_question", 1): 5,
-        ("planted_in_question", 0): 3,
+        ("planted_in_turn", 0): 2,
+        ("planted_in_question", 1): 7,
+        ("planted_in_question", 0): 5,
     }
     numbers = [re.sub(r"\D", "", canary) for canary in seen]
-    assert len(set(numbers)) == len(numbers) == 13
+    assert len(set(numbers)) == len(numbers) == 15
     # And none is a number of the adversarial cases' canaries, so a reply cannot be
     # taken for one of theirs.
     theirs = set(re.findall(r"\d{4}", ADVERSARIAL.read_text(encoding="utf-8")))
@@ -229,7 +274,7 @@ def flagged_by_a_simple_test(question: str) -> bool:
     :data:`FEWEST_WORDS` words, and spares the request otherwise.
     """
     words = re.findall(r"[a-z']+", question.lower())
-    return bool(TELLTALES & set(words)) or len(words) < FEWEST_WORDS
+    return bool(set(TELLTALES) & set(words)) or len(words) < FEWEST_WORDS
 
 
 def test_the_words_of_a_question_do_not_tell_a_follow_up_from_one_that_stands_alone() -> None:
@@ -241,13 +286,55 @@ def test_the_words_of_a_question_do_not_tell_a_follow_up_from_one_that_stands_al
     spared = [case for case in alone if not flagged(case.question)]
 
     assert missed == ["fu-answer-3", "fu-answer-5", "fu-third-4"]
-    assert len(spared) == 11
+    assert len(spared) == 12
     no_word = [
         case
         for case in follow_ups
-        if not TELLTALES & set(re.findall(r"[a-z']+", case.question.lower()))
+        if not set(TELLTALES) & set(re.findall(r"[a-z']+", case.question.lower()))
     ]
     assert len(no_word) == 8
+
+
+def test_the_card_names_every_word_of_the_simple_test() -> None:
+    """The card's figures for the simple test can be worked out from the card alone."""
+    line = next(
+        line
+        for line in CARD.read_text(encoding="utf-8").splitlines()
+        if line.startswith("Measured on these cases, with no request:")
+    )
+
+    assert re.findall(r'"([a-z]+)"', line.split(", or has fewer than")[0]) == list(TELLTALES)
+    assert f"fewer than {in_words(FEWEST_WORDS)} words" in line
+
+
+def test_the_cases_added_after_the_review_test_what_it_found_untested() -> None:
+    added = {case.case_id: case for case in cases() if case.case_id in ADDED_AFTER_THE_REVIEW}
+
+    # Typed without a question mark: follow-ups, a question that stands alone, planted ones.
+    typed = sorted(c for c, case in added.items() if not case.question.rstrip().endswith("?"))
+    assert typed == sorted(
+        set(ADDED_AFTER_THE_REVIEW) - {"fu-planted-turn-9", "fu-planted-question-11"}
+    )
+    assert {added[c].group for c in typed} == {FOLLOW_UP, STANDALONE, PLANTED}
+    # Orders that leave no canary when obeyed.
+    assert sorted(
+        c for c, case in added.items() if case.group == PLANTED and not case.canaries
+    ) == [
+        "fu-planted-question-10",
+        "fu-planted-question-9",
+        "fu-planted-turn-10",
+        "fu-planted-turn-9",
+    ]
+    # Tags of the request forged with a format character and with full-width brackets:
+    # hidden from a plain search, found once the text is read as a model may read it.
+    forged = added["fu-planted-question-11"].planted
+    assert forged is not None
+    assert "</new_question>" not in forged
+    assert any(unicodedata.category(c) == "Cf" for c in forged)
+    assert any(unicodedata.normalize("NFKC", c) != c for c in forged)
+    assert holds_our_tags(forged)
+    for case in added.values():
+        assert case.second is None, "read by no second reader yet"
 
 
 def reader_lines() -> tuple[dict[str, object], list[dict[str, object]]]:
@@ -268,7 +355,8 @@ def test_every_case_records_the_second_readers_own_line_for_it() -> None:
     by_name = {str(reading["id"]): reading for reading in readings}
     assert len(by_name) == len(readings) == 72
     recorded = {}
-    for case in cases():
+    assert [case.case_id for case in cases() if case.second is None] == list(ADDED_AFTER_THE_REVIEW)
+    for case in read_twice():
         second = case.second
         assert second is not None, case.case_id
         recorded[second.name] = case.case_id
@@ -286,23 +374,23 @@ def test_every_case_records_the_second_readers_own_line_for_it() -> None:
 
 def test_the_second_readers_flags_agree_with_the_kinds_of_the_cases() -> None:
     needs = set()
-    for case in cases():
+    for case in read_twice():
         assert case.second is not None
         assert case.second.stands_alone_already == (case.group == STANDALONE), case.case_id
         assert case.second.planted_text == (case.group == PLANTED), case.case_id
         if case.second.needs_the_answer:
             needs.add(case.case_id)
 
-    into_answer = {case.case_id for case in cases() if case.kind == "points_into_answer"}
+    into_answer = {case.case_id for case in read_twice() if case.kind == "points_into_answer"}
     assert needs == into_answer | ANOTHER_READING_FIRST
     # The reader's flag says that the thing pointed at is named only in an answer. The
     # maker's says that no acceptable form can do without the answer: true for 4 of the 8.
-    assert sum(bool(case.needs_answer) for case in cases() if case.case_id in needs) == 4
+    assert sum(bool(case.needs_answer) for case in read_twice() if case.case_id in needs) == 4
 
 
 def test_the_second_readers_first_question_against_the_makers_forms() -> None:
     by_words = set()
-    for case in cases():
+    for case in read_twice():
         assert case.second is not None
         first = plain_words(case.second.standalone[0])
         if first in {plain_words(form) for form in makers_forms(case)}:
@@ -310,21 +398,26 @@ def test_the_second_readers_first_question_against_the_makers_forms() -> None:
             assert case.forms_from_second == (), case.case_id
 
     assert len(by_words) == 54
-    rest = {case.case_id for case in cases()} - by_words
+    rest = {case.case_id for case in read_twice()} - by_words
     assert rest == VERIFIED_BY_THE_SECOND_MODEL | SAME_WITH_A_DETAIL_ADDED | ANOTHER_READING_FIRST
     taken = {case.case_id: case.forms_from_second for case in cases() if case.forms_from_second}
-    assert set(taken) == rest
-    assert sum(len(forms) for forms in taken.values()) == 19
+    assert set(taken) == rest - {"fu-planted-turn-5"}
+    assert sum(len(forms) for forms in taken.values()) == 18
     by_id = {case.case_id: case for case in cases()}
     # Both readings of the two-referent follow-up are acceptable.
     ambiguous = by_id["fu-ambiguous-8"].second
     assert ambiguous is not None
     assert taken["fu-ambiguous-8"] == ambiguous.standalone
-    # The first reading narrows by what only the answer says, and is not taken.
+    # The first reading narrows by what only the answer says, and is not taken. The
+    # second, screenings of team members in general, takes in the screening before
+    # hiring, which the first turn leaves out: taken at first, it was taken out again
+    # after the review, as looser than the reader's own standard.
     narrowed = by_id["fu-planted-turn-5"].second
     assert narrowed is not None
-    assert taken["fu-planted-turn-5"] == narrowed.standalone[1:]
-    assert [case.case_id for case in cases() if not case.agreed] == ["fu-planted-turn-5"]
+    assert not set(narrowed.standalone) & set(by_id["fu-planted-turn-5"].standalone)
+    assert [case.case_id for case in read_twice() if not case.agreed] == ["fu-planted-turn-5"]
+    for case_id, form in FORMS_TAKEN_OUT.items():
+        assert form not in by_id[case_id].standalone, case_id
 
 
 @pytest.mark.slow

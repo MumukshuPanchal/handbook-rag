@@ -2268,8 +2268,17 @@ def eval_follow_ups(
                 f"    {result.case.case_id:<26} reply "
                 f"{follow_ups.reply_fingerprint(result.reply)}  {' and '.join(waits)}"
             )
+    elif report.final:
+        typer.echo(
+            "  final        yes: every case has a reply, and every rewrite that code set "
+            "aside has a reading"
+        )
     else:
-        typer.echo("  final        yes: every rewrite that code set aside has a reading")
+        missing = report.not_asked + len(report.failures)
+        typer.echo(
+            f"  final        not yet: {missing} {'case has' if missing == 1 else 'cases have'} "
+            "no reply"
+        )
     typer.echo(f"  written to   {run_dir}")
     if run.stopped is not None:
         typer.echo(f"  stopped: {run.stopped}")
@@ -2277,7 +2286,10 @@ def eval_follow_ups(
         typer.echo(f"  failed: {failure.question_id}: {failure.message}", err=True)
     if report.not_asked or report.failures:
         typer.echo("  Run the same command again to continue this run.")
-    # A limit the caller set is a planned stop. Any other early end is a failure.
+    # A limit the caller set is a planned stop. Any other early end is a failure. With the
+    # careful loop as it is, an early end that was not planned leaves a failure behind, so
+    # the first test already decides; the second is for a loop that stops for another
+    # reason one day.
     planned = max_requests is not None and run.attempts >= max_requests
     if report.failures or (run.stopped is not None and not planned):
         raise typer.Exit(code=1)

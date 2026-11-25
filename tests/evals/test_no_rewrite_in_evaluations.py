@@ -59,9 +59,19 @@ def rewrite_names(tree: ast.Module) -> set[str]:
 
 
 def definitions(tree: ast.Module) -> dict[str, ast.AST]:
-    """The top-level functions and classes of a module, and the methods of its classes, by
-    name: a method as ``Class.method``."""
-    found: dict[str, ast.AST] = {}
+    """The top-level functions and classes of a module, the methods of its classes, by
+    name, a method as ``Class.method``, and the code at the module's own level, as
+    ``<module>``: it runs when the module is imported, for every command."""
+    found: dict[str, ast.AST] = {
+        "<module>": ast.Module(
+            body=[
+                node
+                for node in tree.body
+                if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+            ],
+            type_ignores=[],
+        )
+    }
     for node in tree.body:
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             found[node.name] = node
@@ -131,6 +141,8 @@ def test_no_evaluation_command_but_eval_follow_ups_reaches_anything_that_rewrite
 
     assert "ask" not in reached
     assert "eval_follow_ups" not in reached
+    # The command line's own module-level code runs for every command, evaluations too.
+    assert not names_in(definitions(tree)["<module>"]) & names
     for name in sorted(reached):
         function = functions[name]
         assert not names_in(function) & names, name
@@ -178,6 +190,9 @@ def test_the_checks_above_find_a_rewrite_however_it_is_reached() -> None:
     )
     found = definitions(ast.parse(in_a_class))
     assert names_in(found["Runner.go"]) & REWRITE_NAMES
+    # At the module's own level, where it runs on import.
+    at_module_level = "from handbook_rag import wiring\nREWRITER = wiring.make_rewriter(s)\n"
+    assert names_in(definitions(ast.parse(at_module_level))["<module>"]) & REWRITE_NAMES
     assert "Runner" in names_in(found["eval_answers"])
     assert names_in(found["Runner"]) & REWRITE_NAMES
     calls = "def f():\n    answer_question(q, earlier=e)\n    answer_question(q, **o)\n"

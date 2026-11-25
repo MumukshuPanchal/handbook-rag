@@ -387,8 +387,10 @@ class Settings(BaseSettings):
         le=600,
         description=(
             "How long the rewriting step may wait in each phase of its one request: to "
-            "connect, to send, and for each read of the reply, which is not streamed and "
-            "so comes in one read once the model has finished. It is asked once, "
+            "connect, to send, and for each read of the reply. The reply is not streamed: "
+            "the client asks for it whole, and the limit bounds each wait for more of it, "
+            "the first of which lasts while the model writes, and not the sum of the "
+            "waits. It is asked once, "
             "with no retry and no fallback model: when it fails or runs out of time, the "
             "question is searched for as it was typed, and the reply says so. In the "
             "measurement, on an evening the model was overloaded, the median reply took "

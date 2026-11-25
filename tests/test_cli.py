@@ -4617,3 +4617,27 @@ def test_ask_puts_the_words_of_a_failed_rewrite_on_the_error_output(
     assert f"note: rewriting the follow-up failed: {secret}" in result.stderr
     assert secret not in result.stdout
     assert "because it failed (configuration)" in result.stdout
+
+
+@pytest.mark.parametrize("invisible", ["​", "﻿", "   "])
+def test_ask_with_earlier_questions_that_hold_no_letter_says_nothing_of_follow_ups(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: FakeEmbedder, invisible: str
+) -> None:
+    from handbook_rag.pipeline import FollowUps
+    from tests.rewrite.support import replying
+
+    model, rewriter = AskedCanned(), replying("How many weeks of parental leave do I get?")
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", lambda _settings: model)
+    monkeypatch.setattr(
+        "handbook_rag.wiring.make_follow_ups", lambda _settings: FollowUps(rewriter)
+    )
+    runner.invoke(app, ["index"])
+
+    result = runner.invoke(app, ["ask", "--earlier", invisible, "how many weeks of leave"])
+
+    assert result.exit_code == 0, result.output
+    # No earlier question was given, so there is nothing to say: follow-ups are not off.
+    assert "switched off" not in result.output
+    assert "Searched for" not in result.output
+    assert rewriter.calls == []
+    assert model.asked == ["how many weeks of leave"]

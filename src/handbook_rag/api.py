@@ -318,7 +318,8 @@ class SearchedQuestion(BaseModel):
     outcome: Outcome = Field(
         description=(
             "How the rewriting step came to the question. not_asked: no earlier question "
-            "was sent, or follow-ups are switched off, so no model was asked. unchanged: "
+            "was sent, every earlier question sent held no letter or digit, or follow-ups "
+            "are switched off, so no model was asked. unchanged: "
             "the model gave the question back. rewritten: the model gave another question, "
             "which passed the step's checks. unusable: the model's reply did not pass "
             "them. failed: the request failed or ran out of time. After unusable and "

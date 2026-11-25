@@ -36,6 +36,7 @@ Commit types used here:
 ## Conventions
 
 - **Tests.** New behaviour comes with tests. Tests live in `tests/` and must not depend on the developer's machine, such as a local `.env` file or network access. A test that loads a real model is marked `slow` and runs with `make test-slow`; everything else runs offline in seconds, using small stand-ins for the model and Qdrant's in-memory mode.
+- **The demo page's script.** Its tests in `tests/test_demo_behaviour.py` run it with `node` (18 or later), which is the one thing they need beyond Python; where `node` is missing they are skipped, and the skip names the reason.
 - **Numbers in the README.** `tests/test_readme_results.py` compares the README's result tables with the runs under `evals/runs/`, and checks its links. A link to an issue or a pull request must name a number from the two lists at the top of that test, because a test cannot ask GitHub: when the README links a new one, add its number there.
 - **Settings.** Configuration goes through `handbook_rag.config.Settings`. Nothing else reads environment variables. Every new setting is added to `.env.example`.
 - **Secrets.** Nothing secret is committed. `.env` is ignored by git, and a hook scans each commit for credentials.

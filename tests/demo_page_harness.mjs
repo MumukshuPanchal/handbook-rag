@@ -154,6 +154,8 @@ async function step(name, question, reply) {
     searchedLine: page.searched.textContent,
     searchedHidden: page.searched.hidden,
     failure: page.failure.textContent,
+    listed: page.conversation.children.map((item) => item.textContent),
+    listHidden: page.conversationArea.hidden,
   });
 }
 
@@ -162,14 +164,33 @@ const REWRITTEN = "How many days of paid annual leave do team members in Finland
 
 await step("first", FIRST, answered(FIRST, FIRST, "not_asked"));
 await step("rewritten", "and in finland", answered("and in finland", REWRITTEN, "rewritten"));
+await step(
+  "failed rewrite",
+  "and in spain",
+  stream([
+    ["searched", searched("and in spain", "and in spain", "failed", { failure: "timeout", requests: 1 })],
+    ["text", { text: "Sixteen weeks." }],
+    ["answer", answer(searched("and in spain", "and in spain", "failed", { failure: "timeout", requests: 1 }))],
+  ]),
+);
+await step("unusable rewrite", "and in italy", answered("and in italy", "and in italy", "unusable"));
 await step("given back", "Who approves it?", answered("Who approves it?", "Who approves it?", "unchanged"));
 await step(
   "error after text",
-  "and in spain",
+  "and in portugal",
   stream([
-    ["searched", searched("and in spain", "How many days in Spain?", "rewritten")],
+    ["searched", searched("and in portugal", "How many days in Portugal?", "rewritten")],
     ["text", { text: "Sixteen" }],
     ["error", { detail: "The answer model is unavailable. Try again later." }],
+  ]),
+);
+await step(
+  "unreadable answer",
+  "and in france",
+  stream([
+    ["searched", searched("and in france", "How many days in France?", "rewritten")],
+    ["text", { text: "Sixteen" }],
+    ["answer", { broken: true }],
   ]),
 );
 await step("refused", "and in ireland", [

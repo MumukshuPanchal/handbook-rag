@@ -61,12 +61,20 @@ def faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         found.append("the side search is not run on the question searched for")
     if rewritten["searchedLine"] != f"Searched for: {REWRITTEN}" or rewritten["searchedHidden"]:
         found.append("a rewritten follow-up does not say what was searched for")
+    for name, words, fault in (
+        ("failed rewrite", "the request to rewrite it failed", "failed"),
+        ("unusable rewrite", "the rewritten question could not be used", "was not usable"),
+    ):
+        if words not in steps[name]["searchedLine"] or steps[name]["searchedHidden"]:
+            found.append(f"a follow-up whose rewrite {fault} does not say so")
+    if steps["unusable rewrite"]["conversation"][-2:] != ["and in spain", "and in italy"]:
+        found.append("a follow-up searched for as typed is not kept as typed")
     given_back = steps["given back"]
     if given_back["searchedLine"] != "" or not given_back["searchedHidden"]:
         found.append("a line about the question searched for is left showing")
     if steps["refused"]["searchedLine"] != "" or not steps["refused"]["searchedHidden"]:
         found.append("a refused question leaves the last line about the search showing")
-    for failed in ("error after text", "refused"):
+    for failed in ("error after text", "unreadable answer", "refused"):
         if steps[failed]["conversation"] != given_back["conversation"]:
             found.append(f"a turn that failed ({failed}) is added to the conversation")
         if steps[failed]["failure"] == "":
@@ -81,6 +89,11 @@ def faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         found.append('"Start a new conversation" does not forget the conversation')
     if steps["asked by itself"]["sentEarlier"] != []:
         found.append("a question after a new conversation is sent with earlier questions")
+    for name, step in steps.items():
+        if step["listed"] != step["conversation"]:
+            found.append(f"the list on the page is not the conversation ({name})")
+        if step["listHidden"] != (step["conversation"] == []):
+            found.append(f"the list on the page is hidden or shown wrongly ({name})")
     return found
 
 
@@ -130,6 +143,31 @@ def test_a_conversation_on_the_page_does_what_the_documents_say(tmp_path: Path) 
             "the earlier questions sent are not the conversation",
             "const earlier = conversation.slice(-EARLIER_SENT);",
             "const earlier = [];",
+        ),
+        (
+            "a follow-up whose rewrite failed does not say so",
+            'if (searched.outcome === "failed" || searched.outcome === "unusable") {',
+            "if (false) {",
+        ),
+        (
+            "a follow-up whose rewrite was not usable does not say so",
+            'if (searched.outcome === "failed" || searched.outcome === "unusable") {',
+            'if (searched.outcome === "failed") {',
+        ),
+        (
+            "a turn that failed (unreadable answer) is added to the conversation",
+            "  if (!isAnswer(data)) {\n    fail(UNREADABLE_ANSWER);\n    return false;",
+            "  if (!isAnswer(data)) {\n    fail(UNREADABLE_ANSWER);\n    return true;",
+        ),
+        (
+            "the list on the page is not the conversation (rewritten)",
+            "  page.conversation.replaceChildren(",
+            "  [].push(",
+        ),
+        (
+            "the list on the page is hidden or shown wrongly (new conversation)",
+            "page.conversationArea.hidden = conversation.length === 0;",
+            "page.conversationArea.hidden = false;",
         ),
     ],
 )

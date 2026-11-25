@@ -29,7 +29,8 @@ Outcome = Literal["not_asked", "unchanged", "rewritten", "unusable", "failed"]
 
 - ``not_asked``: there were no earlier turns, so no model was asked. The entry point of an
   answer says the same when it was given no rewriting step, as when follow-ups are
-  switched off (``pipeline.py``).
+  switched off, and when every earlier question it was given held no letter or digit
+  (``pipeline.py``).
 - ``unchanged``: the model gave the question back with the words it had.
 - ``rewritten``: the model gave another question, and it passed every check.
 - ``unusable``: the model replied, and the reply was not one usable question.

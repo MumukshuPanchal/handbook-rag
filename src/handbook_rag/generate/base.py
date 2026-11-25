@@ -122,10 +122,13 @@ def is_answered(segments: Sequence[Segment], *, refused: bool) -> bool:
     """Whether the assistant gave an answer, as opposed to declining or being stopped.
 
     ``refused`` is the generator's own signal that the reply was withheld or did not
-    come to a proper end. Otherwise the reply is a decline in two cases:
+    come to a proper end. Otherwise the reply is a decline in three cases:
 
     - It is the fixed sentence and nothing else, even if the model attached a citation
       to it.
+    - Each citation it carries follows the fixed sentence (:func:`cites_the_decline`),
+      whatever else it holds: what it cites is that the handbook lacks the answer, as in
+      "I could not find this in the handbook. [1]" with another line after it.
     - It contains the fixed sentence and cites nothing. An answer that covers part of
       the question may use the sentence for the part it could not find, and still cites
       what it did find.
@@ -141,8 +144,21 @@ def is_answered(segments: Sequence[Segment], *, refused: bool) -> bool:
     declined = _words(NOT_FOUND_MESSAGE)
     if said == declined:
         return False
+    cited = [segment for segment in segments if segment.citations and _words(segment.text)]
+    if cited and all(cites_the_decline(segment) for segment in cited):
+        return False
     has_citations = any(segment.citations for segment in segments)
     return has_citations or declined not in said
+
+
+def cites_the_decline(segment: Segment) -> bool:
+    """Whether a segment carries a citation that follows the fixed declining sentence.
+
+    A citation closes a segment, so the words just before it are the end of the segment.
+    Compared as in :func:`is_answered`.
+    """
+    words, declined = _words(segment.text), _words(NOT_FOUND_MESSAGE)
+    return bool(segment.citations) and (words == declined or words.endswith(f" {declined}"))
 
 
 def holds_the_decline(segments: Sequence[Segment]) -> bool:
@@ -170,17 +186,22 @@ def only_the_gap_form(text: str) -> bool:
     """Whether a text is nothing but pieces in the fixed form for a part the passages do not
     answer, so that it states no answer at all.
 
-    The text is cut at line breaks; after a full stop, a question mark, an exclamation
-    mark, a colon or a semicolon; and before "but". A list marker at the start of a piece
-    is left out. Every piece that holds a word must begin with the form, so that "… do not
-    say more than this: new parents get sixteen weeks" and "… do not say who pays, but
-    leave is sixteen weeks" are not taken for it. Words are compared as in
+    A list marker at the start of a line is left out first. The text is then cut at line
+    breaks; after a full stop, a question mark, an exclamation mark, a colon or a
+    semicolon; and before "but". Every piece that holds a word must begin with the form,
+    so that "… do not say more than this: new parents get sixteen weeks" and "… do not say
+    who pays, but leave is sixteen weeks" are not taken for it. Words are compared as in
     :func:`is_answered`. A piece cut in a wrong place (after "e.g.") does not begin with the
     form, and the text is then not taken for one: it stays a reply for the checks to read,
     which errs towards a note.
+
+    A claim joined into the same piece by any other word or mark ("… do not say who pays,
+    and leave is sixteen weeks", "although", a dash) is not cut off, and the text is taken
+    for the form alone. That is a limit: such a reply is shown as the fixed declining
+    sentence with no note, and its words are kept for an evaluation to read.
     """
     form = _words(GAP_FORM)
-    pieces = (_LIST_MARKER.sub("", part) for part in _SENTENCE_BREAK.split(text.strip()))
+    pieces = _SENTENCE_BREAK.split(_LIST_MARKER.sub("", text.strip()))
     sentences = [_words(piece) for piece in pieces]
     spoken = [sentence for sentence in sentences if sentence]
     return bool(spoken) and all(
@@ -225,11 +246,12 @@ def plain_words(text: str) -> str:
 
 # Where one piece of a reply ends and the next begins, for finding the fixed form alone: a
 # line break; a full stop, a question mark, an exclamation mark, a colon or a semicolon
-# followed by white space, but not the stop of a list's number, such as "1."; or "but",
+# followed by white space, also after a digit ("rule 2. New parents ..."); or "but",
 # with a comma before it or not.
-_SENTENCE_BREAK = re.compile(r"\n+|(?<=[.!?:;])(?<!\d\.)\s+|,?\s+but\s+", re.IGNORECASE)
-# A list marker at the start of a piece: a bullet, or a number with a stop or a bracket.
-_LIST_MARKER = re.compile(r"^\s*(?:[-*+]|\d{1,3}[.)])\s+")
+_SENTENCE_BREAK = re.compile(r"\n+|(?<=[.!?:;])\s+|,?\s+but\s+", re.IGNORECASE)
+# A list marker at the start of a line: a bullet, or a number with a stop or a bracket.
+# Taken out before the text is cut, so that the stop of "1." does not end a piece.
+_LIST_MARKER = re.compile(r"^[ \t]*(?:[-*+]|\d{1,3}[.)])[ \t]+", re.MULTILINE)
 
 
 def _words(text: str) -> str:

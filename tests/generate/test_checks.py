@@ -15,6 +15,7 @@ from handbook_rag.evals.adversarial import INSTRUCTION_CANARIES, find_canaries
 from handbook_rag.generate import checks, markers
 from handbook_rag.generate.base import (
     holds_the_gap_form,
+    is_answered,
     only_the_gap_form,
     read_the_gap_form_as_a_decline,
 )
@@ -574,3 +575,38 @@ def test_a_boundary_code_the_question_or_a_title_holds_is_drawn_again(
 def test_the_gap_form_is_found_only_as_whole_words() -> None:
     assert not holds_the_gap_form([Segment("The passages found do not saying much.")])
     assert holds_the_gap_form([Segment(f"Sixteen weeks. {GAP_FORM} who pays.")])
+
+
+@pytest.mark.parametrize(
+    ("segments", "answered"),
+    [
+        ((cited(NOT_FOUND_MESSAGE, LEAVE), Segment(" Ask payroll.")), False),
+        ((cited(f"Ask payroll. {NOT_FOUND_MESSAGE}", LEAVE),), False),
+        ((cited(f"**{NOT_FOUND_MESSAGE}**", LEAVE), cited(NOT_FOUND_MESSAGE, LAPTOP)), False),
+        ((cited("Sixteen weeks.", LEAVE), cited(NOT_FOUND_MESSAGE, LAPTOP)), True),
+        ((cited(f"{NOT_FOUND_MESSAGE} Sixteen weeks.", LEAVE),), True),
+        ((cited("", LEAVE), Segment(f"Sixteen weeks. {NOT_FOUND_MESSAGE}")), True),
+        # A marker with no words before it says nothing either way.
+        ((cited("", LEAVE), cited(NOT_FOUND_MESSAGE, LAPTOP), Segment(" Ask payroll.")), False),
+    ],
+)
+def test_a_reply_whose_every_citation_follows_the_decline_is_not_an_answer(
+    segments: tuple[Segment, ...], answered: bool
+) -> None:
+    assert is_answered(segments, refused=False) is answered
+
+
+def test_a_citation_that_follows_the_decline_is_held_back_and_all_after_it() -> None:
+    received: list[str] = []
+    held = HeldBack(received.append)
+
+    held.closed_so_far([cited("Sixteen weeks.", LEAVE)])
+    held.closed_so_far(
+        [
+            cited("Sixteen weeks.", LEAVE),
+            cited(f" {NOT_FOUND_MESSAGE}", LAPTOP),
+            cited(" Ask.", LEAVE),
+        ]
+    )
+
+    assert received == ["Sixteen weeks."]

@@ -39,7 +39,7 @@ from handbook_rag.evals.stage import (
     write_json,
 )
 from handbook_rag.generate.base import GenerationError, only_the_gap_form
-from handbook_rag.generate.checks import CITES_NOTHING
+from handbook_rag.generate.checks import CITES_NOTHING, DECLINED, WORDS_BESIDE_A_DECLINE
 from handbook_rag.generate.models import Answer, ReplyCheck
 from handbook_rag.index.store import VectorStoreError
 from handbook_rag.ingest.models import Chunk, Document
@@ -60,6 +60,9 @@ METRICS: list[dict[str, str]] = [
 METRIC_IDS = tuple(metric["id"] for metric in METRICS)
 
 ANSWERS_FILE = "answers.jsonl"
+CHANGED_REPLIES_FILE = "changed-replies.jsonl"
+"""The replies to questions the handbook answers that a check changed or that were read as
+the fixed form, for a reader (:func:`changed_replies`)."""
 RUN_FILE = "run.json"
 
 
@@ -627,6 +630,53 @@ def _summarise_groups(
     return {name: _summarise(members) for name, members in sorted(groups.items())}
 
 
+def model_words(record: AnswerRecord) -> str:
+    """The words the model wrote, as far as a saved reply keeps them.
+
+    Exact for a reply read as the fixed form, for one a check declined and for one shown as
+    the fixed declining sentence in place of its words: the saved run keeps them whole.
+    Otherwise the reply as shown, with the words each check took out after it: lines a
+    check dropped stood somewhere after the reply's last citation, not always at its end.
+    """
+    if record.model_text:
+        return record.model_text
+    for check in record.checks:
+        if check.action == DECLINED or check.name == WORDS_BESIDE_A_DECLINE:
+            return check.removed
+    taken = [check.removed for check in record.checks if check.removed]
+    return "\n".join([record.text.rstrip(), *taken]) if taken else record.text
+
+
+def changed_replies(report: AnswerReport) -> list[dict[str, object]]:
+    """Every reply to a question the handbook answers that a check changed or marked, or
+    that was read as the fixed form for a missing part, as a reader is to be given it.
+
+    Each holds the question, its reference answer, the model's own words
+    (:func:`model_words`), the reply as shown, and what was done to it, and nothing of the
+    run's totals: so that a reader can say, reply by reply, whether the person lost an
+    answer the model wrote.
+    """
+    rows: list[dict[str, object]] = []
+    for item in report.scored:
+        question, record = item.question, item.record
+        if question.type != "answerable" or not (record.checks or record.model_text):
+            continue
+        done = [f"{check.name}: {check.action}" for check in record.checks]
+        if record.model_text:
+            done.append("read as the fixed form for a missing part: shown as the decline")
+        rows.append(
+            {
+                "question_id": question.id,
+                "question": question.question,
+                "reference_answer": question.reference_answer,
+                "model_words": model_words(record),
+                "reply_as_shown": record.text,
+                "done": done,
+            }
+        )
+    return rows
+
+
 def write_answer_run(
     report: AnswerReport,
     flow_dir: Path,
@@ -701,6 +751,15 @@ def write_answer_run(
         summary["reply_checks"] = report.reply_checks
     if report.declined_in_the_gap_form:
         summary["declined_in_the_gap_form"] = report.declined_in_the_gap_form
+    # For a reader of the replies a check changed or that were read as the fixed form, on
+    # questions the handbook answers: a file of its own, without the run's totals.
+    changed = changed_replies(report)
+    if changed:
+        with (run_dir / CHANGED_REPLIES_FILE).open("w", encoding="utf-8") as output:
+            for row in changed:
+                output.write(json.dumps(row, ensure_ascii=False) + "\n")
+    else:
+        (run_dir / CHANGED_REPLIES_FILE).unlink(missing_ok=True)
     if judges:
         # For each judged score: who judged, what it cost, and how far that judge agreed
         # with labelled answers.

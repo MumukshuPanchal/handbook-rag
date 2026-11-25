@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from handbook_rag.evals.answers import (
+    CHANGED_REPLIES_FILE,
     METRIC_IDS,
     AnswerRecord,
     Passage,
@@ -18,9 +19,11 @@ from handbook_rag.evals.answers import (
     append_record,
     as_read_today,
     attempts_so_far,
+    changed_replies,
     check_run,
     in_run_order,
     load_records,
+    model_words,
     open_run,
     record_answer,
     replies_to_current_labels,
@@ -1338,3 +1341,96 @@ def test_the_time_until_the_first_words_were_passed_on_is_given_beside_the_first
     # Only the replies that recorded it: a run saved before it was recorded has none.
     assert report.timing["median_seconds_to_first_shown"] == 3.0
     assert report.timing["p95_seconds_to_first_shown"] == 4.0
+
+
+def test_the_median_and_the_95_percent_mark_of_the_first_words_passed_on() -> None:
+    many = [
+        LEAVE_QUESTION.model_copy(update={"id": f"q{n:03d}", "question": f"Question {n}?"})
+        for n in range(1, 22)
+    ]
+    by_text = {question.question: n for n, question in enumerate(many, start=1)}
+
+    def ask(question_text: str) -> Answer:
+        n = by_text[question_text]
+        answer = reply(LEAVE_QUESTION, Segment("x", (Citation(LEAVE_CHUNK),)))
+        # One slow reply pulls the mean up and leaves the median where it is.
+        return dataclasses.replace(answer, seconds_to_first_shown=100.0 if n == 21 else float(n))
+
+    report = summarise_answers(many, run_answers(many, DOCUMENTS, ask).records)
+
+    assert report.timing["median_seconds_to_first_shown"] == 11.0
+    # 95% of 21 is 19.95, so the 20th of the replies in order, not the slowest.
+    assert report.timing["p95_seconds_to_first_shown"] == 20.0
+
+
+def test_the_replies_for_a_reader_are_those_a_check_changed_or_read_as_the_fixed_form(
+    tmp_path: Path,
+) -> None:
+    dropped = ReplyCheck(
+        ADDRESS_IN_CLOSING_LINE, "dropped_line", NOTES[ADDRESS_IN_CLOSING_LINE], "See x.org/a"
+    )
+    records = {
+        LEAVE_QUESTION.id: record_answer(
+            LEAVE_QUESTION, declined_by_the_check(LEAVE_QUESTION, "Sixteen weeks."), []
+        ),
+        LAPTOP_QUESTION.id: record_answer(
+            LAPTOP_QUESTION,
+            dataclasses.replace(good_reply(LAPTOP_QUESTION), checks=(dropped,)),
+            [],
+        ),
+        # A question the handbook does not answer: not for the reader of line c.
+        PARKING_QUESTION.id: record_answer(
+            PARKING_QUESTION,
+            dataclasses.replace(declines(PARKING_QUESTION), model_text=GAP_ONLY),
+            [],
+        ),
+    }
+    report = summarise_answers(QUESTIONS, records)
+
+    rows = changed_replies(report)
+
+    assert [row["question_id"] for row in rows] == [LEAVE_QUESTION.id, LAPTOP_QUESTION.id]
+    leave, laptop = rows
+    assert leave == {
+        "question_id": LEAVE_QUESTION.id,
+        "question": LEAVE_QUESTION.question,
+        "reference_answer": LEAVE_QUESTION.reference_answer,
+        "model_words": "Sixteen weeks.",
+        "reply_as_shown": NOT_FOUND_MESSAGE,
+        "done": ["cites_nothing: declined"],
+    }
+    assert laptop["model_words"] == "One thousand dollars.\nSee x.org/a"
+    assert laptop["reply_as_shown"] == "One thousand dollars."
+    # Written beside the run, with nothing of its totals; and gone when there is none.
+    run_dir = write_answer_run(report, tmp_path, "v", "d", CONFIG, attempts=3)
+    written = [
+        json.loads(line) for line in (run_dir / CHANGED_REPLIES_FILE).read_text().splitlines()
+    ]
+    assert written == rows
+    assert "right_call" not in (run_dir / CHANGED_REPLIES_FILE).read_text()
+    empty = summarise_answers(
+        QUESTIONS,
+        {LEAVE_QUESTION.id: record_answer(LEAVE_QUESTION, good_reply(LEAVE_QUESTION), [])},
+    )
+    write_answer_run(empty, tmp_path, "v", "d", CONFIG, attempts=3)
+    assert not (run_dir / CHANGED_REPLIES_FILE).exists()
+
+
+def test_a_reply_read_as_the_fixed_form_is_given_to_the_reader_with_the_models_words() -> None:
+    gap = dataclasses.replace(declines(LEAVE_QUESTION), model_text=f"{GAP_FORM} how long.")
+    record = record_answer(LEAVE_QUESTION, gap, [])
+
+    assert model_words(record) == f"{GAP_FORM} how long."
+    (row,) = changed_replies(summarise_answers(QUESTIONS, {LEAVE_QUESTION.id: record}))
+    assert row["done"] == ["read as the fixed form for a missing part: shown as the decline"]
+    assert row["reply_as_shown"] == NOT_FOUND_MESSAGE
+
+
+def test_the_models_words_beside_a_decline_are_given_whole() -> None:
+    words = f"{NOT_FOUND_MESSAGE}\nSee https://x.org/a"
+    check = ReplyCheck("words_beside_a_decline", "dropped_words", "A note.", words)
+    record = record_answer(
+        LEAVE_QUESTION, dataclasses.replace(declines(LEAVE_QUESTION), checks=(check,)), []
+    )
+
+    assert model_words(record) == words

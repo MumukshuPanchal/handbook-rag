@@ -542,3 +542,12 @@ def test_two_final_runs_are_compared_question_by_question(tmp_path: Path) -> Non
         )
     with pytest.raises(DatasetError, match="other questions"):
         limit_questions.compare_limit_runs(earlier, write_outcomes(tmp_path / "d", {"q1": "good"}))
+
+
+def test_an_answer_with_nothing_to_judge_is_reported_as_that_and_not_as_waiting(
+    tmp_path: Path,
+) -> None:
+    laptop_q, _ = questions(tmp_path)
+    record = reply(laptop_q, "You may expense a laptop.")
+
+    assert limit_questions.LimitResult(laptop_q, record, None, None).outcome == ("nothing_to_judge")

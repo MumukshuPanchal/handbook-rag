@@ -205,3 +205,25 @@ def test_a_saved_reply_that_did_not_come_to_a_proper_end_is_checked_as_one() -> 
         ("unfinished_reply", "See https://x.org/a")
     ]
     assert "".join(s.text for s in tried.checked.segments) == "Sixteen weeks."
+
+
+def test_a_saved_answer_whose_every_citation_follows_the_decline_is_tried_as_a_decline() -> None:
+    leave = make_chunk("New parents get sixteen weeks of paid leave.")
+    answer = Answer(
+        question="q",
+        segments=(
+            Segment("I could not find this in the handbook.", (Citation(leave),)),
+            Segment("\nPlease ask payroll first."),
+        ),
+        # As the code before read it: an answer, since it carries a citation.
+        answered=True,
+        model="m",
+        stop_reason="end_turn",
+        retrieved=(ScoredChunk(leave, 0.0),),
+    )
+    record = record_reply("q1", "f", answer, covers=lambda _chunk: ())
+
+    tried = try_checks(record, [leave])
+
+    assert not tried.checked.answered
+    assert [check.name for check in tried.checked.checks] == ["words_beside_a_decline"]

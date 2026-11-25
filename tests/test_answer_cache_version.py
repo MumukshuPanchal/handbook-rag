@@ -91,8 +91,18 @@ PINNED = {
     # to the very same question only. Version 2 has not been released, so its collection
     # exists only where this branch was run, and `cache-clear` empties it. The time when
     # text was first passed on is recorded too, which changes no answer. It stays.
-    "generate/base.py": "8ccce226bc08ea27",
-    "generate/checks.py": "46488bffad5f6b2a",
+    #
+    # After a second review: the stop after a digit ends a piece of the fixed form, so more
+    # replies go to the check for a reply that cites nothing, and are not kept. A reply
+    # whose every citation follows the fixed declining sentence is a decline, under either
+    # version, and what the checks leave is decided again: such a reply is kept as a decline,
+    # served to the very same question only, or not kept at all when a check changed it.
+    # Before, it was kept as an answer that holds the declining sentence, which was also
+    # served to the very same question only. The product no longer answers under version
+    # 1 and an evaluation never has a cache, so the collection of version 1 is never read
+    # again; version 2 is not released. It stays.
+    "generate/base.py": "e5ed32ac306da474",
+    "generate/checks.py": "3f3480b023da93b6",
     "generate/claude.py": "0a4a690b15c721b1",
     "generate/gemini.py": "52356590fc24d86b",
     "generate/markers.py": "db2add40ed28b909",

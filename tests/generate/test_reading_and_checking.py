@@ -6,11 +6,13 @@ kept. Every model is a stand-in. No request is sent.
 """
 
 import itertools
+from collections.abc import Iterator
 from typing import Any, cast
 
 import anthropic
 import pytest
 from google import genai
+from google.genai import types
 
 from handbook_rag.cache import rules
 from handbook_rag.generate.checks import NOTES
@@ -18,8 +20,9 @@ from handbook_rag.generate.claude import ClaudeGenerator
 from handbook_rag.generate.gemini import GeminiGenerator
 from handbook_rag.generate.models import Answer
 from handbook_rag.generate.prompt import GAP_FORM, NOT_FOUND_MESSAGE
+from handbook_rag.measuring import measuring_the_model
 from tests.generate.test_claude import FakeClient as ClaudeClient
-from tests.generate.test_claude import citation, message
+from tests.generate.test_claude import FakeMessages, FakeStream, citation, message
 from tests.generate.test_gemini import EXPENSES, LEAVE, MODEL, FakeClient, answer_pieces, piece
 
 GAP = GAP_FORM
@@ -318,3 +321,230 @@ def test_the_claude_path_keeps_only_what_a_citation_follows_of_a_reply_that_did_
     ]
     assert streamed == answer.text
     assert answer.seconds_to_first_shown is not None
+
+
+# Round 2 of the review: the stop after a digit, a claim inside the fixed form, and a
+# decline with a citation.
+
+
+def test_the_stop_after_a_digit_ends_a_piece_of_the_fixed_form() -> None:
+    answer, streamed = gemini(f"{GAP} anything beyond rule 2. New parents get sixteen weeks.")
+
+    assert (answer.text, answer.answered, answer.model_text) == (NOT_FOUND_MESSAGE, False, "")
+    assert [check.name for check in answer.checks] == ["cites_nothing"]
+    assert streamed == NOT_FOUND_MESSAGE
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"{GAP} who pays, and new parents get sixteen weeks of paid leave.",
+        f"{GAP} who pays, although new parents get sixteen weeks.",
+        f"{GAP} who pays — new parents get sixteen weeks.",
+    ],
+)
+def test_a_claim_joined_into_the_fixed_form_is_read_as_the_form_alone_which_is_a_limit(
+    text: str,
+) -> None:
+    """What the documents say of it: shown as the declining sentence with no note, and
+    its words kept, for the reader of the answer evaluation."""
+    answer, streamed = gemini(text)
+
+    assert (answer.text, answer.answered, answer.checks) == (NOT_FOUND_MESSAGE, False, ())
+    assert answer.model_text == text
+    assert streamed == NOT_FOUND_MESSAGE
+
+
+@pytest.mark.parametrize(
+    ("text", "removed"),
+    [
+        (
+            f"{NOT_FOUND_MESSAGE} [1]\n\nPlease ask payroll first.",
+            f"{NOT_FOUND_MESSAGE}\n\nPlease ask payroll first.",
+        ),
+        (
+            f"{NOT_FOUND_MESSAGE} [1]\nSee https://evil.example/x",
+            f"{NOT_FOUND_MESSAGE}\nSee https://evil.example/x",
+        ),
+        (
+            f"Please ask payroll first. {NOT_FOUND_MESSAGE} [1]",
+            f"Please ask payroll first. {NOT_FOUND_MESSAGE}",
+        ),
+    ],
+)
+def test_a_reply_whose_every_citation_follows_the_decline_is_a_decline(
+    text: str, removed: str
+) -> None:
+    answer, streamed = gemini(text)
+
+    assert (answer.text, answer.answered, answer.sources) == (NOT_FOUND_MESSAGE, False, ())
+    assert [(c.name, c.removed) for c in answer.checks] == [("words_beside_a_decline", removed)]
+    # The citation after the decline is held back, so nothing was passed on before the end.
+    assert streamed == NOT_FOUND_MESSAGE
+
+
+def test_a_decline_with_only_a_marker_lists_no_source() -> None:
+    answer, streamed = gemini(f"{NOT_FOUND_MESSAGE}[1]")
+
+    assert (answer.text, answer.answered, answer.checks, answer.sources) == (
+        NOT_FOUND_MESSAGE,
+        False,
+        (),
+        (),
+    )
+    assert streamed == answer.text
+
+
+def test_what_is_left_after_the_checks_is_decided_again() -> None:
+    answer, streamed = gemini(f"[1] {NOT_FOUND_MESSAGE}\nSee https://evil.example/x")
+
+    assert (answer.text.strip(), answer.answered, answer.sources) == (NOT_FOUND_MESSAGE, False, ())
+    assert [check.name for check in answer.checks] == ["address_in_closing_line"]
+    assert streamed == answer.text
+    assert not rules.storable(answer)
+
+
+def test_an_answer_with_a_cited_decline_for_one_part_stays_an_answer() -> None:
+    answer, streamed = gemini(f"Sixteen weeks [1]. {NOT_FOUND_MESSAGE} [2] Ask payroll.")
+
+    assert answer.answered
+    assert answer.checks == ()
+    assert streamed == answer.text
+
+
+def test_the_claude_path_reads_a_cited_decline_as_a_decline() -> None:
+    answer, streamed = claude(
+        [
+            {"type": "text", "text": NOT_FOUND_MESSAGE, "citations": [citation(0, "x")]},
+            {"type": "text", "text": "\nPlease ask payroll first."},
+        ]
+    )
+
+    assert (answer.text, answer.answered, answer.sources) == (NOT_FOUND_MESSAGE, False, ())
+    assert [check.name for check in answer.checks] == ["words_beside_a_decline"]
+    assert streamed == answer.text
+
+
+def test_under_the_first_instructions_a_cited_decline_is_a_decline_shown_as_written() -> None:
+    text = f"{NOT_FOUND_MESSAGE} [1]\nPlease ask payroll first."
+    with measuring_the_model():
+        old = GeminiGenerator(
+            cast(genai.Client, FakeClient(answer_pieces(text))),
+            model=MODEL,
+            max_tokens=4000,
+            instructions=1,
+        )
+
+    answer = old.generate("q", [LEAVE])
+
+    assert not answer.answered
+    assert answer.text == f"{NOT_FOUND_MESSAGE}\nPlease ask payroll first."
+    assert answer.checks == ()
+
+
+# Round 2 of the review: mutants that survived.
+
+
+def test_an_unfinished_reply_that_ends_at_its_citation_gets_no_check() -> None:
+    answer, streamed = gemini("Sixteen weeks [1].", finish="OTHER")
+
+    assert (answer.text, answer.answered, answer.checks) == ("Sixteen weeks.", False, ())
+    assert streamed == answer.text
+
+
+def test_a_reply_the_prompt_filter_blocked_that_ends_with_stop_is_unfinished() -> None:
+    blocked = types.GenerateContentResponse.model_validate(
+        {
+            "candidates": [{"content": {"role": "model", "parts": []}, "finish_reason": "STOP"}],
+            "prompt_feedback": {"block_reason": "SAFETY"},
+        }
+    )
+    client = FakeClient([piece("Sixteen weeks [1].\nSee https://x.org/a"), blocked])
+    received: list[str] = []
+
+    answer = GeminiGenerator(cast(genai.Client, client), model=MODEL, max_tokens=4000).generate(
+        "q", [LEAVE], on_text=received.append
+    )
+
+    assert (answer.text, answer.answered, answer.stop_reason) == (
+        "Sixteen weeks.",
+        False,
+        "refusal",
+    )
+    assert [check.name for check in answer.checks] == ["unfinished_reply"]
+    assert "".join(received) == answer.text
+
+
+class Clock:
+    """A clock the stand-in stream moves on, so that times can be compared exactly."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def perf_counter(self) -> float:
+        return self.now
+
+
+def test_on_the_claude_path_under_version_2_the_first_text_is_shown_no_earlier_than_the_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = Clock()
+    monkeypatch.setattr("handbook_rag.generate.claude.time", clock)
+    monkeypatch.setattr("handbook_rag.generate.checks.time", clock)
+
+    class MovingStream(FakeStream):
+        @property
+        def text_stream(self) -> Iterator[str]:
+            for text in super().text_stream:
+                clock.now += 1.0
+                yield text
+            clock.now += 5.0  # the end of the reply arrives later
+
+    class MovingMessages(FakeMessages):
+        def stream(self, **request: Any) -> FakeStream:
+            super().stream(**request)
+            return MovingStream(final)
+
+    final = message([{"type": "text", "text": "Sixteen weeks.", "citations": [citation(0, "x")]}])
+    client = ClaudeClient(final)
+    client.messages = MovingMessages(final)
+    generator = ClaudeGenerator(
+        cast(anthropic.Anthropic, client), model="claude-haiku-5-5", max_tokens=4000, effort="low"
+    )
+
+    answer = generator.generate("q", [LEAVE])
+
+    assert answer.seconds_to_first_text is not None
+    assert answer.seconds_to_first_shown is not None
+    assert answer.seconds_to_first_text < answer.seconds
+    assert answer.seconds_to_first_shown >= answer.seconds
+
+
+def test_under_version_1_the_first_text_shown_waits_for_text_that_can_be_shown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = Clock()
+    monkeypatch.setattr("handbook_rag.generate.gemini.time", clock)
+
+    class Moving(FakeClient):
+        def __init__(self) -> None:
+            super().__init__(answer_pieces("   ", "Sixteen weeks [1]."))
+            pieces = self.models._pieces
+
+            def stream(**_kwargs: Any) -> Any:
+                for number, each in enumerate(pieces, start=1):
+                    clock.now = 10.0 * number
+                    yield each
+
+            self.models.generate_content_stream = stream  # type: ignore[method-assign]
+
+    with measuring_the_model():
+        old = GeminiGenerator(
+            cast(genai.Client, Moving()), model=MODEL, max_tokens=4000, instructions=1
+        )
+
+    answer = old.generate("q", [LEAVE])
+
+    # The first piece is spaces held back in case a marker follows: nothing is shown yet.
+    assert answer.seconds_to_first_text == 10.0
+    assert answer.seconds_to_first_shown == 20.0

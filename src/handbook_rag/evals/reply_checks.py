@@ -73,12 +73,15 @@ def try_checks(record: AnswerRecord, given: Sequence[Chunk]) -> TriedReply:
         )
         for statement in record.statements
     )
+    # A saved answer whose every citation follows the fixed declining sentence is read as
+    # the decline it is by check_reply, which decides again on what it leaves.
+    ended = record.stop_reason in ENDINGS
     segments, answered, model_text = read_the_gap_form_as_a_decline(
         segments, answered=record.answered
     )
     return TriedReply(
         record.question_id,
         record,
-        check_reply(segments, given, answered=answered, ended=record.stop_reason in ENDINGS),
+        check_reply(segments, given, answered=answered, ended=ended),
         model_text,
     )

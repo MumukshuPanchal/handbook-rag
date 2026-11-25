@@ -66,7 +66,8 @@ class CacheHit:
 class ReplyCheck:
     """A check of the reply in code that fired, and what it did (``generate/checks.py``).
 
-    A change to a reply is never silent: whoever shows the answer shows ``note`` with it.
+    A check that changes a reply always says so: whoever shows the answer shows ``note``
+    with it.
     """
 
     name: str

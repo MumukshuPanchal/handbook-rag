@@ -49,9 +49,15 @@ beside it:
   the last citation are dropped*, and what a citation follows, which may already have been
   passed on, is kept.
 
-Each check that fires is recorded on the answer with a note in fixed words, which every
-surface shows with it: no reply is changed in silence. The words the model wrote and a
-check took out are kept for an evaluation to read, and never shown.
+A check that changes a reply always says so: each check that fires is recorded on the
+answer with a note in fixed words, which every surface shows with it. The words the model
+wrote and a check took out are kept for an evaluation to read, and never shown. One change
+is made before the checks and with no note: a reply read as the fixed form for a missing
+part alone (``base.read_the_gap_form_as_a_decline``) is shown as the fixed declining
+sentence, and its words are kept in the same way. A reply in that form that also asserts
+something without a citation, joined into the same sentence, is read the same way, which
+is a limit (``base.only_the_gap_form``). A decline lists no source, even when the model put
+a marker after it.
 
 So that what was streamed is never taken back, the generator passes text on only once a
 citation follows it (:class:`HeldBack`): the text after the last citation, which is all a
@@ -64,7 +70,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from handbook_rag.generate.base import plain_words
+from handbook_rag.generate.base import cites_the_decline, is_answered, plain_words
 from handbook_rag.generate.models import ReplyCheck, Segment
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
 from handbook_rag.ingest.models import Chunk
@@ -152,6 +158,17 @@ def check_reply(
     replied = tuple(segments)
     if not answered:
         return _not_an_answer(replied, ended=ended)
+    checked = _an_answer(replied, chunks)
+    if checked.answered and not is_answered(checked.segments, refused=False):
+        # What the checks left says no more than that the handbook lacks the answer, as
+        # "[1] I could not find this in the handbook." does once a line after it is gone.
+        declined = _not_an_answer(checked.segments, ended=True)
+        return CheckedReply(declined.segments, False, (*checked.checks, *declined.checks))
+    return checked
+
+
+def _an_answer(replied: tuple[Segment, ...], chunks: Sequence[Chunk]) -> CheckedReply:
+    """The checks for an answer: one that cites nothing is declined and checked no further."""
     if not any(segment.citations for segment in replied):
         removed = "".join(segment.text for segment in replied).strip()
         declined = ReplyCheck(CITES_NOTHING, DECLINED, NOTES[CITES_NOTHING], removed)
@@ -175,17 +192,19 @@ def check_reply(
 def _not_an_answer(replied: tuple[Segment, ...], *, ended: bool) -> CheckedReply:
     """A reply that is not an answer, with nothing in it beside what a decline says.
 
-    After a normal end, a reply that is not an answer either is the fixed declining
-    sentence, whatever its case and marks, or cites nothing at all (``base.is_answered``).
-    The first is left as it is. The second, if it holds other words, is shown as the fixed
-    sentence; since it cites nothing, none of it was passed on. A reply that did not come
-    to a proper end keeps what a citation follows, which may have been passed on, and loses
-    the rest.
+    After a normal end, a reply that is not an answer is the fixed declining sentence,
+    whatever its case and marks; or cites nothing; or cites only after the fixed sentence
+    (``base.is_answered``). The first is left as it is, with no source. The others, if they
+    hold other words, are shown as the fixed sentence: none of their text was passed on,
+    since :class:`HeldBack` holds back a citation that follows the fixed sentence. A reply
+    that did not come to a proper end keeps what a citation follows, which may have been
+    passed on, and loses the rest.
     """
     text = "".join(segment.text for segment in replied)
     if ended:
         if not plain_words(text) or plain_words(text) == plain_words(NOT_FOUND_MESSAGE):
-            return CheckedReply(replied, False, ())
+            # The words are left as they are, and a marker after them names no source.
+            return CheckedReply(tuple(Segment(segment.text) for segment in replied), False, ())
         check = ReplyCheck(
             WORDS_BESIDE_A_DECLINE, DROPPED_WORDS, NOTES[WORDS_BESIDE_A_DECLINE], text.strip()
         )
@@ -251,11 +270,12 @@ def copied_share(text: str, chunks: Sequence[Chunk]) -> float:
 class HeldBack:
     """Passes a reply's text on once a citation follows it, and the rest at the end.
 
-    A checked reply is changed only after its last citation, or as a whole when it cites
-    nothing (:func:`check_reply`, ``base.read_the_gap_form_as_a_decline``), or, when it is
-    the fixed declining sentence with a citation, not at all. So text that a citation
-    follows is never changed, and is passed on as it comes; the rest waits until the checks
-    have been made. What was passed on is then always the start of the reply as it is kept.
+    A checked reply is changed only after its last citation; or as a whole when it cites
+    nothing, or cites only after the fixed declining sentence (:func:`check_reply`,
+    ``base.read_the_gap_form_as_a_decline``). So text that a citation follows is never
+    changed, and is passed on as it comes, unless that citation follows the fixed
+    sentence; the rest waits until the checks have been made. What was passed on is then
+    always the start of the reply as it is kept.
     """
 
     def __init__(self, on_text: Callable[[str], None] | None) -> None:
@@ -265,9 +285,17 @@ class HeldBack:
         """When text was first passed on, by ``time.perf_counter``, also when nobody listens."""
 
     def closed_so_far(self, segments: Sequence[Segment]) -> None:
-        """Pass on what the segments closed so far hold. While a reply is being read, only
-        a citation closes a segment (``markers.MarkerParser``), so each of them has one."""
-        self._send("".join(segment.text for segment in segments))
+        """Pass on what the segments closed so far hold, up to the first whose citation
+        follows the fixed declining sentence (``base.cites_the_decline``): a reply whose
+        every citation is of that kind is a decline, shown as the fixed sentence alone, so
+        it and all after it wait for the end. While a reply is being read, only a citation
+        closes a segment (``markers.MarkerParser``), so each of them has one."""
+        sendable: list[Segment] = []
+        for segment in segments:
+            if cites_the_decline(segment):
+                break
+            sendable.append(segment)
+        self._send("".join(segment.text for segment in sendable))
 
     def finished(self, segments: Sequence[Segment]) -> None:
         """Pass on the rest of the reply, as the checks left it."""

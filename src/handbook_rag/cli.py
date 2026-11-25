@@ -1239,6 +1239,13 @@ def eval_answers(
     typer.echo(f"  requests     at most {run.attempts} now, {attempts} for this run in all")
     _echo_answer_scores(report, judges)
     typer.echo(f"  written to   {run_dir}")
+    changed = answer_runs.changed_replies(report)
+    if changed:
+        typer.echo(
+            f"  for a reader {len(changed)} replies to questions the handbook answers that a "
+            "check changed or that were read as the fixed form, with the model's own words "
+            f"and the reference answers: {run_dir / answer_runs.CHANGED_REPLIES_FILE}"
+        )
     if run.stopped is not None:
         typer.echo(f"  stopped: {run.stopped}")
     for failure in report.failures[:5]:

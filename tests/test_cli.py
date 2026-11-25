@@ -1671,6 +1671,16 @@ def test_eval_answers_counts_what_the_checks_declined_apart_from_the_models_own_
     assert "    q001  cites_nothing: took out 'Sixteen weeks.'" in result.output
     assert "          reference: '" in result.output
     assert "first words after 1.0 s, first words passed on after 1.5 s" in result.output
+    # The replies a reader of line c is given: the answerable question's, in a file of its own.
+    changed = tmp_path / "runs" / "split" / "changed-replies.jsonl"
+    assert (
+        "for a reader 1 replies to questions the handbook answers that a check changed or that "
+        "were read as the fixed form, with the model's own words and the reference answers: "
+        f"{changed}" in result.output
+    )
+    assert [json.loads(line)["question_id"] for line in changed.read_text().splitlines()] == [
+        "q001"
+    ]
     summary = json.loads((tmp_path / "runs" / "split" / "summary.json").read_text())
     assert summary["timing"]["median_seconds_to_first_shown"] == 1.5
     assert summary["reply_checks"] == {"cites_nothing": {"answerable": ["q001"]}}

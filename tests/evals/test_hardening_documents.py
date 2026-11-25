@@ -44,6 +44,10 @@ READING = runs.HELD_OUT_DIR / "reading"
 NOTE = ROOT / "docs" / "experiments" / "2026-11-25-2318-before-the-last-runs.md"
 # The note as it was written at 23:18 on 25 November, before the last two runs.
 NOTE_SHA256 = "5a87224a46d235c35875167bafb719a03c88d54a6bb2ed64d83dde276135968a"
+ADDENDUM = ROOT / "docs" / "experiments" / "2026-11-26-0055-before-the-last-runs-addendum.md"
+# Its addendum as it was written at 00:55 on 26 November, still before those runs.
+ADDENDUM_SHA256 = "2ed7f496a5910a314e491579b5e40b5b7b7ab25218df6bbdc4c13a0df0673659"
+CHECKS_SOURCE = ROOT / "src" / "handbook_rag" / "generate" / "checks.py"
 
 # The rows of the tables of the three runs, and the figure each shows.
 ROWS = {
@@ -365,6 +369,25 @@ def test_the_decision_record_says_what_files_show_and_what_rests_on_an_account()
     assert hashlib.sha256(NOTE.read_bytes()).hexdigest() == NOTE_SHA256
     assert "experiments/2026-11-25-2318-before-the-last-runs.md" in text
     assert "Written on 25 November 2026 at 23:18 India time" in read(NOTE)
+
+
+def test_the_addendum_is_as_written_and_what_the_documents_say_of_silent_changes_holds() -> None:
+    text = read(ADR)
+
+    assert hashlib.sha256(ADDENDUM.read_bytes()).hexdigest() == ADDENDUM_SHA256
+    assert "Written on 26 November 2026 at 00:55 India time" in read(ADDENDUM)
+    assert "experiments/2026-11-26-0055-before-the-last-runs-addendum.md" in text
+    assert "experiments/2026-11-26-0055-before-the-last-runs-addendum.md" in read(GUIDE)
+    # A change is silent in one case, and the documents say which.
+    assert "A change to an answer is never silent" not in text
+    assert "no reply is changed in silence" not in read(CHECKS_SOURCE)
+    for path in (ADR, CHECKS_SOURCE):
+        assert "A check that changes a reply always says so" in read(path), path.name
+    assert "A claim inside the fixed form is not caught." in text
+    assert "A decline with a citation is a decline." in text
+    assert "A decline lists no source" in text
+    assert "`changed-replies.jsonl`" in text
+    assert "`changed-replies.jsonl`" in read(GUIDE)
 
 
 def hits(estimate: dict[str, Any]) -> int:

@@ -271,6 +271,8 @@ def source_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         found.append("a source card does not show a piece of its passage")
     if leave["address"] != LEAVE_URL or faq["address"] != "ftp://handbook.example.com/faq":
         found.append("a source card does not give a screen reader the whole address")
+    if not (leave["addressShown"] and faq["addressShown"]):
+        found.append("the address under a source is not shown")
     # Shown in brief: the host first and whole, the middle of the path left out, on one line.
     brief = leave["brief"]
     if brief != f"handbook.example.com {CRUMB} … {CRUMB} leave-in-the-united-states":
@@ -454,7 +456,9 @@ def search_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
     elif any(item["link"] != LEAVE_URL for item in passages):
         found.append("a found passage's title is not a link to its page")
     elif any(
-        item["address"] != LEAVE_URL or not item["brief"].startswith("handbook.example.com")
+        item["address"] != LEAVE_URL
+        or not item["brief"].startswith("handbook.example.com")
+        or not item["addressShown"]
         for item in passages
     ):
         found.append("a found passage does not show where its link leads")
@@ -1077,7 +1081,7 @@ PLANTED_BY_THE_REVIEW = [
     ),
     (
         "the fold says how many passages were found and lists none",
-        "  turn.passages.replaceChildren(...results.map(passageItem));",
+        "  turn.passages.replaceChildren(...results.map(passageOrNotice));",
         "  turn.passages.replaceChildren();",
     ),
     (
@@ -1194,6 +1198,11 @@ PLANTED_FOR_THE_FIXES = [
         '      say("The trace id is copied.");\n',
         "",
     ),
+    (
+        "the address under a source is not shown",
+        '"visually-hidden", shown(url)));\n',
+        '"visually-hidden", shown(url)));\n  line.hidden = true;\n',
+    ),
 ]
 
 
@@ -1207,22 +1216,90 @@ def test_the_run_finds_each_fault_the_review_planted_and_each_of_the_fixes(
     assert fault in faults(run(source.replace(old, new), tmp_path))
 
 
+def broken_sources(source: str) -> str:
+    """The script with the card of the second source and the second found passage made to
+    throw, as a field the page cannot read would make them."""
+    card = "function sourceCard(turn, source) {\n"
+    found = "function passageItem(passage) {\n"
+    assert source.count(card) == source.count(found) == 1
+    throw = '  if ({} === 2) {{\n    throw new TypeError("planted");\n  }}\n'
+    return source.replace(card, card + throw.format("source.number")).replace(
+        found, found + throw.format("passage.rank")
+    )
+
+
+def fallback_faults(cited: dict[str, Any]) -> list[str]:
+    """What the page loses when one source or one found passage cannot be built."""
+    found = []
+    if not cited["answer"] or cited["error"]:
+        found.append("one source that cannot be shown costs the answer")
+        return found
+    cards = cited["cards"]
+    if [card["number"] for card in cards] != ["1", "2"] or [
+        card["unreadable"] for card in cards
+    ] != [False, True]:
+        found.append("the card of a source that could not be shown does not say which")
+    elif cards[1]["path"] != "This source could not be shown.":
+        found.append("the card of a source that could not be shown does not say so")
+    press = cited["linking"]["pressChip"]
+    if (
+        press["scrolled"] != 1
+        or press["marked"] != ["2"]
+        or "Source 2 is marked" not in press["status"]
+    ):
+        found.append("pressing the number of a source that could not be shown does nothing")
+    passages = cited["passages"]
+    if [item["rank"] for item in passages] != ["1.", "2.", "3."] or [
+        item["unreadable"] for item in passages
+    ] != [False, True, False]:
+        found.append("one found passage that cannot be shown costs the others")
+    if (
+        cited["conversation"][-1]
+        != "How many weeks of parental leave do new parents get in the US?"
+    ):
+        found.append("a turn whose source could not be shown is not remembered")
+    return found
+
+
 def test_a_source_card_that_cannot_be_built_does_not_cost_the_answer(tmp_path: Path) -> None:
     """Building the answer cannot fail halfway: a card that throws stands as a card that
-    says so, and the answer and the other cards are shown, and the turn is remembered."""
+    says so, under its source's number, so that pressing the number brings it into view,
+    marks it and says so; the answer and the other cards are shown, and the turn is
+    remembered. A found passage that throws stands in the same way."""
+    assert fallback_faults(run(broken_sources(script()), tmp_path)["cited"]) == []
+
+
+@pytest.mark.parametrize(
+    ("fault", "old", "new"),
+    [
+        (
+            "one source that cannot be shown costs the answer",
+            "answer.sources.map((source) => cardOrNotice(turn, source));",
+            "answer.sources.map((source) => sourceCard(turn, source));",
+        ),
+        (
+            "pressing the number of a source that could not be shown does nothing",
+            "    turn.cards.set(source.number, card);\n",
+            "",
+        ),
+        (
+            "the card of a source that could not be shown does not say which",
+            '    head.append(make("span", "source-number", shown(source.number)));\n',
+            "",
+        ),
+        (
+            "one found passage that cannot be shown costs the others",
+            "results.map(passageOrNotice)",
+            "results.map(passageItem)",
+        ),
+    ],
+)
+def test_the_run_finds_each_fault_planted_in_the_fallbacks(
+    fault: str, old: str, new: str, tmp_path: Path
+) -> None:
     source = script()
-    old = "function sourceCard(turn, source) {\n"
-    assert source.count(old) == 1
-    breaking = old + '  if (source.number === 2) {\n    throw new TypeError("planted");\n  }\n'
+    assert source.count(old) == 1, old
 
-    cited = run(source.replace(old, breaking), tmp_path)["cited"]
-
-    assert cited["answer"]
-    assert not cited["error"]
-    assert [card["number"] for card in cited["cards"]] == ["1", "2"]
-    assert [card["unreadable"] for card in cited["cards"]] == [False, True]
-    assert cited["cards"][1]["path"] == "This source could not be shown."
-    assert (
-        cited["conversation"][-1]
-        == "How many weeks of parental leave do new parents get in the US?"
+    assert fault in fallback_faults(
+        run(broken_sources(source.replace(old, new)), tmp_path)["cited"]
     )

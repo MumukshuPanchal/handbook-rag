@@ -35,7 +35,7 @@
 // event, or hold several: what comes after the last blank line is kept for the next
 // piece. A line may end in \r\n, \n or \r, as the standard allows. The service sends \n,
 // but something between it and the browser may not. A \r at the very end is held back
-// until the stream has ended, because the \n that would make the two one line ending
+// until the stream has ended, because the \n that would turn the two into one line ending
 // may start the next piece.
 function takeEvents(received, ended) {
   const held = !ended && received.endsWith("\r") ? "\r" : "";
@@ -653,7 +653,8 @@ function sourceCard(turn, source) {
 }
 
 // A source's card, or, if it cannot be built, a card that says so: one source the page
-// cannot show does not cost the reader the answer and the other sources.
+// cannot show does not cost the reader the answer and the other sources. That card stands
+// under the source's number, so that pressing the number still brings it into view.
 function cardOrNotice(turn, source) {
   try {
     return sourceCard(turn, source);
@@ -664,7 +665,22 @@ function cardOrNotice(turn, source) {
     head.append(make("span", "source-number", shown(source.number)));
     head.append(make("p", "source-path", "This source could not be shown."));
     card.append(head);
+    turn.cards.set(source.number, card);
     return card;
+  }
+}
+
+// A passage the search found, or, if it cannot be built, an item that says so.
+function passageOrNotice(passage) {
+  try {
+    return passageItem(passage);
+  } catch (error) {
+    console.error(error);
+    const item = make("li", "passage-item passage-unreadable");
+    const heading = make("p", "passage-title");
+    heading.append(make("span", "passage-rank", `${shown(passage.rank)}.`), " This passage could not be shown.");
+    item.append(heading);
+    return item;
   }
 }
 
@@ -958,7 +974,7 @@ function cardLabel(answer) {
 }
 
 // A failure that came with a trace id shows it under the card, for a bug report. There is
-// no answer to make badges of.
+// no answer to build badges from.
 function failedFacts(turn, traceId) {
   renderFacts(turn, [], traceId);
   turn.madeTitle.textContent = "About this request";
@@ -1234,7 +1250,7 @@ function renderPassages(turn, results) {
   turn.searchCount.textContent = ` ${count}`;
   turn.found.textContent = results.length === 0 ? "nothing found" : `${count} found`;
   turn.searchState.textContent = results.length === 0 ? "The search found nothing." : "";
-  turn.passages.replaceChildren(...results.map(passageItem));
+  turn.passages.replaceChildren(...results.map(passageOrNotice));
 }
 
 // ---- Wiring ---------------------------------------------------------------------------

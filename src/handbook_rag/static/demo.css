@@ -1095,9 +1095,12 @@ h1 {
 }
 
 /* Where a source's link leads, since its title can say anything: the host and the path
-   in brief, quiet. The line wraps and is never cut, so the host is always seen whole; a
-   test holds every rule of this sheet to that. The whole address is the link's title and
-   is written out in the fold with the passage. */
+   in brief, quiet. The line wraps, so the host is seen whole. tests/test_demo.py reads
+   every rule of this sheet and fails on the ways of hiding or cutting text that it knows
+   of, set on this line, on an element or attribute selector that could reach it, or on
+   the card or anything around it; it does not compute the cascade, and not every way a
+   style sheet can hide text is in it. The whole address is the link's title and is
+   written out in the fold with the passage. */
 .source-address {
   margin-top: var(--s1);
   color: var(--muted);

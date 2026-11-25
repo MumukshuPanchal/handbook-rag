@@ -10,7 +10,7 @@ and must make links in one place only.
 
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from html.parser import HTMLParser
 from importlib.resources import files
 from pathlib import Path
@@ -506,6 +506,18 @@ def problems_in(source: str) -> list[str]:
         found.append("a live region made by the script")
     if elements_made_wrongly(source):
         found.append("an element the page does not make")
+    # make is only called, by its own name: never kept in another name or called through
+    # call or apply, where the list above could not read what it is asked for.
+    if re.search(r"\bmake\b(?!\s*\()", source):
+        found.append("make reached under another name")
+    # Nothing set in bulk, where the name of what is set is not written beside it.
+    if re.search(r"\bObject\s*\.\s*assign\b", source):
+        found.append("properties set in bulk")
+    # No style written by the script, in a style map or in a style sheet.
+    if re.search(
+        r"\b(?:attributeStyleMap|insertRule|adoptedStyleSheets|styleSheets|CSSStyleSheet)\b", source
+    ):
+        found.append("a style written by the script")
     # Nothing that loads or styles: the policy would refuse it, and the guard says so too.
     if re.search(
         r"\.(?:src|srcset|style)\b|\[\s*[\"'`](?:src|srcset|style|innerHTML|outerHTML)[\"'`]\s*\]",
@@ -613,6 +625,11 @@ def test_the_script_reads_nothing_as_html_or_code_and_makes_links_in_one_place()
         ("picture.srcset = data.url;", "a source or a style set as a property"),
         ("turn.body.style.backgroundImage = data.url;", "a source or a style set as a property"),
         ('turn.body["innerHTML"] = data.text;', "a source or a style set as a property"),
+        ('const m = make; turn.body.append(m("img", "", ""));', "make reached under another name"),
+        ('turn.body.append(make.call(null, "img", "", ""));', "make reached under another name"),
+        ("Object.assign(picture, { src: data.url });", "properties set in bulk"),
+        ('turn.body.attributeStyleMap.set("display", "none");', "a style written by the script"),
+        ("document.styleSheets[0].insertRule(data.text);", "a style written by the script"),
     ],
 )
 def test_the_check_of_the_script_finds_each_kind_of_call_planted_in_it(
@@ -768,71 +785,126 @@ def test_a_new_conversation_can_be_started_and_the_page_says_what_is_sent() -> N
 
 
 # The address under a source. The reader must see where a link leads: the line wraps, and
-# no rule of the stylesheet may hide or cut any part of it, its host included.
+# the style sheet must not hide or cut it, its host included. The check below reads every
+# rule of the sheet and fails on the ways of hiding or cutting text it knows of, set on the
+# line, on an element or attribute selector that could reach it, or on the card, the found
+# passage or an element around them. It does not compute the cascade, and it does not know
+# every way a style sheet can hide text: a way it does not list gets past it.
 
 
 def css_rules(sheet: str) -> list[tuple[str, dict[str, str]]]:
     """Every rule of a stylesheet, inside a media query or not: its selectors and its
-    declarations, by property."""
+    declarations, by property, with `!important` taken off the value. The frames of an
+    animation are not rules for elements, and are left out."""
     sheet = re.sub(r"/\*.*?\*/", "", sheet, flags=re.DOTALL)
+    sheet = re.sub(r"@keyframes[^{]*\{(?:[^{}]*\{[^{}]*\})*\s*\}", "", sheet)
     rules = []
     for selector, block in re.findall(r"([^{}]+)\{([^{}]*)\}", sheet):
         declarations = {}
         for declaration in block.split(";"):
             name, _, value = declaration.partition(":")
-            if value.strip():
-                declarations[name.strip().lower()] = value.strip().lower()
+            value = value.lower().replace("!important", "").strip()
+            if value:
+                declarations[name.strip().lower()] = value
         rules.append((" ".join(selector.split()), declarations))
     return rules
 
 
-# The address line itself, and the elements around it whose own rules could clip it.
-ADDRESS = ("source-address", "address-brief", "passage-address")
-AROUND = ("source-card", "passage-item", "source-cards", "passages", "turn-sources", "search-fold")
-
-
-def subject_is(selector: str, names: tuple[str, ...]) -> bool:
-    """Whether a rule is for one of these classes: whether the last part of one of its
-    selectors, the element the rule styles, has one of them. `.source-address .x` is for
-    the element inside the line, not for the line."""
+def subjects(selector: str) -> list[str]:
+    """The element each selector of a rule styles: the last compound of each, after the
+    last combinator, with what is inside brackets kept whole. `.source-card > p` styles a
+    `p`; `.source-address .x` styles the element inside the line, not the line."""
+    found = []
     for part in selector.split(","):
-        words = part.split()
-        if words and set(re.findall(r"\.([\w-]+)", words[-1])) & set(names):
-            return True
-    return False
+        compounds = re.findall(r"(?:\[[^\]]*\]|[^\s>+~\[])+", part)
+        if compounds:
+            found.append(compounds[-1])
+    return found
 
 
-# What would hide part of the line, set on the line itself.
-HIDES_THE_LINE = {
-    "text-overflow": lambda value: True,
+# The address line itself, by class; the card, the found passage, the fold that holds the
+# whole address, and every element around them, by class; and the elements, by name, that
+# the line is or that hold it. A rule for any other class or element, or for an id, cannot
+# reach the line.
+ADDRESS = {"source-address", "address-brief", "passage-address"}
+AROUND = {
+    "source-card", "source-cards", "sources-block", "passage-item", "passages", "passage",
+    "search-fold", "turn-sources", "turn", "turns", "app",
+}  # fmt: skip
+HOLDERS = {"p", "li", "ol", "div", "details", "main", "body", "html", "*"}
+
+
+def reach(compound: str) -> str | None:
+    """Whether a rule for this compound styles the line ("line"), an element around it
+    ("around"), something that may be either ("either"), or nothing that holds it (None)."""
+    classes = set(re.findall(r"\.([\w-]+)", re.sub(r"\[[^\]]*\]", "", compound)))
+    if "#" in re.sub(r"\[[^\]]*\]", "", compound):
+        return None
+    if classes:
+        return "line" if classes & ADDRESS else "around" if classes & AROUND else None
+    if compound == "[hidden]":
+        return None  # the hidden attribute's own rule, which hides what is meant to be
+    if "::" in compound:
+        return None  # a box the style sheet adds before or after an element, not the element
+    tag = re.match(r"[a-z][a-z0-9]*|\*", compound)
+    return "either" if tag is None or tag.group(0) in HOLDERS else None
+
+
+def wraps(value: str) -> bool:
+    return value in ("normal", "pre-wrap", "pre-line", "break-spaces")
+
+
+def clips(value: str) -> bool:
+    return any(word in value.split() for word in ("paint", "strict", "content"))
+
+
+# What hides or cuts text, set on the element itself or, through inheritance or through
+# what it contains, on an element around it.
+# A test of a value: whether it hides or cuts.
+Test = Callable[[str], bool]
+HIDES: dict[str, Test] = {
+    "white-space": lambda value: not wraps(value),
+    "visibility": lambda value: value in ("hidden", "collapse"),
+    "display": lambda value: value == "none",
+    "opacity": lambda value: value in ("0", "0.0", "0%"),
+    "font-size": lambda value: value in ("0", "0px", "0rem", "0em"),
+    "color": lambda value: value == "transparent",
+    "contain": clips,
     "line-clamp": lambda value: True,
     "-webkit-line-clamp": lambda value: True,
-    "max-height": lambda value: True,
+}
+CLIPS_AROUND: dict[str, Test] = {
+    "overflow": lambda value: any(word in value.split() for word in ("hidden", "clip")),
+    "overflow-x": lambda value: value in ("hidden", "clip"),
+    "overflow-y": lambda value: value in ("hidden", "clip"),
+}
+# And what cuts it when set on the line, or on what may be the line.
+CUTS_THE_LINE: dict[str, Test] = {
+    "text-overflow": lambda value: True,
+    "max-height": lambda value: value != "none",
     "height": lambda value: value != "auto",
-    "white-space": lambda value: value not in ("normal", "pre-wrap", "pre-line", "break-spaces"),
     "overflow": lambda value: value != "visible",
     "overflow-x": lambda value: value != "visible",
-    "display": lambda value: value == "none",
-    "visibility": lambda value: value in ("hidden", "collapse"),
+    "overflow-y": lambda value: value != "visible",
     "clip-path": lambda value: value != "none",
     "clip": lambda value: value != "auto",
 }
-# What would clip it, set on an element around it.
-CLIPS_WHAT_IT_HOLDS = {
-    "overflow": lambda value: value in ("hidden", "clip"),
-    "overflow-x": lambda value: value in ("hidden", "clip"),
-    "line-clamp": lambda value: True,
-    "-webkit-line-clamp": lambda value: True,
+RULES_FOR: dict[str, dict[str, Test]] = {
+    "line": {**HIDES, **CUTS_THE_LINE},
+    "around": {**HIDES, **CLIPS_AROUND},
+    "either": {**HIDES, **CUTS_THE_LINE},
 }
 
 
 def cuts_the_address(selector: str, declarations: dict[str, str]) -> list[str]:
-    """What a rule does that could hide part of the address line."""
+    """What a rule does that could hide or cut the address line, by the ways it knows."""
     found = []
-    for names, hides in ((ADDRESS, HIDES_THE_LINE), (AROUND, CLIPS_WHAT_IT_HOLDS)):
-        if subject_is(selector, names):
+    for compound in subjects(selector):
+        kind = reach(compound)
+        if kind is not None:
+            hides = RULES_FOR[kind]
             found += [
-                f"{name}: {value} on {selector}"
+                f"{name}: {value} on {compound}"
                 for name, value in declarations.items()
                 if name in hides and hides[name](value)
             ]
@@ -868,9 +940,117 @@ def test_no_rule_of_the_stylesheet_can_cut_the_address_under_a_source() -> None:
         ".passage-item, .source-card { overflow: clip; }",
         ".source-card .source-address { visibility: hidden; }",
         ".source-address { -webkit-line-clamp: 1; }",
+        # The ones the second review found getting past it.
+        ".source-card > p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
+        ".source-card>p { white-space: nowrap; }",
+        ".source-card { white-space: nowrap; }\n.turn { overflow: hidden; }",
+        ".source-card { overflow: hidden !important; }",
+        ".source-card { contain: paint; }",
+        ".source-card { font-size: 0; }",
+        ".source-address { color: transparent; }",
+        ".source-card { opacity: 0; }",
+        "p[class~=source-address] { white-space: nowrap; }",
+        ".source-card [class~=source-address] { overflow: hidden; }",
+        "li { white-space: nowrap; }",
+        ".passage { display: none; }",
     ],
 )
 def test_the_check_of_the_stylesheet_finds_each_rule_that_could_cut_the_address(rule: str) -> None:
     rules = css_rules(f"{static('demo.css')}\n{rule}\n")
 
     assert [problem for selector, d in rules for problem in cuts_the_address(selector, d)] != []
+
+
+# The notice of what is sent, the fold that holds the list, and the controls beside it. The
+# script shows their area whenever there is a conversation (the node test runs that); what
+# else decides whether a reader sees them is the markup and the style sheet, checked here.
+NOTICE_CLASSES = {"context", "context-notice", "context-fold"}
+NOTICE_IDS = {"conversation-area", "conversation-notice"}
+
+
+def notice_problems(html: str, sheet: str) -> list[str]:
+    """What keeps the notice of what is sent, or the words of its controls, from a reader."""
+    found = []
+    markup = Markup()
+    markup.feed(html)
+    markup.close()
+    by_id = {str(attrs["id"]): attrs for _, attrs in markup.elements if attrs.get("id")}
+    notice = by_id["conversation-notice"]
+    if "hidden" in notice or notice.get("aria-hidden") == "true":
+        found.append("the notice line is hidden in the markup")
+    if by_id["conversation-area"].get("aria-hidden") == "true":
+        found.append("the notice's area is hidden from a screen reader")
+    # The words a phone does not show are still read out: the verb of the fold's control,
+    # and the whole name of the new-conversation button.
+    for tag, attrs in markup.elements:
+        if "on-wide" in str(attrs.get("class") or "").split() and attrs.get("aria-hidden"):
+            found.append(f"words shown on a larger screen only are hidden from a reader ({tag})")
+    for selector, declarations in css_rules(sheet):
+        for compound in subjects(selector):
+            classes = set(re.findall(r"\.([\w-]+)", compound))
+            ids = set(re.findall(r"#([\w-]+)", compound))
+            if classes & NOTICE_CLASSES or ids & NOTICE_IDS:
+                hidden = {
+                    name: value
+                    for name, value in declarations.items()
+                    if (name in HIDES and HIDES[name](value))
+                    or (name == "clip-path" and value != "none")
+                    or (name in ("max-height", "height") and value in ("0", "0px"))
+                }
+                if hidden:
+                    found.append(f"the notice or its fold is hidden: {hidden} on {compound}")
+            if "on-wide" in classes and declarations.get("display") == "none":
+                found.append("words shown on a larger screen only are not read on a phone")
+    rules = css_rules(sheet)
+    body = [d for selector, d in rules if ".context-body" in subjects(selector)]
+    if not any("max-height" in d and d.get("overflow-y") in ("auto", "scroll") for d in body):
+        found.append("the fold of what is sent has no height limit, or does not scroll")
+    button = [d for selector, d in rules if "#new-conversation" in subjects(selector)]
+    if not any(d.get("white-space") == "nowrap" for d in button):
+        found.append("the new-conversation button may break onto two lines")
+    return found
+
+
+def test_the_notice_of_what_is_sent_and_its_controls_are_there_to_be_seen_and_heard() -> None:
+    assert notice_problems(static("demo.html"), static("demo.css")) == []
+
+
+NOTICE = '<p id="conversation-notice" class="context-notice"'
+NOTICE_RULE = ".context-notice {\n  grid-area: notice;"
+ON_WIDE = "  .on-wide {\n    position: absolute;"
+NEW_BUTTON = "#new-conversation {\n  grid-area: new;\n  white-space: nowrap;\n}"
+FOLD_BODY = "  max-height: min(40vh, 18rem);\n  margin-top: var(--s2);\n  overflow-y: auto;\n"
+VERB = '<span id="conversation-verb" class="on-wide"'
+
+
+@pytest.mark.parametrize(
+    ("file", "old", "new"),
+    [
+        # The second review's faults.
+        ("demo.css", FOLD_BODY, "  margin-top: var(--s2);\n"),
+        ("demo.css", NOTICE_RULE, ".context-notice {\n  display: none;\n  grid-area: notice;"),
+        ("demo.html", NOTICE + ">", NOTICE + " hidden>"),
+        ("demo.css", ".context {\n  display: contents;\n}", ".context {\n  display: none;\n}"),
+        ("demo.html", VERB + ">", VERB + ' aria-hidden="true">'),
+        ("demo.css", ON_WIDE, "  .on-wide {\n    display: none;\n    position: absolute;"),
+        ("demo.css", NEW_BUTTON, "#new-conversation {\n  grid-area: new;\n}"),
+        # And some more.
+        ("demo.css", NOTICE_RULE, ".context-notice {\n  visibility: hidden;\n  grid-area: notice;"),
+        (
+            "demo.css",
+            NOTICE_RULE,
+            ".context-notice {\n  opacity: 0 !important;\n  grid-area: notice;",
+        ),
+        ("demo.html", NOTICE + ">", NOTICE + ' aria-hidden="true">'),
+    ],
+)
+def test_the_check_of_the_notice_finds_each_fault_planted_in_the_markup_or_the_style(
+    file: str, old: str, new: str
+) -> None:
+    html, sheet = static("demo.html"), static("demo.css")
+    text = html if file == "demo.html" else sheet
+    assert text.count(old) == 1, old
+    planted = text.replace(old, new)
+
+    problems = notice_problems(*((planted, sheet) if file == "demo.html" else (html, planted)))
+    assert problems != []

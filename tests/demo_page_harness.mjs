@@ -225,8 +225,10 @@ async function fetchStub(url, options) {
   return new Response(text.body, { status, headers: { "Content-Type": type } });
 }
 
-// What the script writes to the console as an error: kept, and given to the test.
+// What the script writes to the console as an error: kept, and given to the test. So is a
+// promise the script lets fail with no one to catch it, which a browser would only log.
 const consoleErrors = [];
+process.on("unhandledRejection", (error) => consoleErrors.push(`unhandled: ${error?.message ?? error}`));
 
 const context = vm.createContext({
   document,
@@ -375,6 +377,9 @@ function latestTurn() {
   const [searchFold] = byClass(item, "search-fold");
   const fold = (node) => {
     const [folded] = byClass(node, "passage");
+    if (folded === undefined) {
+      return { foldName: "", foldAddress: "", foldAddressHidden: false };
+    }
     const [address] = byClass(folded, "passage-address");
     return {
       foldName: spoken(folded.children[0]),
@@ -394,6 +399,8 @@ function latestTurn() {
       briefHiddenFromReaders: briefs.length > 0 && briefs.every((brief) => brief.attrs["aria-hidden"] === "true"),
       // The whole address as a screen reader reads it, beside the brief one.
       address: byClass(node, "source-address").map(spoken).join(""),
+      // Whether the line is there to be seen: neither it nor anything above it hidden.
+      addressShown: byClass(node, "source-address").length === 1 && byClass(node, "source-address").every(isShown),
       ...fold(node),
     };
   };
@@ -443,7 +450,8 @@ function latestTurn() {
     searchState: byClass(item, "search-state").map((state) => state.textContent).join(""),
     passages: byClass(item, "passage-item").map((found) => ({
       rank: byClass(found, "passage-rank").map((rank) => rank.textContent).join(""),
-      ...addressOf(found),
+      unreadable: found.classes.has("passage-unreadable"),
+      ...(found.classes.has("passage-unreadable") ? {} : addressOf(found)),
     })),
   };
 }
@@ -617,7 +625,7 @@ await step(
   const item = page.turns.children.at(-1);
   const chips = byClass(item, "cite");
   const cards = byClass(item, "source-card").filter((card) => !card.classes.has("placeholder"));
-  const numberOf = (card) => byClass(card, "source-number")[0].textContent;
+  const numberOf = (card) => byClass(card, "source-number").map((number) => number.textContent).join("");
   const chip = (number) => chips.find((each) => each.textContent === number);
   const card = (number) => cards.find((each) => numberOf(each) === number);
   const markedCards = () => cards.filter((each) => each.classes.has("linked")).map(numberOf);

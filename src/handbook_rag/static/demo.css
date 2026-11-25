@@ -721,11 +721,54 @@ h1 {
   color: var(--warn);
 }
 
-/* What a check of the reply in code did to it, under the reply's text. */
+/* What a check of the reply in code changed in it, or marked: under an answer's text, or
+   in the notice of a reply that is not an answer. In the warning tone, with a mark of its
+   own: something was changed here, and it is not a failure. */
+.check-notes {
+  display: grid;
+  grid-template-columns: 1.25rem minmax(0, 1fr);
+  column-gap: var(--s2);
+  margin-top: var(--s3);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--warn-border);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+
+.check-notes > * {
+  grid-column: 2;
+}
+
+/* A pair of scissors would need an image or an icon set; a cut line drawn here says the same. */
+.check-notes::before {
+  content: "";
+  grid-row: 1 / span 9;
+  grid-column: 1;
+  width: 0.75rem;
+  height: 1rem;
+  margin-top: 0.2rem;
+  border-top: 2px dashed var(--warn);
+  border-bottom: 2px dashed var(--warn);
+}
+
+.check-label {
+  color: var(--warn);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .check-note {
-  margin: 0.5rem 0 0;
-  color: var(--muted);
-  font-style: italic;
+  margin-top: var(--s1);
+  color: var(--text);
+}
+
+.notice .check-notes {
+  margin-bottom: var(--s1);
 }
 
 /* An answer that came from the cache says so above its text. */

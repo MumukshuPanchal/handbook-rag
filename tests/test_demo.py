@@ -28,6 +28,7 @@ from handbook_rag.api import (
     MAX_QUERY_CHARS,
     AskResponse,
     CachedAnswer,
+    CheckNote,
     SearchedQuestion,
     create_app,
 )
@@ -691,6 +692,37 @@ def test_a_cached_answer_names_the_question_it_was_written_for_as_text() -> None
     badges = body_of("answerBadges")
     assert '"From the cache"' in badges
     assert 'hit.tier === "exact" ? "exact match" : "matched by meaning"' in badges
+
+
+# The notes of the checks in code that changed a reply or marked it (ADR 0025).
+
+
+def test_the_page_reads_the_fields_the_api_sends_for_a_check() -> None:
+    script = static("demo.js")
+
+    read = set(re.findall(r"\bcheck\.(\w+)", script))
+    assert read <= set(CheckNote.model_fields), read - set(CheckNote.model_fields)
+    assert {"note", "action"} <= read
+    assert "checks" in AskResponse.model_fields
+    assert "answer.checks" in body_of("checkNotes")
+    # A service older than the field sends none, and its answers are still shown.
+    assert "checks" not in body_of("isAnswer")
+    assert "Array.isArray(answer.checks)" in body_of("checkNotes")
+
+
+def test_a_note_of_a_check_is_shown_as_text_and_read_out_with_the_outcome() -> None:
+    box = body_of("checkBox")
+
+    # Each note is given to make, which sets it as text, in an element of the fixed list,
+    # under a class that is the script's own word.
+    assert 'box.append(make("p", "check-note", note.note));' in box
+    assert 'make("div", "check-notes")' in box
+    # Read out with the outcome, through the status line, and no region of its own.
+    assert 'const noted = notes.map((note) => ` Note: ${note.note}`).join("");' in body_of(
+        "showAnswer"
+    )
+    assert "say(`${words}${from}${noted}`);" in body_of("showAnswer")
+    assert ".check-notes {" in static("demo.css")
 
 
 def test_the_page_reads_the_fields_the_api_sends_for_a_cached_answer() -> None:

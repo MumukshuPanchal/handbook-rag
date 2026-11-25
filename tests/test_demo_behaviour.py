@@ -56,8 +56,12 @@ ANSWERED = (
     "arrived",
     "stop after answer",
     "asked again",
+    "check dropped line",
+    "two checks",
+    "malformed checks",
+    "malformed items",
 )
-DECLINED = ("declined", "cached")
+DECLINED = ("declined", "cached", "check declined")
 FAILED = (
     "error after text",
     "unreadable answer",
@@ -347,6 +351,7 @@ def label_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         **dict.fromkeys(DECLINED, "Declined"),
         **dict.fromkeys(FAILED, "Failed"),
         "withheld": "Reply",
+        "check cut": "Reply",
         "stopped": "Stopped",
     }
     for name, word in wanted.items():
@@ -354,7 +359,7 @@ def label_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         if step["cardTitle"] != word or step["ended"] != [f"ended-{word.lower()}"]:
             found.append(f"the card of a turn is not labelled by how it ended ({name})")
     # The strip of badges names what it sums up: an answer, or a reply that is not one.
-    for name in (*ANSWERED, *DECLINED, "withheld"):
+    for name in (*ANSWERED, *DECLINED, "withheld", "check cut"):
         made = "answer" if name in ANSWERED else "reply"
         if steps[name]["madeTitle"] != f"How this {made} was made":
             found.append(f"the strip under a reply calls it an answer ({name})")
@@ -589,6 +594,86 @@ def look_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
     return found
 
 
+# The notes of the checks in code, in the fixed words the service sends (ADR 0025).
+DROPPED = (
+    "Text after the answer's last citation was left out: it cited no passage and held a web "
+    "or email address."
+)
+COPIED = "Most of this reply repeats the passages it was given, word for word."
+UNCITED = (
+    "The reply the model wrote cited none of the passages, so it is not shown: a reply that "
+    "rests on no passage cannot be checked against the handbook."
+)
+UNFINISHED = (
+    "The reply did not come to a proper end, and its words after the last citation are not shown."
+)
+CHECKED = {
+    "check dropped line": [DROPPED],
+    "two checks": [DROPPED, COPIED],
+    "check declined": [UNCITED],
+    "check cut": [UNFINISHED],
+}
+
+
+def check_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """Whether every note of a check is shown in its own turn, where its reply's state
+    says it belongs, and read out with the outcome; and whether a list of checks of
+    another shape costs nothing."""
+    found = []
+    dropped, declined, cut = (
+        steps["check dropped line"],
+        steps["check declined"],
+        steps["check cut"],
+    )
+    if steps["two checks"]["checkNotes"] != CHECKED["two checks"] or dropped["checkNotes"] != [
+        DROPPED
+    ]:
+        found.append("the notes of a check are not shown")
+    elif dropped["bodyOrder"] != ["answer-text", "check-notes"] or dropped["checkInNotice"] != [
+        False
+    ]:
+        found.append("the notes of a check do not stand under the answer's text")
+    if any(steps[name]["checkLabels"] != ["Changed by a check"] for name in CHECKED):
+        found.append("the notes of a check are not marked as a change")
+    for step, notes in ((declined, [UNCITED]), (cut, [UNFINISHED])):
+        if step["checkNotes"] != notes or step["checkInNotice"] != [True]:
+            found.append(
+                "the note of a check on a reply that is not an answer is not with its notice"
+            )
+    if declined["noticeTitle"] != ["Declined by a check"] or declined["noticeWhy"] != []:
+        found.append("a reply a check declined is shown as one the handbook does not answer")
+    if cut["noticeTitle"] != ["Not an answer"] or not cut["noticeWhy"]:
+        found.append("a reply a check cut does not say why the model stopped")
+    for name, notes in CHECKED.items():
+        if not steps[name]["status"].endswith("".join(f" Note: {note}" for note in notes)):
+            found.append(f"the note of a check is not announced with the outcome ({name})")
+    if not declined["status"].startswith(
+        "Declined by a check, in place of the reply the model wrote."
+    ):
+        found.append("a reply a check declined is announced as one the handbook does not answer")
+    for name, badge in (
+        ("check dropped line", "Changed: by a check"),
+        ("two checks", "Changed: by 2 checks"),
+        ("check declined", "Changed: by a check"),
+    ):
+        if badge not in steps[name]["badges"]:
+            found.append(f"a change by a check has no badge ({name})")
+    for name in ("malformed checks", "malformed items"):
+        step = steps[name]
+        if not step["answer"] or step["error"] or step["conversation"][-1:] != [step["question"]]:
+            found.append(f"a list of checks of another shape loses the answer ({name})")
+        elif step["checkNotes"] or any(badge.startswith("Changed") for badge in step["badges"]):
+            found.append(f"a list of checks of another shape gives a note ({name})")
+    for name, step in steps.items():
+        if name not in CHECKED and step["checkNotes"]:
+            found.append(f"the notes of a check are shown on another turn ({name})")
+        if step["firstTurnCheckNotes"]:
+            found.append("the notes of a check are shown on another turn (the first)")
+    if steps["two checks"]["previousTurnCheckNotes"] != [DROPPED]:
+        found.append("the notes of a check leave their own turn")
+    return found
+
+
 def faults(steps: dict[str, dict[str, Any]]) -> list[str]:
     """What the page did wrong in the conversation, in words. Empty when nothing."""
     return [
@@ -604,6 +689,7 @@ def faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         *badge_word_faults(steps),
         *outcome_faults(steps),
         *look_faults(steps),
+        *check_faults(steps),
     ]
 
 
@@ -1303,3 +1389,73 @@ def test_the_run_finds_each_fault_planted_in_the_fallbacks(
     assert fault in fallback_faults(
         run(broken_sources(source.replace(old, new)), tmp_path)["cited"]
     )
+
+
+# The faults of the notes of the checks, each with the check that finds it.
+PLANTED_IN_THE_NOTES = [
+    (
+        "the notes of a check are not shown",
+        "    if (notes.length > 0) {\n      parts.push(checkBox(notes));\n    }\n",
+        "",
+    ),
+    (
+        "the notes of a check are shown on another turn (the first)",
+        "      parts.push(checkBox(notes));",
+        "      turns[0].body.append(checkBox(notes));",
+    ),
+    (
+        "a list of checks of another shape loses the answer (malformed checks)",
+        "  if (!Array.isArray(answer.checks)) {\n    return [];\n  }\n",
+        "",
+    ),
+    (
+        "a list of checks of another shape loses the answer (malformed items)",
+        ".filter((check) => isObject(check) && typeof",
+        ".filter((check) => typeof",
+    ),
+    (
+        "a list of checks of another shape gives a note (malformed items)",
+        'typeof check.note === "string" && check.note !== ""',
+        "check.note !== undefined",
+    ),
+    (
+        "the note of a check is not announced with the outcome (check dropped line)",
+        "  say(`${words}${from}${noted}`);",
+        "  say(`${words}${from}`);",
+    ),
+    (
+        "the note of a check on a reply that is not an answer is not with its notice",
+        "  if (notes.length > 0) {\n    box.append(checkBox(notes));\n  }\n  return box;",
+        "  return box;",
+    ),
+    (
+        "a reply a check declined is shown as one the handbook does not answer",
+        'byCheck ? "Declined by a check" : ',
+        "",
+    ),
+    (
+        "a reply a check declined is announced as one the handbook does not answer",
+        '    words = "Declined by a check, in place of the reply the model wrote.";\n',
+        "",
+    ),
+    (
+        "a change by a check has no badge (two checks)",
+        'badges.push(["Changed", notes.length === 1',
+        'badges.push(["Unchanged", notes.length === 1',
+    ),
+    (
+        "the notes of a check are not marked as a change",
+        '  box.append(make("p", "check-label", "Changed by a check"));\n',
+        "",
+    ),
+]
+
+
+@pytest.mark.parametrize(("fault", "old", "new"), PLANTED_IN_THE_NOTES)
+def test_the_run_finds_each_fault_planted_in_the_notes_of_the_checks(
+    fault: str, old: str, new: str, tmp_path: Path
+) -> None:
+    source = script()
+    assert source.count(old) == 1, old
+
+    assert fault in faults(run(source.replace(old, new), tmp_path))

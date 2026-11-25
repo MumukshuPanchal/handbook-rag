@@ -445,6 +445,12 @@ function latestTurn() {
       unreadable: card.classes.has("source-unreadable"),
       ...(card.classes.has("source-unreadable") ? {} : addressOf(card)),
     })),
+    checkNotes: shownByClass(item, "check-note").map((note) => note.textContent),
+    checkLabels: shownByClass(item, "check-label").map((label) => label.textContent),
+    checkInNotice: byClass(item, "check-notes").map((box) => inside(box, "notice")),
+    bodyOrder: byClass(item, "answer-body").flatMap((body) => body.children.map((part) => part.className)),
+    noticeTitle: shownByClass(item, "notice-title").map((title) => title.textContent),
+    noticeWhy: shownByClass(item, "notice-why").map((why) => why.textContent),
     searchFoldShown: isShown(searchFold),
     searchCount: byClass(item, "search-fold").flatMap((each) => byClass(each, "side-count")).map((count) => count.textContent).join(""),
     searchState: byClass(item, "search-state").map((state) => state.textContent).join(""),
@@ -480,6 +486,10 @@ function record(name, question) {
     welcomeHidden: page.welcome.hidden,
     status: page.status.textContent,
     focus: document.activeElement === null ? null : document.activeElement.id,
+    // The notes of checks on the first turn of the conversation and on the one before the
+    // latest, so that a note shown on another turn than its own is seen.
+    firstTurnCheckNotes: byClass(page.turns.children[0], "check-note").map((note) => note.textContent),
+    previousTurnCheckNotes: byClass(page.turns.children.at(-2), "check-note").map((note) => note.textContent),
     ...latestTurn(),
   });
 }
@@ -888,6 +898,68 @@ async function tryKey(name, value, init, reply = null) {
   record("asked again", "and the rest");
   Object.assign(steps.at(-1), { sent: asked.length - before, query: asked.at(-1).query });
 }
+
+// Replies that checks in code changed or marked, each with the notes the service sends in
+// fixed words, and replies whose list of checks is not of the shape the page reads.
+const DROPPED =
+  "Text after the answer's last citation was left out: it cited no passage and held a web or email address.";
+const COPIED = "Most of this reply repeats the passages it was given, word for word.";
+const UNCITED =
+  "The reply the model wrote cited none of the passages, so it is not shown: a reply that rests on no passage cannot be checked against the handbook.";
+const UNFINISHED =
+  "The reply did not come to a proper end, and its words after the last citation are not shown.";
+const SOURCE = { number: 1, doc_id: "people/leave.md", title: "Leave", url: LEAVE_URL, section: "people", heading_path: [], text: "Apply a month ahead." };
+const cited1 = { segments: [{ text: "Apply a month ahead.", sources: [1] }], sources: [SOURCE] };
+const droppedLine = { check: "address_in_closing_line", action: "dropped_line", note: DROPPED };
+await step(
+  "check dropped line",
+  "and the deadline",
+  answered("and the deadline", "and the deadline", "unchanged", { ...cited1, checks: [droppedLine] }),
+);
+await step(
+  "two checks",
+  "and the form",
+  answered("and the form", "and the form", "unchanged", {
+    ...cited1,
+    checks: [droppedLine, { check: "mostly_a_copy", action: "marked", note: COPIED }],
+  }),
+);
+await step(
+  "check declined",
+  "and the pay",
+  declined("and the pay", { checks: [{ check: "cites_nothing", action: "declined", note: UNCITED }] }),
+);
+await step(
+  "check cut",
+  "and the dates",
+  stream([
+    ["searched", searched("and the dates", "and the dates", "unchanged")],
+    ["text", { text: "Apply a month ahead." }],
+    [
+      "answer",
+      // A reply that is not an answer lists no sources, as the service sends it.
+      answer(searched("and the dates", "and the dates", "unchanged"), {
+        segments: [{ text: "Apply a month ahead.", sources: [] }],
+        sources: [],
+        answered: false,
+        stop_reason: "max_tokens_or_other",
+        checks: [{ check: "unfinished_reply", action: "dropped_words", note: UNFINISHED }],
+      }),
+    ],
+  ]),
+);
+await step(
+  "malformed checks",
+  "and the notice",
+  answered("and the notice", "and the notice", "unchanged", { checks: "not a list" }),
+);
+await step(
+  "malformed items",
+  "and the approval",
+  answered("and the approval", "and the approval", "unchanged", {
+    checks: [null, 3, "a note", { note: 5 }, { check: "cites_nothing" }, { note: "" }],
+  }),
+);
 
 // A failure, then a new conversation: the alert keeps nothing of it.
 await step("failure before new", "and in brazil", refusal("The answer model is unavailable. Try again later."));

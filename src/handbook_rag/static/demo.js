@@ -155,6 +155,22 @@ function answerPieces(answer) {
   }));
 }
 
+// The notes of the checks in code that changed the reply or marked it, in the fixed words
+// the service sends, each with whether its check declined the reply in place of what the
+// model wrote (docs/adr/0025-hardening-against-planted-instructions.md). The reply on the
+// page is the reply as the checks left it, and a note is the only sign that it is not all
+// the model wrote, so every note is shown. A service older than the field sends none, so
+// isAnswer does not ask for it: a field that is missing, or not a list, gives no note, and
+// an item that is not of the shape this page reads is passed over.
+function checkNotes(answer) {
+  if (!Array.isArray(answer.checks)) {
+    return [];
+  }
+  return answer.checks
+    .filter((check) => isObject(check) && typeof check.note === "string" && check.note !== "")
+    .map((check) => ({ note: check.note, declined: check.action === "declined" }));
+}
+
 // The numbers of the sources that the answer's text cites, each once. An answer can list
 // a source that its text does not cite.
 function citedNumbers(answer) {
@@ -219,6 +235,10 @@ function answerBadges(answer) {
   }
   if (answer.fallback === true) {
     badges.push(["Written by", "the fallback model", "warn"]);
+  }
+  const notes = checkNotes(answer);
+  if (notes.length > 0) {
+    badges.push(["Changed", notes.length === 1 ? "by a check" : `by ${notes.length} checks`, "warn"]);
   }
   return badges;
 }
@@ -863,7 +883,15 @@ function renderAnswer(turn, answer) {
   if (pieces.length === 0) {
     text.textContent = "The reply holds no text.";
   }
-  parts.push(answer.answered ? text : notice(answer, text));
+  const notes = checkNotes(answer);
+  if (answer.answered) {
+    parts.push(text);
+    if (notes.length > 0) {
+      parts.push(checkBox(notes));
+    }
+  } else {
+    parts.push(notice(answer, text, notes));
+  }
   const cards = answer.sources.map((source) => cardOrNotice(turn, source));
   if (cards.length === 0) {
     const none = answer.answered ? "This answer cites no source." : "Nothing is cited: this reply is not an answer.";
@@ -895,15 +923,35 @@ function renderAnswer(turn, answer) {
 // A reply that is not an answer, as a calm notice and not as a failure: "I could not find
 // this in the handbook" is the right reply to a question the handbook does not cover. A
 // reply that was withheld or cut off says so, and why the model stopped.
-function notice(answer, text) {
+// A reply that a check declined in place of what the model wrote is not one the handbook
+// left unanswered: its notice says it was declined by a check, and the note says why.
+function notice(answer, text, notes) {
   const declined = isDecline(answer);
+  const byCheck = notes.some((note) => note.declined);
   const box = make("div", declined ? "notice notice-decline" : "notice notice-unfinished");
-  box.append(make("p", "notice-title", declined ? "Not in the handbook" : "Not an answer"));
+  const title = byCheck ? "Declined by a check" : declined ? "Not in the handbook" : "Not an answer";
+  box.append(make("p", "notice-title", title));
   box.append(text);
   const why = declined
     ? "The assistant found nothing in the handbook that answers this, and says so instead of guessing."
     : `The reply was withheld or did not come to a proper end. Why the model stopped: ${shown(answer.stop_reason)}.`;
-  box.append(make("p", "notice-why", why));
+  if (!byCheck) {
+    box.append(make("p", "notice-why", why));
+  }
+  if (notes.length > 0) {
+    box.append(checkBox(notes));
+  }
+  return box;
+}
+
+// The notes of the checks that changed a reply, as text, in a look of their own: something
+// was changed here, which is not a failure.
+function checkBox(notes) {
+  const box = make("div", "check-notes");
+  box.append(make("p", "check-label", "Changed by a check"));
+  for (const note of notes) {
+    box.append(make("p", "check-note", note.note));
+  }
   return box;
 }
 
@@ -1190,7 +1238,14 @@ function showAnswer(turn, data) {
       ? "Not in the handbook: the assistant declined instead of guessing."
       : "Not an answer: the reply was withheld or did not come to a proper end.";
   }
-  say(`${words}${from}`);
+  const notes = checkNotes(data);
+  if (notes.some((note) => note.declined)) {
+    words = "Declined by a check, in place of the reply the model wrote.";
+  }
+  // Each note is read out with the outcome: it is the only sign that the reply is not all
+  // the model wrote.
+  const noted = notes.map((note) => ` Note: ${note.note}`).join("");
+  say(`${words}${from}${noted}`);
   return true;
 }
 

@@ -555,7 +555,7 @@ def decision_record_numbers() -> dict[str, list[str]]:
             SECOND,
             SECOND,
         ],
-        "- **Version 2 is not steady on the answers it is unsure of.**": [SECOND],
+        "- **Version 2 is not steady on the statements the readers split on.**": [SECOND],
         "- **The misses and the false alarms.**": [SECOND],
         "- Every score in the results tables and in a run's summary is as it was": [FIRST],
         "- The next measurement of the answers will be scored by version 1": [
@@ -1064,7 +1064,7 @@ def test_the_card_of_the_limit_answers_gives_the_checks_as_the_runs_hold_them() 
                 str(len(second["caught_in_title"])),
                 SECOND,
             ],
-            "Version 2 is not steady on the answers it is unsure of.": [SECOND],
+            "Version 2 is not steady on the statements the readers split on.": [SECOND],
         },
     )
     assert first["caught"] <= second["caught"]
@@ -1209,7 +1209,7 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
     ]
     assert f"with {in_words(len(second['false_alarms']))} false alarm in" in started
     assert roadmap.index(started) > roadmap.index("Started since 1.0, and not finished:")
-    assert "can be measured, and are not reduced" in started
+    assert "are neither counted in the assistant's own answers nor reduced" in started
 
 
 def test_the_architecture_page_names_the_second_version() -> None:
@@ -1292,3 +1292,39 @@ def test_the_documents_give_version_2s_score_of_the_baseline_answers() -> None:
         assert numbers(line) == baseline_line_numbers(), line
     for path in (README, GUIDE, ADR, ROADMAP):
         assert limit_runs.NOT_YET_RECORDED not in read(path), path.name
+
+
+def _cases(path: Path) -> dict[str, dict[str, Any]]:
+    rows = (json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
+    return {row["case"]: row for row in rows}
+
+
+def test_four_sentences_a_review_could_change_unnoticed() -> None:
+    """A second review changed one word in each of these and no test failed.
+
+    Each is held to the file it speaks of, so that the sentence cannot name another count,
+    another case or another statement than the files do.
+    """
+    readme = read(README)
+    for check in (
+        "(evals/runs/judge/baseline)",
+        "(evals/runs/judge/v2)",
+        "(evals/runs/judge-correct",
+    ):
+        assert check in readme, f"the judges table names the check {check}"
+    assert "under three sets of instructions" in readme
+
+    first_set = _cases(ROOT / "evals" / "judge" / "support" / "cases.jsonl")
+    assert {"q104", "q104-v1"} <= set(first_set)
+    assert "It passes the same statement in the copy `q104-v1`" in read(GUIDE)
+
+    assert "none of its three alarms for a limit is confirmed by the labels" in read(ADR)
+
+    statements = {
+        statement["number"]: statement["expected"]
+        for statement in _cases(ROOT / "evals" / "judge" / "limits" / "cases.jsonl")["lim-083"][
+            "statements"
+        ]
+    }
+    assert statements == {1: "unsupported", 2: "supported"}
+    assert "Statement 1 of `lim-083` is labelled unsupported" in read(LIMITS_CARD)

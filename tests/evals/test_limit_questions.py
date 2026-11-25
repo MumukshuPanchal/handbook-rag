@@ -27,7 +27,7 @@ from handbook_rag.evals.limit_questions import (
 from handbook_rag.evals.retrieval import FailedQuestion
 from handbook_rag.evals.support import passage_hash
 from handbook_rag.generate.base import GenerationError
-from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
+from handbook_rag.generate.models import Answer, Citation, ReplyCheck, Segment, TokenUsage
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
 from handbook_rag.index.store import ScoredChunk
 from handbook_rag.ingest.models import Chunk
@@ -383,3 +383,162 @@ def test_a_run_writes_a_line_for_each_reply_with_its_verdicts_and_the_counts(
     assert summary["figures"]["all"]["faulted"] == 1
     assert summary["figures"]["all"]["share_faulted"]["mean"] == 0.5
     assert summary["config"] == {"answer_model": "stand-in"}
+
+
+def test_an_answer_that_cites_two_passages_is_refused(tmp_path: Path) -> None:
+    two = {**ROWS[1], "passages": [*ROWS[1]["passages"], *ROWS[2]["passages"]]}
+
+    with pytest.raises(DatasetError, match="cites one passage"):
+        load_limit_questions(write_rows(tmp_path, ROWS[0], two, *ROWS[2:]))
+
+
+def test_no_share_is_given_before_every_question_has_a_reply(tmp_path: Path) -> None:
+    laptop_q, leave_q = questions(tmp_path)
+    records = {laptop_q.case_id: reply(laptop_q, "You may expense a laptop.")}
+    cases = judged_cases([laptop_q, leave_q], records, CHUNKS)
+
+    report = summarise_limits(
+        [laptop_q, leave_q], records, cases, {laptop_q.case_id: verdicts("lim-002", "supported")}
+    )
+
+    assert report.waiting_for_the_judge == []
+    assert report.not_asked == 1
+    assert report.figures["all"].share_faulted is None
+    assert report.figures["all"].share_good is None
+    assert report.figures["all"].good == 1
+
+
+def test_an_answer_with_one_statement_faulted_among_others_is_faulted(tmp_path: Path) -> None:
+    laptop_q, leave_q = questions(tmp_path)
+    records = {
+        laptop_q.case_id: reply(laptop_q, "You may expense a laptop."),
+        leave_q.case_id: reply(leave_q, "Sixteen weeks."),
+    }
+    cases = judged_cases([laptop_q, leave_q], records, CHUNKS)
+
+    report = summarise_limits(
+        [laptop_q, leave_q],
+        records,
+        cases,
+        {
+            laptop_q.case_id: verdicts("lim-002", "supported", "unsupported"),
+            leave_q.case_id: verdicts("lim-003", "supported", "supported"),
+        },
+    )
+
+    assert [result.outcome for result in report.results] == ["faulted", "good"]
+    assert report.figures["all"].faulted == 1
+
+
+def test_tokens_leave_out_replies_that_needed_no_request(tmp_path: Path) -> None:
+    laptop_q, leave_q = questions(tmp_path)
+    nothing_sent = dataclasses.replace(
+        reply(leave_q, NOT_FOUND_MESSAGE, answered=False),
+        stop_reason="no_context",
+        input_tokens=0,
+        output_tokens=0,
+    )
+    records = {
+        laptop_q.case_id: reply(laptop_q, "You may expense a laptop."),
+        leave_q.case_id: nothing_sent,
+    }
+
+    report = summarise_limits([laptop_q, leave_q], records, [], {})
+
+    assert report.tokens["input_mean"] == 500.0
+    assert report.tokens["input_total"] == 500.0
+
+
+def with_checks(record: AnswerRecord, *checks: tuple[str, str], **changes: Any) -> AnswerRecord:
+    return dataclasses.replace(
+        record,
+        checks=tuple(ReplyCheck(name, action, "A note.", "words") for name, action in checks),
+        **changes,
+    )
+
+
+def test_the_figure_that_counts_is_good_answers_out_of_every_question_with_each_cause(
+    tmp_path: Path,
+) -> None:
+    rows = [
+        row(f"lim-{n:03}", "dropped", chunk, f"Question {n}?")
+        for n, chunk in enumerate([LEAVE, LAPTOP], start=1)
+    ]
+    loaded = load_limit_questions(write_rows(tmp_path, *rows))
+    leave_q, laptop_q = loaded
+    # One answer the judge faults nothing in; and one question that got no answer.
+    records = {
+        leave_q.case_id: reply(leave_q, "Sixteen weeks in Canada."),
+        laptop_q.case_id: reply(laptop_q, NOT_FOUND_MESSAGE, answered=False),
+    }
+    cases = judged_cases(loaded, records, CHUNKS)
+
+    report = summarise_limits(
+        loaded, records, cases, {leave_q.case_id: verdicts("lim-001", "supported")}
+    )
+
+    figures = report.figures["all"]
+    assert report.final
+    assert (figures.good, figures.judged, figures.faulted) == (1, 1, 0)
+    assert figures.share_faulted is not None
+    assert figures.share_faulted.mean == 0.0
+    assert figures.share_good is not None
+    assert figures.share_good.mean == 0.5
+    assert figures.outcomes["good"] == 1
+    assert figures.outcomes["declined_by_the_model"] == 1
+    assert list(figures.outcomes) == list(limit_questions.OUTCOMES)
+
+
+@pytest.mark.parametrize(
+    ("changes", "outcome"),
+    [
+        ({}, "declined_by_the_model"),
+        ({"model_text": "The passages found do not say who."}, "declined_in_the_gap_form"),
+        ({"checks": (("cites_nothing", "declined"),)}, "declined_by_a_check"),
+        ({"checks": (("words_beside_a_decline", "dropped_words"),)}, "declined_by_the_model"),
+        ({"stop_reason": "refusal"}, "unfinished"),
+        (
+            {"checks": (("unfinished_reply", "dropped_words"),), "stop_reason": "SAFETY"},
+            "unfinished",
+        ),
+    ],
+)
+def test_each_cause_of_no_answer_is_named(
+    tmp_path: Path, changes: dict[str, Any], outcome: str
+) -> None:
+    laptop_q, _ = questions(tmp_path)
+    checks = changes.get("checks", ())
+    rest = {name: value for name, value in changes.items() if name != "checks"}
+    record = with_checks(reply(laptop_q, NOT_FOUND_MESSAGE, answered=False), *checks, **rest)
+    result = limit_questions.LimitResult(laptop_q, record, None, None)
+
+    assert result.outcome == outcome
+
+
+def write_outcomes(run_dir: Path, outcomes: dict[str, str], *, final: bool = True) -> Path:
+    run_dir.mkdir(parents=True)
+    (run_dir / "summary.json").write_text(json.dumps({"final": final}))
+    (run_dir / "results.jsonl").write_text(
+        "".join(json.dumps({"case": case, "outcome": o}) + "\n" for case, o in outcomes.items())
+    )
+    return run_dir
+
+
+def test_two_final_runs_are_compared_question_by_question(tmp_path: Path) -> None:
+    earlier = write_outcomes(
+        tmp_path / "a", {"q1": "good", "q2": "declined_by_the_model", "q3": "faulted", "q4": "good"}
+    )
+    later = write_outcomes(
+        tmp_path / "b", {"q1": "faulted", "q2": "good", "q3": "good", "q4": "good"}
+    )
+
+    comparison = limit_questions.compare_limit_runs(earlier, later)
+
+    assert (comparison.better, comparison.worse, comparison.same) == (["q2", "q3"], ["q1"], 1)
+    assert comparison.sign_test == 1.0
+    with pytest.raises(DatasetError, match="not final"):
+        limit_questions.compare_limit_runs(
+            earlier, write_outcomes(tmp_path / "c", {"q1": "good"}, final=False)
+        )
+    with pytest.raises(DatasetError, match="other questions"):
+        limit_questions.compare_limit_runs(earlier, write_outcomes(tmp_path / "d", {"q1": "good"}))

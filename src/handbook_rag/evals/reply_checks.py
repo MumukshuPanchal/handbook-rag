@@ -22,6 +22,9 @@ from handbook_rag.generate.checks import CheckedReply, check_reply
 from handbook_rag.generate.models import Citation, Segment
 from handbook_rag.ingest.models import Chunk
 
+ENDINGS = frozenset({"end_turn", "max_tokens"})
+"""The stop reasons of a reply that came to a proper end, as a saved reply records them."""
+
 
 @dataclass(frozen=True, slots=True)
 class TriedReply:
@@ -76,6 +79,6 @@ def try_checks(record: AnswerRecord, given: Sequence[Chunk]) -> TriedReply:
     return TriedReply(
         record.question_id,
         record,
-        check_reply(segments, given, answered=answered),
+        check_reply(segments, given, answered=answered, ended=record.stop_reason in ENDINGS),
         model_text,
     )

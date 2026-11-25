@@ -16,6 +16,7 @@ from handbook_rag.evals.metrics import (
     recall_at_k,
     reciprocal_rank_at_k,
     share_with_interval,
+    sign_test,
 )
 from handbook_rag.ingest.models import Chunk
 
@@ -299,3 +300,23 @@ def test_the_ends_of_an_interval_stay_in_order_for_every_small_count() -> None:
 def test_a_share_needs_a_count_it_fits_in(successes: int, total: int) -> None:
     with pytest.raises(ValueError, match="share"):
         share_with_interval(successes, total)
+
+
+@pytest.mark.parametrize(
+    ("better", "worse", "p"),
+    [
+        (7, 1, 0.0703125),
+        (1, 7, 0.0703125),
+        (5, 1, 0.21875),
+        (2, 1, 1.0),
+        (0, 0, 1.0),
+        (6, 0, 0.03125),
+    ],
+)
+def test_the_sign_test_is_exact_and_two_sided(better: int, worse: int, p: float) -> None:
+    assert sign_test(better, worse) == p
+    # The comparison of two runs gives it too, and the questions that did not change take
+    # no part in it.
+    base = [0.0] * better + [1.0] * worse + [1.0, 0.0]
+    candidate = [1.0] * better + [0.0] * worse + [1.0, 0.0]
+    assert paired_difference(base, candidate).sign_test == p

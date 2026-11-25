@@ -162,19 +162,22 @@ class ClaudeGenerator:
 
         segments = _segments(message, chunks)
         # An answer is a reply the model finished, or one that ran out of room.
-        answered = is_answered(
-            segments, refused=message.stop_reason not in ("end_turn", "max_tokens")
-        )
+        ended = message.stop_reason in ("end_turn", "max_tokens")
+        answered = is_answered(segments, refused=not ended)
         model_text = ""
         if self._instructions in GAP_FORM_VERSIONS:
             # Before the checks: a decline in other words is the model's, not a check's.
             segments, answered, model_text = read_the_gap_form_as_a_decline(
                 segments, answered=answered
             )
-        reply = check_reply(segments, chunks, answered=answered) if checked else None
+        reply = check_reply(segments, chunks, answered=answered, ended=ended) if checked else None
+        # Text streams as it comes, unless the reply is checked: then all of it at the end.
+        first_shown_at = first_text_at
         if reply is not None:
             segments, answered = reply.segments, reply.answered
-            HeldBack(on_text).finished(segments)
+            held = HeldBack(on_text)
+            held.finished(segments)
+            first_shown_at = held.first_sent_at
         return Answer(
             question=question,
             segments=segments,
@@ -189,6 +192,7 @@ class ClaudeGenerator:
             ),
             seconds=finished - started,
             seconds_to_first_text=None if first_text_at is None else first_text_at - started,
+            seconds_to_first_shown=None if first_shown_at is None else first_shown_at - started,
             checks=() if reply is None else reply.checks,
             model_text=model_text,
         )

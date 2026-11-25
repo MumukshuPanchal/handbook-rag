@@ -33,7 +33,7 @@ from handbook_rag.evals.answers import AnswerRecord, AnswerRun, load_records, re
 from handbook_rag.evals.careful import run_carefully
 from handbook_rag.evals.dataset import DatasetError
 from handbook_rag.evals.judge import Judgement, SupportCase
-from handbook_rag.evals.metrics import Estimate, share_with_interval
+from handbook_rag.evals.metrics import Estimate, share_with_interval, sign_test
 from handbook_rag.evals.retrieval import FailedQuestion
 from handbook_rag.evals.stage import Stage, write_json
 from handbook_rag.evals.support import SUPPORT_V2, passage_hash, support_case
@@ -53,6 +53,26 @@ RESULTS_FILE = "results.jsonl"
 SUMMARY_FILE = "summary.json"
 FAULT = "unsupported"
 """The verdict that makes an answer faulted."""
+ENDINGS = frozenset({"end_turn", "max_tokens"})
+"""The stop reasons of a reply that came to a proper end."""
+
+GOOD, FAULTED = "good", "faulted"
+DECLINED_BY_THE_MODEL = "declined_by_the_model"
+DECLINED_IN_THE_GAP_FORM = "declined_in_the_gap_form"
+DECLINED_BY_A_CHECK = "declined_by_a_check"
+UNFINISHED = "unfinished"
+NOTHING_TO_JUDGE, WAITING = "nothing_to_judge", "waiting_for_the_judge"
+OUTCOMES = (
+    GOOD,
+    FAULTED,
+    DECLINED_BY_THE_MODEL,
+    DECLINED_IN_THE_GAP_FORM,
+    DECLINED_BY_A_CHECK,
+    UNFINISHED,
+    NOTHING_TO_JUDGE,
+    WAITING,
+)
+"""What can become of a question with a reply, in the order they are reported."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,6 +320,32 @@ class LimitResult:
             return None
         return any(verdict.verdict == FAULT for verdict in self.judgement.verdicts)
 
+    @property
+    def outcome(self) -> str:
+        """What became of the question, one of :data:`OUTCOMES`.
+
+        ``good`` is an answer in which the judge faulted no statement: what the figure that
+        counts counts. A question that got no answer is not good, whatever the cause, and
+        the cause is named: the model declined, its reply was the fixed form for a missing
+        part alone, a check declined its reply, or the reply did not come to a proper end.
+        """
+        record = self.record
+        if not record.answered:
+            actions = {check.action for check in record.checks}
+            names = {check.name for check in record.checks}
+            if record.model_text:
+                return DECLINED_IN_THE_GAP_FORM
+            if "declined" in actions:
+                return DECLINED_BY_A_CHECK
+            if record.stop_reason not in ENDINGS or "unfinished_reply" in names:
+                return UNFINISHED
+            return DECLINED_BY_THE_MODEL
+        if self.case is None:
+            return NOTHING_TO_JUDGE
+        if self.judgement is None:
+            return WAITING
+        return FAULTED if self.faulted else GOOD
+
 
 @dataclass(frozen=True, slots=True)
 class LimitFigures:
@@ -311,7 +357,15 @@ class LimitFigures:
     judged: int
     faulted: int
     share_faulted: Estimate | None
-    """Faulted answers among the answers judged, once every answer has a verdict."""
+    """Faulted answers among the answers judged, once every answer has a verdict. Not the
+    headline: a question that got no answer drops out of it, so the instructions that
+    decline more would look better by it."""
+    good: int = 0
+    """Answers with no statement faulted: the figure that counts."""
+    share_good: Estimate | None = None
+    """Answers with no statement faulted, out of all the questions, once final."""
+    outcomes: dict[str, int] = field(default_factory=dict)
+    """How many questions came to each of :data:`OUTCOMES`."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,6 +420,7 @@ def summarise_limits(
         answered = [r for r in members if r.record.answered]
         judged = [r for r in members if r.judgement is not None]
         faulted = sum(bool(r.faulted) for r in judged)
+        good = sum(r.outcome == GOOD for r in members)
         return LimitFigures(
             questions=total,
             replied=len(members),
@@ -375,6 +430,9 @@ def summarise_limits(
             share_faulted=(
                 share_with_interval(faulted, len(judged)) if complete and judged else None
             ),
+            good=good,
+            share_good=share_with_interval(good, total) if complete and total else None,
+            outcomes={o: sum(r.outcome == o for r in members) for o in OUTCOMES},
         )
 
     grouped = {"all": figures(results, len(questions))}
@@ -435,6 +493,7 @@ def write_limit_run(
                 "model_text": record.model_text,
                 "judged": result.judgement is not None,
                 "faulted": result.faulted,
+                "outcome": result.outcome,
                 "verdicts": (
                     []
                     if result.judgement is None
@@ -470,3 +529,40 @@ def write_limit_run(
             "tokens": report.tokens,
         },
     )
+
+
+@dataclass(frozen=True, slots=True)
+class LimitComparison:
+    """Two final runs of the limit questions, question by question."""
+
+    better: list[str]
+    """Questions good in the later run and not in the earlier one."""
+    worse: list[str]
+    same: int
+
+    @property
+    def sign_test(self) -> float:
+        return sign_test(len(self.better), len(self.worse))
+
+
+def compare_limit_runs(earlier: Path, later: Path) -> LimitComparison:
+    """Compare two final runs by the figure that counts: a good answer or not, per question.
+
+    Both runs must be final and of the same questions, or there is nothing to compare.
+    """
+
+    def outcomes(run_dir: Path) -> dict[str, str]:
+        if not (run_dir / SUMMARY_FILE).is_file():
+            raise DatasetError(f"there is no run of the limit questions in {run_dir}")
+        summary = json.loads((run_dir / SUMMARY_FILE).read_text(encoding="utf-8"))
+        if not summary.get("final"):
+            raise DatasetError(f"the run in {run_dir} is not final, so it cannot be compared")
+        rows = (run_dir / RESULTS_FILE).read_text(encoding="utf-8").splitlines()
+        return {row["case"]: row["outcome"] for row in map(json.loads, rows) if row}
+
+    before, after = outcomes(earlier), outcomes(later)
+    if set(before) != set(after):
+        raise DatasetError(f"{earlier} and {later} hold replies to other questions")
+    better = sorted(c for c in before if after[c] == GOOD and before[c] != GOOD)
+    worse = sorted(c for c in before if before[c] == GOOD and after[c] != GOOD)
+    return LimitComparison(better, worse, len(before) - len(better) - len(worse))

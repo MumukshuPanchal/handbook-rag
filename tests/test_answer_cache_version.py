@@ -76,12 +76,27 @@ PINNED = {
     # before the check for a reply that cites nothing declined it. Such a reply was never
     # stored, since a reply a check changed is not kept; now it is kept as a decline, which
     # is served to the very same question only. No stored answer becomes wrong: it stays.
-    "generate/base.py": "b0d37f218f520b8f",
-    "generate/checks.py": "c800929a4574c530",
-    "generate/claude.py": "a458e78d7400ee9d",
-    "generate/gemini.py": "daaed3b21bddf6c4",
+    #
+    # After a review, three changes to how a reply of version 2 is read and checked. A
+    # reply in the fixed form that cites a passage stays an answer, where it was read as a
+    # decline. A reply that is not an answer is shown as the fixed declining sentence
+    # alone, with a check and its note, where it was shown as written. Every line after
+    # the last citation that holds an address is dropped, where only the last line was.
+    # The first stores such a reply as the answer it is, kept from the second tier as one
+    # that declines in part, where it stored a decline. The other two make fewer replies
+    # storable, never more: a reply a check changed is not kept.
+    # What the code before could have stored under version 2 (a decline read from a cited
+    # reply in the form, a decline with words beside it, an answer with an address above
+    # its last line) is no more wrong now than when it was stored, and a decline is served
+    # to the very same question only. Version 2 has not been released, so its collection
+    # exists only where this branch was run, and `cache-clear` empties it. The time when
+    # text was first passed on is recorded too, which changes no answer. It stays.
+    "generate/base.py": "8ccce226bc08ea27",
+    "generate/checks.py": "46488bffad5f6b2a",
+    "generate/claude.py": "0a4a690b15c721b1",
+    "generate/gemini.py": "52356590fc24d86b",
     "generate/markers.py": "db2add40ed28b909",
-    "generate/models.py": "39defe6e664fb8ca",
+    "generate/models.py": "e2abfdf1b46b3281",
     # How passages are found: the question's vectors, the search, and what orders them.
     "index/embedder.py": "42df4fad32f4e53d",
     "index/sparse.py": "1852989448469c03",

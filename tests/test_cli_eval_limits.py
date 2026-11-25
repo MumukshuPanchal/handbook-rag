@@ -302,3 +302,53 @@ def test_eval_limits_does_not_go_on_with_a_run_made_with_other_settings(
     run_dir = limit_run["run_dir"]
     assert len((run_dir / "answers.jsonl").read_text().splitlines()) == 3
     assert len((run_dir / "support-v2.jsonl").read_text().splitlines()) == 2
+
+
+def test_eval_limits_gives_the_figure_that_counts_first_with_each_cause_of_no_answer(
+    limit_run: dict[str, Any],
+) -> None:
+    result = runner.invoke(app, limit_run["command"])
+
+    assert result.exit_code == 0, result.output
+    # Of the 3 questions, one answer with nothing faulted; the decline counts against it.
+    assert "good         1 of the 3 questions got an answer with no statement faulted: 0.333" in (
+        result.output
+    )
+    assert "outcomes     good 1, faulted 1, declined_by_the_model 1" in result.output
+    assert result.output.index("good         1 of the 3") < result.output.index("share faulted")
+    rows = results(limit_run["run_dir"])
+    assert {case: row["outcome"] for case, row in rows.items()} == {
+        "lim-002": "good",
+        "lim-003": "faulted",
+        "lim-004": "declined_by_the_model",
+    }
+    summary = json.loads((limit_run["run_dir"] / "summary.json").read_text())
+    assert summary["figures"]["all"]["good"] == 1
+    assert summary["figures"]["all"]["share_good"]["count"] == 3
+
+
+def test_eval_limits_compares_a_final_run_with_another_question_by_question(
+    limit_run: dict[str, Any],
+) -> None:
+    base = runner.invoke(app, [*limit_run["command"], "--variant", "baseline"])
+    assert base.exit_code == 0, base.output
+    baseline = limit_run["run_dir"].parent / "baseline"
+    rows = (baseline / "results.jsonl").read_text().splitlines()
+    # In the earlier run, the question on leave was not answered well.
+    changed = [
+        json.dumps({**row, "outcome": "faulted"}) if row["case"] == "lim-002" else json.dumps(row)
+        for row in map(json.loads, rows)
+    ]
+    (baseline / "results.jsonl").write_text("".join(line + "\n" for line in changed))
+
+    result = runner.invoke(app, [*limit_run["command"], "--against", "baseline"])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "against      baseline: 1 questions good here and not there, 0 the other way, 2 the "
+        "same; exact sign test p = 1.000" in result.output
+    )
+    # A run that is not final is not compared, and says nothing of it.
+    missing = runner.invoke(app, [*limit_run["command"], "--against", "nowhere"])
+    assert missing.exit_code == 1
+    assert "there is no run of the limit questions in" in missing.output

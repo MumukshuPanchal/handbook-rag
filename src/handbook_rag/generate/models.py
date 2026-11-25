@@ -70,9 +70,9 @@ class ReplyCheck:
     """
 
     name: str
-    """Which check: ``address_in_closing_line``, ``cites_nothing`` or ``mostly_a_copy``."""
+    """Which check: one of ``generate.checks.CHECKS``."""
     action: str
-    """What it did: ``dropped_line``, ``declined`` or ``marked``."""
+    """What it did: ``dropped_line``, ``dropped_words``, ``declined`` or ``marked``."""
     note: str
     """What the reader is told, in fixed words."""
     removed: str = ""
@@ -96,6 +96,13 @@ class Answer:
     """How long the request that wrote the reply took. Failed requests before it are not
     counted in."""
     seconds_to_first_text: float | None = None
+    """Seconds from the request to the first words the model wrote."""
+    seconds_to_first_shown: float | None = None
+    """Seconds from the request to the first words passed on to the reader, or that would
+    be passed on when nobody listens. The same as ``seconds_to_first_text`` under
+    instructions that stream text as it comes; later under those that hold text back until
+    a citation follows it (``checks.HeldBack``), and that wait is a cost of the checks.
+    ``None`` when no text was passed on."""
     retrieved: tuple[ScoredChunk, ...] = field(default=())
     """The chunks the model was given, in ranked order."""
     requests: int = 1

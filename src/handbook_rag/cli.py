@@ -1005,7 +1005,7 @@ def eval_compare(
     typer.echo("")
     typer.echo(
         f"  {'metric':<9} {base[:9]:>9} {candidate[:9]:>9}   "
-        f"{'difference (95% interval)':<27} better  worse   same"
+        f"{'difference (95% interval)':<27} better  worse   same  sign p"
     )
     labels = metric_labels(runs) or {name: name for name in comparison.metrics}
     for metric_id, label in labels.items():
@@ -1018,7 +1018,8 @@ def eval_compare(
         typer.echo(
             f"  {label:<9} {metric.base.mean:>9.3f} {metric.candidate.mean:>9.3f}   "
             f"{interval:<27} {metric.change.better:>6} {metric.change.worse:>6} "
-            f"{metric.change.same:>6}  {'clear' if metric.change.is_clear else 'unclear'}"
+            f"{metric.change.same:>6}  {metric.change.sign_test:>6.3f}  "
+            f"{'clear' if metric.change.is_clear else 'unclear'}"
             + (
                 f"  (on {scored} question{'' if scored == 1 else 's'})"
                 if scored != comparison.questions
@@ -1031,6 +1032,10 @@ def eval_compare(
     typer.echo("")
     typer.echo("  clear    the interval excludes zero: chance is an unlikely explanation")
     typer.echo("  unclear  the two runs cannot be told apart with this many questions")
+    typer.echo(
+        "  sign p   the exact two-sided sign test on the questions whose score changed, "
+        "for a score of 0 or 1 for each question"
+    )
 
 
 @app.command(name="eval-table")
@@ -1327,10 +1332,12 @@ def _echo_answer_scores(
         typer.echo(f"  Answered, evidence {name}: {answered.mean:.3f} (n={answered.count})")
     if report.timing:
         first = report.timing.get("median_seconds_to_first_text")
+        shown = report.timing.get("median_seconds_to_first_shown")
         typer.echo(
             f"  time         median {report.timing['median_seconds']:.1f} s, "
             f"95% within {report.timing['p95_seconds']:.1f} s"
             + (f", first words after {first:.1f} s" if first is not None else "")
+            + (f", first words passed on after {shown:.1f} s" if shown is not None else "")
         )
         typer.echo(
             f"  tokens       {report.tokens['input_mean']:,.0f} in and "
@@ -1359,8 +1366,24 @@ def _echo_reply_checks(report: answer_runs.AnswerReport) -> None:
             f"{len(unanswerable)} to questions it does not"
         )
 
+    answerable = [item for item in report.scored if item.question.type == "answerable"]
+    unanswerable = [item for item in report.scored if item.question.type != "answerable"]
+    typer.echo(
+        f"  calls        answered {sum(i.record.answered for i in answerable)} of the "
+        f"{len(answerable)} questions the handbook answers, declined "
+        f"{sum(not i.record.answered for i in unanswerable)} of the {len(unanswerable)} it does "
+        "not, counting a reply a check declined or read as a decline as no answer"
+    )
     for name, ids in report.reply_checks.items():
         typer.echo(f"  check        {name}: {counted(ids)}")
+    # For a reader: what each check took out of a reply to a question the handbook answers,
+    # beside the reference answer, to say whether the model's own words gave its fact.
+    for item in answerable:
+        for check in item.record.checks:
+            took_out = check.removed.replace("\n", " ")[:160] or "(nothing: marked)"
+            reference = item.question.reference_answer.replace("\n", " ")[:160]
+            typer.echo(f"    {item.question.id}  {check.name}: took out {took_out!r}")
+            typer.echo(f"    {'':<{len(item.question.id)}}  reference: {reference!r}")
     if report.declined_in_the_gap_form:
         typer.echo(
             "  gap form     replies that were nothing but the fixed form for a missing part, "
@@ -2419,6 +2442,16 @@ def eval_limits(
             help="Discard the replies this run has saved and their verdicts, and start again.",
         ),
     ] = False,
+    against: Annotated[
+        str | None,
+        typer.Option(
+            help=(
+                "Another final run of the same questions, under the same --output, such as "
+                "'baseline'. Once this run is final too, the two are compared question by "
+                "question by the figure that counts, with an exact sign test."
+            )
+        ),
+    ] = None,
 ) -> None:
     """Ask the 40 questions of the limit set, each with its passage, and judge the answers.
 
@@ -2584,6 +2617,17 @@ def eval_limits(
         f"{stage.attempts()} to the answer model and {judge_stage.attempts()} to the judge"
     )
     _echo_limit_figures(report)
+    if against is not None and report.final:
+        try:
+            compared = limit_questions.compare_limit_runs(output / against, run_dir)
+        except DatasetError as error:
+            typer.echo(f"error: {error}", err=True)
+            raise typer.Exit(code=1) from error
+        typer.echo(
+            f"  against      {against}: {len(compared.better)} questions good here and not "
+            f"there, {len(compared.worse)} the other way, {compared.same} the same; exact "
+            f"sign test p = {compared.sign_test:.3f}"
+        )
     if report.waiting_for_the_judge:
         typer.echo(
             f"  final        not yet: {len(report.waiting_for_the_judge)} answers wait for "
@@ -2606,7 +2650,21 @@ def eval_limits(
 
 
 def _echo_limit_figures(report: limit_questions.LimitReport) -> None:
-    """The counts in all and by kind of limit, and the share faulted once it is final."""
+    """The figure that counts, what became of each question, then the counts by kind of
+    limit and the share faulted of the answers judged, which is not the headline."""
+    whole = report.figures["all"]
+    if whole.share_good is not None:
+        good = whole.share_good
+        typer.echo(
+            f"  good         {whole.good} of the {whole.questions} questions got an answer "
+            f"with no statement faulted: {good.mean:.3f} ({good.low:.3f} to {good.high:.3f})"
+        )
+    else:
+        typer.echo(f"  good         {whole.good} so far of {whole.questions}: not final")
+    typer.echo(
+        "  outcomes     "
+        + ", ".join(f"{name} {count}" for name, count in whole.outcomes.items() if count)
+    )
     typer.echo(
         f"  {'':<14}{'questions':>10}{'replies':>8}{'answered':>9}{'judged':>7}{'faulted':>8}"
         "   share faulted (95% interval)"

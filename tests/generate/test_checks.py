@@ -262,8 +262,8 @@ def test_a_closing_address_is_dropped_whether_or_not_a_cited_passage_holds_it() 
         (check,) = reply.checks
         assert (check.name, check.action) == ("address_in_closing_line", "dropped_line")
         assert check.note == (
-            "A closing line was left out of this answer: it cited no passage and held a web "
-            "or email address."
+            "Text after the answer's last citation was left out: it cited no passage and held "
+            "a web or email address."
         )
         assert check.removed == segments[1].text.strip()
         assert reply.segments == (segments[0],)
@@ -510,3 +510,67 @@ def test_under_the_first_instructions_a_reply_of_the_gap_form_alone_is_left_as_i
     answer = old.generate("q", [LEAVE])
 
     assert (answer.text, answer.answered, answer.model_text) == (GAP_ONLY, True, "")
+
+
+# Edges a review's mutants found untested
+
+
+def test_the_words_a_check_took_out_are_kept_without_the_space_around_them() -> None:
+    reply = check_reply([Segment("\n  HERON-5524 \n")], [LEAVE], answered=True)
+
+    assert reply.checks[0].removed == "HERON-5524"
+    assert read_the_gap_form_as_a_decline((Segment(f"\n {GAP_ONLY} \n"),), answered=True)[2] == (
+        GAP_ONLY
+    )
+
+
+def copy_of(copied: int, own: int) -> tuple[list[Segment], list[object]]:
+    """A cited reply of ``copied`` words a passage holds in order, then ``own`` words of its own."""
+    source = make_chunk(long_text(400), doc_id="a/long.md")
+    words = [*long_text(copied).split(), *(f"other{n}" for n in range(own))]
+    return [cited(" ".join(words), source)], [source]
+
+
+@pytest.mark.parametrize(
+    ("copied", "own", "marked"),
+    [
+        (200, 0, True),  # exactly the length that is long enough
+        (199, 0, False),  # one word short of it
+        (150, 50, True),  # exactly the share that is enough
+        (144, 56, False),  # a share of 0.72
+    ],
+)
+def test_a_copy_is_marked_from_exactly_200_words_and_exactly_three_quarters(
+    copied: int, own: int, marked: bool
+) -> None:
+    segments, chunks = copy_of(copied, own)
+
+    reply = check_reply(segments, chunks, answered=True)  # type: ignore[arg-type]
+
+    assert bool(reply.checks) is marked
+
+
+def test_a_copy_of_the_last_words_of_a_passage_counts() -> None:
+    source = make_chunk("one two three four five six seven eight nine ten")
+
+    assert copied_share("three four five six seven eight nine ten", [source]) == 1.0
+
+
+def test_a_boundary_code_the_question_or_a_title_holds_is_drawn_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    taken = "ab" * 16
+    for question, chunk in (
+        (f"What does {taken} mean?", LEAVE),
+        ("q", make_chunk("A page.", heading_path=(f"Section {taken.upper()}",))),
+    ):
+        drawn = iter([taken, "cd" * 16])
+        monkeypatch.setattr(
+            "handbook_rag.generate.markers.secrets.token_hex", lambda _bytes, d=drawn: next(d)
+        )
+        assert new_boundary(question, [chunk]) == "cd" * 16
+
+
+def test_the_gap_form_is_found_only_as_whole_words() -> None:
+    assert not holds_the_gap_form([Segment("The passages found do not saying much.")])
+    assert holds_the_gap_form([Segment(f"Sixteen weeks. {GAP_FORM} who pays.")])

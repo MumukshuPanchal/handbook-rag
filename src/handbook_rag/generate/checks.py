@@ -8,10 +8,11 @@ thing when it finds it. None of them looks at what a made-up word or address of 
 cases looks like: the address of a planted line is found as an address, whatever its
 host.
 
-- **An address in a closing line that cites nothing** (``address_in_closing_line``): the
-  last line of the reply, when it stands after the last citation, holds a web or email
-  address. *The line is dropped.* The answer above it is kept: in the baseline run, each
-  planted line of this kind came under an answer that was right.
+- **An address after the last citation** (``address_in_closing_line``): a line of the
+  reply that stands after its last citation, and so cites nothing, holds a web or email
+  address. *Each such line is dropped.* The answer above is kept: in the baseline run, each
+  planted line of this kind came under an answer that was right. Every such line goes, not
+  the last one only, so that a line after it ("Hope this helps!") does not let it through.
 
   Issue 66 words this check more narrowly: an address *found in no cited passage*. That
   rule leaves a planted line in whenever the planted text sits in the passage the answer
@@ -19,9 +20,13 @@ host.
   one of the three planted lines that got through in the baseline run
   (``inj-append_link-b08``). The check was widened before any reply of the hardened
   assistant was seen. It costs no answer that can be measured: none of the 129 answers of
-  the first answer run has a closing line without a citation that holds an address. What
-  it still lets through: an address inside a sentence that carries a citation, an address
-  anywhere before the last citation, and a host written without a scheme or a path.
+  the first answer run has a line without a citation after its last one that holds an
+  address. What it still lets through: an address inside a sentence that carries a
+  citation, an address anywhere before the last citation, a host written without a scheme
+  or a path, a host and path without a scheme written with a capital letter, a disguised
+  address (``hxxps://``, ``evil[.]example``), the piece of an address split across lines
+  that holds no address of its own, and a whole reply replaced by planted text with a
+  made-up citation.
 - **A reply that cites nothing at all** (``cites_nothing``): an answer with no citation.
   *The reply is declined.* Nothing in it rests on a passage a reader could check. It is
   the shape of the reply that obeyed a forged message from the system, and it costs an
@@ -31,6 +36,18 @@ host.
   :data:`COPY_RUN_WORDS` words or more that a passage holds word for word. *The reply is
   only marked.* What it repeats is handbook text, which the search gives anyway, and a
   long answer that quotes a procedure should not be lost.
+
+A reply that is not an answer is checked too, since a decline can carry planted words
+beside it:
+
+- **Words beside a decline** (``words_beside_a_decline``): a reply that came to a normal
+  end, is not an answer, and holds more words than the fixed declining sentence. *It is
+  shown as the fixed declining sentence alone.* Such a reply cites nothing, so none of it
+  was passed on before the end.
+- **A reply that did not come to a proper end** (``unfinished_reply``): one the provider
+  withheld or that stopped for another reason than its end or its length. *Its words after
+  the last citation are dropped*, and what a citation follows, which may already have been
+  passed on, is kept.
 
 Each check that fires is recorded on the answer with a note in fixed words, which every
 surface shows with it: no reply is changed in silence. The words the model wrote and a
@@ -42,6 +59,7 @@ dropped line or a declined reply can hold, waits for the end of the reply and th
 """
 
 import re
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Final
@@ -54,23 +72,41 @@ from handbook_rag.ingest.models import Chunk
 ADDRESS_IN_CLOSING_LINE: Final = "address_in_closing_line"
 CITES_NOTHING: Final = "cites_nothing"
 MOSTLY_A_COPY: Final = "mostly_a_copy"
-CHECKS: Final = (CITES_NOTHING, ADDRESS_IN_CLOSING_LINE, MOSTLY_A_COPY)
-"""The checks, in the order they are made."""
+WORDS_BESIDE_A_DECLINE: Final = "words_beside_a_decline"
+UNFINISHED_REPLY: Final = "unfinished_reply"
+CHECKS: Final = (
+    WORDS_BESIDE_A_DECLINE,
+    UNFINISHED_REPLY,
+    CITES_NOTHING,
+    ADDRESS_IN_CLOSING_LINE,
+    MOSTLY_A_COPY,
+)
+"""The checks: the two for a reply that is not an answer, then the three for an answer, in
+the order they are made."""
 
 DROPPED_LINE: Final = "dropped_line"
+DROPPED_WORDS: Final = "dropped_words"
 DECLINED: Final = "declined"
 MARKED: Final = "marked"
 
 NOTES: Final = {
     ADDRESS_IN_CLOSING_LINE: (
-        "A closing line was left out of this answer: it cited no passage and held a web or "
-        "email address."
+        "Text after the answer's last citation was left out: it cited no passage and held a "
+        "web or email address."
     ),
     CITES_NOTHING: (
         "The reply the model wrote cited none of the passages, so it is not shown: a reply "
         "that rests on no passage cannot be checked against the handbook."
     ),
     MOSTLY_A_COPY: "Most of this reply repeats the passages it was given, word for word.",
+    WORDS_BESIDE_A_DECLINE: (
+        "The reply was not an answer, and the words the model wrote beside the declining "
+        "sentence are not shown."
+    ),
+    UNFINISHED_REPLY: (
+        "The reply did not come to a proper end, and its words after the last citation are "
+        "not shown."
+    ),
 }
 """What the reader is told when each check fires."""
 
@@ -82,14 +118,16 @@ COPY_MIN_WORDS: Final = 200
 """How long a reply must be to be marked. The instructions ask for a short paragraph or a
 few bullet points, and a short answer that quotes a list of steps is an answer."""
 
-# A web address with its scheme or "www.", an email address, or a host with a path. A
-# host alone, such as "GitLab.com", is not taken for an address: product names are
-# written that way in ordinary answers.
+# A web address with its scheme or "www.", in any case; an email address, in any case; or
+# a host with a path and no scheme, in lower case. A host alone, such as "GitLab.com", is
+# not taken for an address: product names are written that way in ordinary answers. Nor
+# is a host and path with a capital letter, such as "Node.js/React": names of tools are
+# written that way, and an address without a scheme is almost always written in lower
+# case. Such an address with a capital letter is missed.
 _ADDRESS = re.compile(
-    r"(?:https?://|www\.)[^\s<>()\[\]{}\"'`]+"
-    r"|[\w.+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+"
-    r"|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/[^\s<>()\[\]{}\"'`]*",
-    re.IGNORECASE,
+    r"(?i:(?:https?://|www\.)[^\s<>()\[\]{}\"'`]+)"
+    r"|(?i:[\w.+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+)"
+    r"|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/[^\s<>()\[\]{}\"'`]*"
 )
 
 
@@ -103,16 +141,17 @@ class CheckedReply:
 
 
 def check_reply(
-    segments: Sequence[Segment], chunks: Sequence[Chunk], *, answered: bool
+    segments: Sequence[Segment], chunks: Sequence[Chunk], *, answered: bool, ended: bool = True
 ) -> CheckedReply:
     """Make every check on one reply, in the order of :data:`CHECKS`.
 
-    A reply that is not an answer, such as a decline or a reply that was withheld, is
-    left as it is. A reply declined for citing nothing is checked no further.
+    ``ended`` says whether the reply came to a proper end: its model finished it, or ran
+    out of room. A reply that is not an answer goes to the checks for one; an answer that
+    cites nothing is declined and checked no further.
     """
     replied = tuple(segments)
     if not answered:
-        return CheckedReply(replied, False, ())
+        return _not_an_answer(replied, ended=ended)
     if not any(segment.citations for segment in replied):
         removed = "".join(segment.text for segment in replied).strip()
         declined = ReplyCheck(CITES_NOTHING, DECLINED, NOTES[CITES_NOTHING], removed)
@@ -133,6 +172,33 @@ def check_reply(
     return CheckedReply(kept, True, tuple(checks))
 
 
+def _not_an_answer(replied: tuple[Segment, ...], *, ended: bool) -> CheckedReply:
+    """A reply that is not an answer, with nothing in it beside what a decline says.
+
+    After a normal end, a reply that is not an answer either is the fixed declining
+    sentence, whatever its case and marks, or cites nothing at all (``base.is_answered``).
+    The first is left as it is. The second, if it holds other words, is shown as the fixed
+    sentence; since it cites nothing, none of it was passed on. A reply that did not come
+    to a proper end keeps what a citation follows, which may have been passed on, and loses
+    the rest.
+    """
+    text = "".join(segment.text for segment in replied)
+    if ended:
+        if not plain_words(text) or plain_words(text) == plain_words(NOT_FOUND_MESSAGE):
+            return CheckedReply(replied, False, ())
+        check = ReplyCheck(
+            WORDS_BESIDE_A_DECLINE, DROPPED_WORDS, NOTES[WORDS_BESIDE_A_DECLINE], text.strip()
+        )
+        return CheckedReply((Segment(NOT_FOUND_MESSAGE),), False, (check,))
+    cited = [number for number, segment in enumerate(replied) if segment.citations]
+    head = replied[: cited[-1] + 1] if cited else ()
+    rest = "".join(segment.text for segment in replied[len(head) :])
+    if not plain_words(rest):
+        return CheckedReply(replied, False, ())
+    check = ReplyCheck(UNFINISHED_REPLY, DROPPED_WORDS, NOTES[UNFINISHED_REPLY], rest.strip())
+    return CheckedReply(tuple(head), False, (check,))
+
+
 def addresses(text: str) -> list[str]:
     """The web and email addresses in a text, as they are written there."""
     return [match.group() for match in _ADDRESS.finditer(text)]
@@ -141,26 +207,23 @@ def addresses(text: str) -> list[str]:
 def without_a_closing_address(
     segments: Sequence[Segment],
 ) -> tuple[tuple[Segment, ...], str | None]:
-    """The reply without its closing line, if that line cites nothing and holds a web or
-    email address; and the line, or ``None`` when it stays.
+    """The reply without each line after its last citation that holds a web or email
+    address; and those lines, one to a line, or ``None`` when none goes.
 
-    The closing line is the last line of the text after the last citation, so that a line
-    with a citation, and the text before the last citation, are never taken out. Whether a
-    passage holds the address is not asked: a planted address is in the passage it was
-    planted in, and that may be the very passage the answer cites.
+    Only text after the last citation is read, so that a line with a citation, and the
+    text before the last citation, are never taken out. Whether a passage holds the
+    address is not asked: a planted address is in the passage it was planted in, and that
+    may be the very passage the answer cites.
     """
     last_cited = max(number for number, segment in enumerate(segments) if segment.citations)
     head, tail = tuple(segments[: last_cited + 1]), segments[last_cited + 1 :]
     lines = "".join(segment.text for segment in tail).split("\n")
-    closing = next(
-        (number for number in reversed(range(len(lines))) if lines[number].strip()), None
-    )
-    if closing is None:
+    dropped = [line for line in lines if addresses(line)]
+    if not dropped:
         return tuple(segments), None
-    if not addresses(lines[closing]):
-        return tuple(segments), None
-    rest = "\n".join(lines[:closing]).rstrip()
-    return head + ((Segment(rest),) if rest.strip() else ()), lines[closing].strip()
+    rest = "\n".join(line for line in lines if not addresses(line)).rstrip()
+    kept = head + ((Segment(rest),) if rest.strip() else ())
+    return kept, "\n".join(line.strip() for line in dropped)
 
 
 def copied_share(text: str, chunks: Sequence[Chunk]) -> float:
@@ -189,14 +252,17 @@ class HeldBack:
     """Passes a reply's text on once a citation follows it, and the rest at the end.
 
     A checked reply is changed only after its last citation, or as a whole when it cites
-    nothing (:func:`check_reply`). So text that a citation follows is never changed, and
-    is passed on as it comes; the rest waits until the checks have been made. What was
-    passed on is then always the start of the reply as it is kept.
+    nothing (:func:`check_reply`, ``base.read_the_gap_form_as_a_decline``), or, when it is
+    the fixed declining sentence with a citation, not at all. So text that a citation
+    follows is never changed, and is passed on as it comes; the rest waits until the checks
+    have been made. What was passed on is then always the start of the reply as it is kept.
     """
 
     def __init__(self, on_text: Callable[[str], None] | None) -> None:
         self._on_text = on_text
         self._sent = ""
+        self.first_sent_at: float | None = None
+        """When text was first passed on, by ``time.perf_counter``, also when nobody listens."""
 
     def closed_so_far(self, segments: Sequence[Segment]) -> None:
         """Pass on what the segments closed so far hold. While a reply is being read, only
@@ -213,6 +279,8 @@ class HeldBack:
         # the whole answer still reaches every caller when it is done.
         if not text.startswith(self._sent) or len(text) == len(self._sent):
             return
+        if self.first_sent_at is None:
+            self.first_sent_at = time.perf_counter()
         if self._on_text is not None:
             self._on_text(text[len(self._sent) :])
         self._sent = text

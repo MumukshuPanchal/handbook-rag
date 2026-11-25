@@ -34,7 +34,7 @@ from handbook_rag.evals.dataset import DatasetError, GoldenQuestion, locate_evid
 from handbook_rag.evals.retrieval import FailedQuestion
 from handbook_rag.evals.stage import SavedRunError
 from handbook_rag.generate.base import GenerationError
-from handbook_rag.generate.checks import CITES_NOTHING, NOTES
+from handbook_rag.generate.checks import ADDRESS_IN_CLOSING_LINE, CITES_NOTHING, NOTES
 from handbook_rag.generate.models import Answer, Citation, ReplyCheck, Segment, TokenUsage
 from handbook_rag.generate.prompt import GAP_FORM, NOT_FOUND_MESSAGE
 from handbook_rag.index.store import ScoredChunk, VectorStoreError
@@ -1306,3 +1306,35 @@ def test_a_run_writes_the_split_only_when_there_is_one(tmp_path: Path) -> None:
     assert "reply_checks" not in first
     assert "declined_in_the_gap_form" not in second
     assert "reply_checks" not in second
+
+
+def test_a_saved_reply_whose_dropped_closing_line_is_in_the_gap_form_keeps_its_check(
+    tmp_path: Path,
+) -> None:
+    check = ReplyCheck(
+        ADDRESS_IN_CLOSING_LINE,
+        "dropped_line",
+        NOTES[ADDRESS_IN_CLOSING_LINE],
+        # Nothing but the form, read as one piece: were the check not looked at, this
+        # would be taken for the model's own decline.
+        f"{GAP_FORM} where the form is, see https://x.org/a",
+    )
+    answer = dataclasses.replace(good_reply(LEAVE_QUESTION), checks=(check,))
+
+    (record,) = saved(tmp_path, (LEAVE_QUESTION, answer)).values()
+
+    assert record.checks == (check,)
+    assert record.model_text == ""
+
+
+def test_the_time_until_the_first_words_were_passed_on_is_given_beside_the_first_token() -> None:
+    records = dict(run_answers(QUESTIONS, DOCUMENTS, careful).records)
+    records["q001"] = dataclasses.replace(records["q001"], seconds_to_first_shown=None)
+    records["q002"] = dataclasses.replace(records["q002"], seconds_to_first_shown=4.0)
+    records["u001"] = dataclasses.replace(records["u001"], seconds_to_first_shown=2.0)
+
+    report = summarise_answers(QUESTIONS, records)
+
+    # Only the replies that recorded it: a run saved before it was recorded has none.
+    assert report.timing["median_seconds_to_first_shown"] == 3.0
+    assert report.timing["p95_seconds_to_first_shown"] == 4.0

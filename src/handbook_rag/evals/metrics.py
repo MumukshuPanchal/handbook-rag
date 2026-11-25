@@ -188,6 +188,25 @@ class Comparison:
         """Whether the interval excludes zero, so chance is an unlikely explanation."""
         return self.difference.low > 0 or self.difference.high < 0
 
+    @property
+    def sign_test(self) -> float:
+        """The exact two-sided sign test on the questions whose score changed.
+
+        For a score of 0 or 1 for each question, such as a right call, it asks how likely
+        so lopsided a split of the changes would be if each change were a coin's toss. The
+        questions whose score did not change take no part. With no change it is 1.
+        """
+        return sign_test(self.better, self.worse)
+
+
+def sign_test(better: int, worse: int) -> float:
+    """The exact two-sided sign test: of ``better + worse`` changes, so few the other way."""
+    changed = better + worse
+    if not changed:
+        return 1.0
+    tail: float = sum(math.comb(changed, k) for k in range(min(better, worse) + 1)) / 2**changed
+    return min(1.0, 2 * tail)
+
 
 def paired_difference(
     base: Sequence[float], candidate: Sequence[float], *, resamples: int = 2000, seed: int = 0

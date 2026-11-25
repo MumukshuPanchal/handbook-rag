@@ -210,7 +210,7 @@ Start the service with `HANDBOOK_RAG_TRACING=true make serve`.
 | `fuse` | Reciprocal rank fusion | `fuse.in_both`: how many chunks both searches returned |
 | `rerank` | The cross-encoder | `model` and `candidates` |
 
-`handbook_rag.reply_checks`, on the `answer` span, names each check of the reply in code that fired, such as `address_in_closing_line` or `cites_nothing`, and is left out when none did. It never holds the words a check took out ([ADR 0025](adr/0025-hardening-against-planted-instructions.md)). Counted over many answers, it is where monitoring of planted text would start: a check that begins to fire often is a sign that a page has changed.
+`handbook_rag.reply_checks`, on the `answer` span, names each check of the reply in code that fired, such as `address_in_closing_line`, `cites_nothing` or `words_beside_a_decline`, and is left out when none did. It never holds the words a check took out ([ADR 0025](adr/0025-hardening-against-planted-instructions.md)). Counted over many answers, it is where monitoring of planted text would start: a check that begins to fire often is a sign that a page has changed.
 
 Every `search` and `retrieve.*` span carries `results.count`, `results.chunk_ids`, `results.doc_ids` and `results.scores`. A `vector_store.query` span carries the count only, because the span around it has the rest. Our own attributes start with `handbook_rag.`. The database spans also use the standard `db.*` names, which is why Jaeger shows them with a database icon.
 

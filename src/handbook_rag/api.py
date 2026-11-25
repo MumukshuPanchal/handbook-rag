@@ -271,16 +271,24 @@ class AnswerSegment(BaseModel):
 class CheckNote(BaseModel):
     """A check of the reply in code that fired, and what it did to the reply."""
 
-    check: Literal["address_in_closing_line", "cites_nothing", "mostly_a_copy"] = Field(
+    check: Literal[
+        "address_in_closing_line",
+        "cites_nothing",
+        "mostly_a_copy",
+        "words_beside_a_decline",
+        "unfinished_reply",
+    ] = Field(
         description=(
-            "Which check: a closing line that cites nothing held a web or email address; "
-            "the reply cited no passage; most of the reply repeats its passages word for word."
+            "Which check: text after the answer's last citation held a web or email address; "
+            "the reply cited no passage; most of the reply repeats its passages word for "
+            "word; a reply that is not an answer held words beside the declining sentence; "
+            "the reply did not come to a proper end."
         )
     )
-    action: Literal["dropped_line", "declined", "marked"] = Field(
+    action: Literal["dropped_line", "dropped_words", "declined", "marked"] = Field(
         description=(
-            "What it did: left that closing line out, declined in place of the reply, or "
-            "left the reply as it was and marked it."
+            "What it did: left those lines out, left words out, declined in place of the "
+            "reply, or left the reply as it was and marked it."
         )
     )
     note: str = Field(

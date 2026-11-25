@@ -122,6 +122,7 @@ class GeminiGenerator:
         parser = MarkerParser(chunks)
         started = time.perf_counter()
         first_text_at: float | None = None
+        first_shown_at: float | None = None
         # The stop reason comes with the last piece of the stream. The token counts come
         # with every piece as a running total, so the last ones are the request's.
         finish: types.FinishReason | None = None
@@ -154,6 +155,8 @@ class GeminiGenerator:
                     if checked:
                         held.closed_so_far(parser.segments)
                     else:
+                        if shown and first_shown_at is None:
+                            first_shown_at = time.perf_counter()
                         _pass_on(shown, on_text)
                 candidate = piece.candidates[0] if piece.candidates else None
                 if candidate is not None and candidate.finish_reason is not None:
@@ -178,20 +181,24 @@ class GeminiGenerator:
         finished = time.perf_counter()
 
         withheld = blocked or finish in _WITHHELD
+        ended = not withheld and finish in _ANSWER_ENDINGS
         segments = parser.segments
-        answered = is_answered(segments, refused=withheld or finish not in _ANSWER_ENDINGS)
+        answered = is_answered(segments, refused=not ended)
         model_text = ""
         if self._instructions in GAP_FORM_VERSIONS:
             # Before the checks: a decline in other words is the model's, not a check's.
             segments, answered, model_text = read_the_gap_form_as_a_decline(
                 segments, answered=answered
             )
-        reply = check_reply(segments, chunks, answered=answered) if checked else None
+        reply = check_reply(segments, chunks, answered=answered, ended=ended) if checked else None
         if reply is None:
+            if rest and first_shown_at is None:
+                first_shown_at = time.perf_counter()
             _pass_on(rest, on_text)
         else:
             segments, answered = reply.segments, reply.answered
             held.finished(segments)
+            first_shown_at = held.first_sent_at
         return Answer(
             question=question,
             segments=segments,
@@ -201,6 +208,7 @@ class GeminiGenerator:
             usage=_usage(usage),
             seconds=finished - started,
             seconds_to_first_text=None if first_text_at is None else first_text_at - started,
+            seconds_to_first_shown=None if first_shown_at is None else first_shown_at - started,
             checks=() if reply is None else reply.checks,
             model_text=model_text,
         )

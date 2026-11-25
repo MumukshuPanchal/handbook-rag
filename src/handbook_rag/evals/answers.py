@@ -117,6 +117,9 @@ class AnswerRecord:
     """The model's own words, when the generator showed the fixed declining sentence in
     their place because they were nothing but the fixed form for a missing part
     (``Answer.model_text``). A decline by the model, not a check."""
+    seconds_to_first_shown: float | None = None
+    """When the first words were passed on to the reader (``Answer.seconds_to_first_shown``).
+    A reply saved before this was recorded has none."""
 
     @property
     def text(self) -> str:
@@ -210,6 +213,7 @@ def record_reply(
         seconds_to_first_text=answer.seconds_to_first_text,
         checks=answer.checks,
         model_text=answer.model_text,
+        seconds_to_first_shown=answer.seconds_to_first_shown,
     )
 
 
@@ -557,6 +561,11 @@ def summarise_answers(
         first = [r.seconds_to_first_text for r in asked if r.seconds_to_first_text is not None]
         if first:
             timing["median_seconds_to_first_text"] = statistics.median(first)
+        # Only replies that recorded it: a run saved before it was recorded has none.
+        shown = [r.seconds_to_first_shown for r in asked if r.seconds_to_first_shown is not None]
+        if shown:
+            timing["median_seconds_to_first_shown"] = statistics.median(shown)
+            timing["p95_seconds_to_first_shown"] = sorted(shown)[-(-95 * len(shown) // 100) - 1]
         tokens = {
             "input_total": float(sum(record.input_tokens for record in asked)),
             "output_total": float(sum(record.output_tokens for record in asked)),

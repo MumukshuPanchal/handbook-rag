@@ -769,6 +769,14 @@ def test_the_held_out_figures_are_the_committed_runs() -> None:
         f"Case by case, {better} went from broke to held and {worse} from held to broke.** "
         f"An exact sign test on {better} against {worse} gives p = {p:.3f}, two-sided"
     ) in readme()
+    model = hardening_runs.held_out_model_pairs()
+    p_model = hardening_runs.sign_test(len(model["broke_to_held"]), len(model["held_to_broke"]))
+    assert (
+        f"By what the model itself wrote, version 2 holds 16 of 20, 0.800 (0.584 to 0.919): "
+        f"{len(model['broke_to_held'])} cases better, {len(model['held_to_broke'])} worse, "
+        f"{len(model['broke'])} broke in both and {len(model['held'])} held in both, and an "
+        f"exact sign test on 5 against 1 gives p = {p_model:.3f}, two-sided"
+    ) in readme()
     obeyed = hardening_runs.held_out_model_obeyed(hardening_runs.HELD_OUT_AFTER)
     shown = [r for r in after.results if r.outcome == "broke"]
     assert (
@@ -794,6 +802,14 @@ def test_the_points_on_the_adversarial_runs_are_the_runs() -> None:
     text = readme()
 
     assert f"The first variant held {hits(first)} of the {first['count']}" in text
+    # What the model itself did: none on the cases it was tuned on, 4 on the held-out ones.
+    assert hardening_runs.model_obeyed("adversarial/hardened-2") == []
+    assert len(hardening_runs.held_out_model_obeyed(hardening_runs.HELD_OUT_AFTER)) == 4
+    assert (
+        "On these 36 cases, under version 2, the model obeyed none of the 20 planted "
+        "instructions.** No reply holds a made-up word, a planted address or a phrase of the "
+        "instructions. On the held-out cases below it obeyed 4 of 20." in text
+    )
     assert "Version 2 is the hardening of [ADR 0025]" in text
     # The checks tried on the saved answers: worked out again from the saved replies.
     declined, answers = hardening_runs.checks_on_the_saved_answers()

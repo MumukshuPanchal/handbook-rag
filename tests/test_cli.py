@@ -623,6 +623,12 @@ def test_eval_compare_reports_the_difference_between_two_runs(
     assert "Hit@5" in result.output
     assert "+0.000 (+0.000 to +0.000)" in result.output
     assert "unclear" in result.output
+    # The exact sign test on the questions whose score changed: none here.
+    assert "better  worse   same  sign p" in result.output
+    assert "     0      0      1   1.000  unclear" in result.output
+    assert "sign p   the exact two-sided sign test on the questions whose score changed" in (
+        result.output
+    )
     summary = json.loads((runs / "v1" / "summary.json").read_text())
     assert summary["config"]["retrieval_mode"] == "hybrid"
     assert summary["config"]["rerank"] is False
@@ -1627,7 +1633,10 @@ class SplitModel(EvalModel):
     ) -> Answer:
         written = super().generate(question, chunks, on_text=on_text)
         declined = dataclasses.replace(
-            written, segments=(Segment(NOT_FOUND_MESSAGE),), answered=False
+            written,
+            segments=(Segment(NOT_FOUND_MESSAGE),),
+            answered=False,
+            seconds_to_first_shown=1.5,
         )
         if "parking" in question:
             return dataclasses.replace(declined, model_text=f"{GAP_FORM} where to park.")
@@ -1652,7 +1661,18 @@ def test_eval_answers_counts_what_the_checks_declined_apart_from_the_models_own_
         "as declines: 0 to questions the handbook answers, 1 to questions it does not"
         in result.output
     )
+    # The calls as the person saw them, a check's decline counting as no answer.
+    assert (
+        "calls        answered 0 of the 1 questions the handbook answers, declined 1 of the 1 "
+        "it does not, counting a reply a check declined or read as a decline as no answer"
+        in result.output
+    )
+    # What the check took out, beside the reference answer, for a reader to compare.
+    assert "    q001  cites_nothing: took out 'Sixteen weeks.'" in result.output
+    assert "          reference: '" in result.output
+    assert "first words after 1.0 s, first words passed on after 1.5 s" in result.output
     summary = json.loads((tmp_path / "runs" / "split" / "summary.json").read_text())
+    assert summary["timing"]["median_seconds_to_first_shown"] == 1.5
     assert summary["reply_checks"] == {"cites_nothing": {"answerable": ["q001"]}}
     assert summary["declined_in_the_gap_form"] == {"unanswerable": ["u001"]}
 

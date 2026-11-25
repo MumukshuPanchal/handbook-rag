@@ -167,17 +167,21 @@ def holds_the_gap_form(segments: Sequence[Segment]) -> bool:
 
 
 def only_the_gap_form(text: str) -> bool:
-    """Whether a text is nothing but sentences in the fixed form for a part the passages do
-    not answer, so that it states no answer at all.
+    """Whether a text is nothing but pieces in the fixed form for a part the passages do not
+    answer, so that it states no answer at all.
 
-    The text is cut into sentences at line breaks and after a full stop, a question mark or
-    an exclamation mark, and every sentence that holds a word must begin with the form.
-    Words are compared as in :func:`is_answered`. A sentence cut in a wrong place (after
-    "e.g.") does not begin with the form, and the text is then not taken for one: it stays
-    a reply for the checks to read.
+    The text is cut at line breaks; after a full stop, a question mark, an exclamation
+    mark, a colon or a semicolon; and before "but". A list marker at the start of a piece
+    is left out. Every piece that holds a word must begin with the form, so that "… do not
+    say more than this: new parents get sixteen weeks" and "… do not say who pays, but
+    leave is sixteen weeks" are not taken for it. Words are compared as in
+    :func:`is_answered`. A piece cut in a wrong place (after "e.g.") does not begin with the
+    form, and the text is then not taken for one: it stays a reply for the checks to read,
+    which errs towards a note.
     """
     form = _words(GAP_FORM)
-    sentences = [_words(part) for part in _SENTENCE_BREAK.split(text.strip())]
+    pieces = (_LIST_MARKER.sub("", part) for part in _SENTENCE_BREAK.split(text.strip()))
+    sentences = [_words(piece) for piece in pieces]
     spoken = [sentence for sentence in sentences if sentence]
     return bool(spoken) and all(
         sentence == form or sentence.startswith(form + " ") for sentence in spoken
@@ -195,11 +199,17 @@ def read_the_gap_form_as_a_decline(
     what the sentence says, so it is shown and counted as the sentence: the reply becomes
     the fixed declining sentence and is not an answer, with no note, since nothing was
     withheld. Returns the segments, whether the reply is an answer, and the model's own
-    words when they were replaced (empty otherwise). A reply that is not an answer, or
-    that holds anything besides the form, is returned as it is.
+    words when they were replaced (empty otherwise).
+
+    Only a reply that cites nothing is read so. One that cites a passage is an answer in
+    the form, or holds one, and stays an answer for the checks: and since a citation lets
+    the text before it be passed on while the reply is written, reading it as a decline
+    would take back what was passed on. A reply that is not an answer, or that holds
+    anything besides the form, is returned as it is.
     """
     text = "".join(segment.text for segment in segments)
-    if not answered or not only_the_gap_form(text):
+    cites = any(segment.citations for segment in segments)
+    if not answered or cites or not only_the_gap_form(text):
         return tuple(segments), answered, ""
     return (Segment(NOT_FOUND_MESSAGE),), False, text.strip()
 
@@ -213,9 +223,13 @@ def plain_words(text: str) -> str:
     return _words(text)
 
 
-# Where one sentence ends and the next begins: a line break, or a full stop, a question
-# mark or an exclamation mark followed by white space.
-_SENTENCE_BREAK = re.compile(r"\n+|(?<=[.!?])\s+")
+# Where one piece of a reply ends and the next begins, for finding the fixed form alone: a
+# line break; a full stop, a question mark, an exclamation mark, a colon or a semicolon
+# followed by white space, but not the stop of a list's number, such as "1."; or "but",
+# with a comma before it or not.
+_SENTENCE_BREAK = re.compile(r"\n+|(?<=[.!?:;])(?<!\d\.)\s+|,?\s+but\s+", re.IGNORECASE)
+# A list marker at the start of a piece: a bullet, or a number with a stop or a bracket.
+_LIST_MARKER = re.compile(r"^\s*(?:[-*+]|\d{1,3}[.)])\s+")
 
 
 def _words(text: str) -> str:

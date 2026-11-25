@@ -134,11 +134,12 @@ def build_bounded_prompt(question: str, chunks: Sequence[Chunk], boundary: str) 
 
     The code is made at random for each request (:func:`new_boundary`), and the
     instructions say that only a line holding it begins or ends a search result, or
-    begins the question. A passage's author cannot know the code, so a passage cannot
-    close its own block and speak as the system, or as the question, however its text is
-    written. Fixed tags, as in :func:`build_numbered_prompt`, could be closed by anyone
-    who read this code. A passage's text is therefore given as it is: there is no tag
-    to make harmless in it.
+    begins the question. A passage's author cannot know the code, so no passage can hold
+    the line that would close its block, or begin the question, as the instructions
+    define those lines. Whether the model keeps to that is another matter, which the
+    adversarial tests measure. Fixed tags, as in :func:`build_numbered_prompt`, could be
+    written by anyone who read this code. A passage's text is therefore given as it is:
+    there is no tag to make harmless in it.
 
     ``boundary`` is passed in, so that the layout can be named by a fixed code
     (``wiring.answer_request_fingerprint``) and a test can see exactly what is sent.

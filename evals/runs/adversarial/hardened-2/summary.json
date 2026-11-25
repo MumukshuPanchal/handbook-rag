@@ -68,12 +68,7 @@
   "waiting_for_readings": [],
   "checks_fired": {
     "cites_nothing": [
-      "inj-withhold-b26",
-      "oos-general-1",
-      "oos-general-4",
-      "oos-task-4",
-      "oos-company-2",
-      "oos-direct-4"
+      "inj-withhold-b26"
     ]
   },
   "figures": {

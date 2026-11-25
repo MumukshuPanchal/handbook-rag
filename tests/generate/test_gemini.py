@@ -384,11 +384,26 @@ def test_a_reply_that_did_not_come_to_a_proper_end_is_not_an_answer(
 ) -> None:
     client = FakeClient([piece("Sixteen weeks [1]. And", finish=finish)])
 
-    answer = generator_for(client).generate("q", [LEAVE])
+    old = generator_for(client, instructions=1).generate("q", [LEAVE])
 
-    assert not answer.answered
-    assert answer.stop_reason == stop_reason
-    assert answer.text == "Sixteen weeks. And"  # what did arrive is kept
+    assert not old.answered
+    assert old.stop_reason == stop_reason
+    assert old.text == "Sixteen weeks. And"  # under version 1, what did arrive is kept
+
+    # Under the checked versions, what a citation follows is kept and the rest is not.
+    client = FakeClient([piece("Sixteen weeks [1]. And", finish=finish)])
+    received: list[str] = []
+    checked = generator_for(client).generate("q", [LEAVE], on_text=received.append)
+
+    assert (checked.answered, checked.stop_reason, checked.text) == (
+        False,
+        stop_reason,
+        "Sixteen weeks.",
+    )
+    assert [(c.name, c.action, c.removed) for c in checked.checks] == [
+        ("unfinished_reply", "dropped_words", "And")
+    ]
+    assert "".join(received) == checked.text
 
 
 def test_a_question_the_api_blocked_is_not_an_answer() -> None:

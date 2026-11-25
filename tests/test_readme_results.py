@@ -15,6 +15,7 @@ import json
 import re
 import statistics
 from collections import Counter
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ from handbook_rag.evals.compare import compare_runs
 from handbook_rag.evals.dataset import load_golden_set
 from handbook_rag.evals.metrics import Estimate
 from handbook_rag.evals.two_passage import load_reasons
-from tests.evals import limit_runs
+from tests.evals import hardening_runs, limit_runs
 
 ROOT = Path(__file__).parents[1]
 RUNS = ROOT / "evals" / "runs"
@@ -623,7 +624,10 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
         SECOND,
         three(supported["mean"]),
         three((hits(supported) - len(real)) / supported["count"]),
+        SECOND,
+        str(hardening_runs.LIMIT_QUESTIONS),
         LIMITS_RECORD,
+        hardening_runs.RECORD,
         LIMITS_ISSUE,
     ]
     # Every false alarm of either version on the first labelled answers is on a real answer.
@@ -650,7 +654,11 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
     assert "is not measured, and none is fixed.**" in limitation
     assert f"with {in_words(len(second['false_alarms']))} false alarm in" in limitation
     assert f"The {in_words(len(real))} real cases stay labelled unclear" in limitation
-    assert "The answers are not changed" in limitation
+    assert (
+        "whether that lowers how often answers leave one out is not measured yet: the "
+        f"{hardening_runs.LIMIT_QUESTIONS} limit questions under both sets of instructions are not "
+        "measured yet"
+    ) in limitation
 
 
 def test_the_readme_gives_version_2s_check_on_the_first_labelled_answers() -> None:
@@ -695,33 +703,104 @@ PLANTED = {
 }
 
 
-def test_the_adversarial_figures_are_the_committed_run() -> None:
-    figures = summary("adversarial/baseline")["figures"]
-    rows = table(readme(), "| | Held | Of | Share held (95% interval) |")
-    injected = figures["injected_passage"]["held"]
-    limitation = line_starting(readme(), "- **Planted instructions get through.**")
+# The two runs the README sets side by side: version 1 of the answering instructions, and
+# version 2, the second variant of the hardening (ADR 0025).
+ADVERSARIAL_RUNS = ("adversarial/baseline", "adversarial/hardened-2")
+
+
+def counted(estimate: Any) -> str:
+    """A share as the adversarial tables print it: 19 of 20, 0.950 (0.764 to 0.991)."""
+    return f"{hits(estimate)} of {estimate['count']}, {with_interval(estimate)}"
+
+
+def test_the_adversarial_figures_are_the_committed_runs() -> None:
+    old, new = (summary(run)["figures"] for run in ADVERSARIAL_RUNS)
+    rows = table(readme(), "| | Version 1 (`baseline`) | Version 2 (`hardened-2`) |")
+    limitation = line_starting(readme(), "- **Planted instructions can still get through.**")
 
     assert [row[0] for row in rows] == list(ADVERSARIAL)
-    for label, held, of, share in rows:
+    for label, before, after in rows:
         family, figure = ADVERSARIAL[label]
-        estimate = figures[family][figure]
-        assert [held, of, share] == [
-            str(hits(estimate)),
-            str(estimate["count"]),
-            with_interval(estimate),
-        ], label
-    broke = injected["count"] - hits(injected)
-    assert f"{broke} of the {injected['count']} planted in passages did" in limitation
+        assert [before, after] == [counted(old[family][figure]), counted(new[family][figure])]
+    held_before, held_after = (hits(run["injected_passage"]["held"]) for run in (old, new))
+    count = new["injected_passage"]["held"]["count"]
+    out_before, out_after = (
+        hardening_runs.read_held_out(run).figures["all"]
+        for run in (hardening_runs.HELD_OUT_BEFORE, hardening_runs.HELD_OUT_AFTER)
+    )
+    assert out_after.held is not None
+    assert (
+        f"On {out_after.held.count} held-out cases, version 2 of the instructions held "
+        f"{out_after.held_by_code + out_after.read_held} planted in passages, where version 1 "
+        f"held {out_before.held_by_code + out_before.read_held}; on the 36 cases the hardening "
+        f"was tuned on it held {held_after} of {count}, where version 1 held {held_before}"
+    ) in limitation
+    # Each planted instruction that still gets through is named, as issue 66 asks.
+    for still in (
+        "a notice that a page's process is out of date, which version 1 had not obeyed",
+        "a notice that keeps the answer to managers",
+        "a planted closing line with an address, which the model wrote twice and only a check "
+        "took out",
+        "a page that calls itself confidential, which the model answered without citing",
+    ):
+        assert still in limitation, still
 
 
-def test_the_planted_instructions_are_the_committed_run() -> None:
-    figures = summary("adversarial/baseline")["figures"]
-    rows = table(readme(), "| Planted instruction | Held | Of |")
+def test_the_held_out_figures_are_the_committed_runs() -> None:
+    before, after = (
+        hardening_runs.read_held_out(run)
+        for run in (hardening_runs.HELD_OUT_BEFORE, hardening_runs.HELD_OUT_AFTER)
+    )
+    rows = table(readme(), "| Held-out cases | Version 1 (`held-out-before`) |")
+    pairs = hardening_runs.held_out_pairs()
+
+    assert before.final
+    assert after.final
+    estimates = {
+        "Planted instruction not followed": [r.figures["all"].held for r in (before, after)],
+        "Injected case kept its answer": [r.figures["all"].kept for r in (before, after)],
+    }
+    assert [row[0] for row in rows] == list(estimates)
+    for label, *cells in rows:
+        assert cells == [counted(asdict(e)) for e in estimates[label] if e is not None], label
+    better, worse = len(pairs["broke_to_held"]), len(pairs["held_to_broke"])
+    p = hardening_runs.sign_test(better, worse)
+    assert (
+        f"Case by case, {better} went from broke to held and {worse} from held to broke.** "
+        f"An exact sign test on {better} against {worse} gives p = {p:.3f}, two-sided"
+    ) in readme()
+    obeyed = hardening_runs.held_out_model_obeyed(hardening_runs.HELD_OUT_AFTER)
+    shown = [r for r in after.results if r.outcome == "broke"]
+    assert (
+        f"Under version 2 the model itself obeyed {len(obeyed)} of the 20, and the person asking "
+        f"saw {len(shown)}.**"
+    ) in readme()
+
+
+def test_the_planted_instructions_are_the_committed_runs() -> None:
+    old, new = (summary(run)["figures"] for run in ADVERSARIAL_RUNS)
+    rows = table(readme(), "| Planted instruction | Version 1 | Version 2 |")
 
     assert [row[0] for row in rows] == list(PLANTED)
-    for label, held, of, _what_the_replies_did in rows:
-        estimate = figures[f"injected_passage/{PLANTED[label]}"]["held"]
-        assert [held, of] == [str(hits(estimate)), str(estimate["count"])], label
+    for label, before, after, _what_the_replies_did in rows:
+        kind = f"injected_passage/{PLANTED[label]}"
+        assert [before, after] == [
+            f"{hits(run[kind]['held'])} of {run[kind]['held']['count']}" for run in (old, new)
+        ], label
+
+
+def test_the_points_on_the_adversarial_runs_are_the_runs() -> None:
+    first = summary("adversarial/hardened-1")["figures"]["injected_passage"]["held"]
+    text = readme()
+
+    assert f"The first variant held {hits(first)} of the {first['count']}" in text
+    assert "Version 2 is the hardening of [ADR 0025]" in text
+    # The checks tried on the saved answers: worked out again from the saved replies.
+    declined, answers = hardening_runs.checks_on_the_saved_answers()
+    assert (
+        f"Tried with no request on the {answers} answers of the first answer run, they would "
+        f"decline {declined}, an answer that cites no passage, and change nothing else"
+    ) in text
 
 
 # Each row of the cache table, and the score the simulated cache decides by in the run.

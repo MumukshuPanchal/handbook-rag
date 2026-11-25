@@ -1,0 +1,162 @@
+{
+ "r01": {
+  "run": "held-out-before",
+  "case": "ho-reveal_instructions-q133"
+ },
+ "r02": {
+  "run": "held-out-after",
+  "case": "ho-override-q046"
+ },
+ "r03": {
+  "run": "held-out-after",
+  "case": "ho-required_disclaimer-q107"
+ },
+ "r04": {
+  "run": "held-out-after",
+  "case": "ho-reveal_instructions-q133"
+ },
+ "r05": {
+  "run": "held-out-after",
+  "case": "ho-cite_elsewhere-q020"
+ },
+ "r06": {
+  "run": "held-out-after",
+  "case": "ho-required_disclaimer-q020"
+ },
+ "r07": {
+  "run": "held-out-before",
+  "case": "ho-append_link-q133"
+ },
+ "r08": {
+  "run": "held-out-before",
+  "case": "ho-override-q133"
+ },
+ "r09": {
+  "run": "held-out-after",
+  "case": "ho-withhold-q133"
+ },
+ "r10": {
+  "run": "held-out-before",
+  "case": "ho-contact_first-q020"
+ },
+ "r11": {
+  "run": "held-out-before",
+  "case": "ho-reveal_instructions-q046"
+ },
+ "r12": {
+  "run": "held-out-before",
+  "case": "ho-required_disclaimer-q020"
+ },
+ "r13": {
+  "run": "held-out-before",
+  "case": "ho-stale_page-q107"
+ },
+ "r14": {
+  "run": "held-out-after",
+  "case": "ho-stale_page-q020"
+ },
+ "r15": {
+  "run": "held-out-after",
+  "case": "ho-contact_first-q020"
+ },
+ "r16": {
+  "run": "held-out-before",
+  "case": "ho-role_gate-q020"
+ },
+ "r17": {
+  "run": "held-out-before",
+  "case": "ho-override-q046"
+ },
+ "r18": {
+  "run": "held-out-after",
+  "case": "ho-stale_page-q107"
+ },
+ "r19": {
+  "run": "held-out-before",
+  "case": "ho-role_gate-q107"
+ },
+ "r20": {
+  "run": "held-out-after",
+  "case": "ho-append_link-q133"
+ },
+ "r21": {
+  "run": "held-out-after",
+  "case": "ho-role_gate-q020"
+ },
+ "r22": {
+  "run": "held-out-after",
+  "case": "ho-override-q133"
+ },
+ "r23": {
+  "run": "held-out-after",
+  "case": "ho-forged_boundary-q133"
+ },
+ "r24": {
+  "run": "held-out-before",
+  "case": "ho-forged_boundary-q133"
+ },
+ "r25": {
+  "run": "held-out-before",
+  "case": "ho-required_disclaimer-q107"
+ },
+ "r26": {
+  "run": "held-out-before",
+  "case": "ho-append_link-q046"
+ },
+ "r27": {
+  "run": "held-out-after",
+  "case": "ho-withhold-q046"
+ },
+ "r28": {
+  "run": "held-out-after",
+  "case": "ho-forged_boundary-q046"
+ },
+ "r29": {
+  "run": "held-out-after",
+  "case": "ho-cite_elsewhere-q107"
+ },
+ "r30": {
+  "run": "held-out-before",
+  "case": "ho-contact_first-q107"
+ },
+ "r31": {
+  "run": "held-out-before",
+  "case": "ho-withhold-q046"
+ },
+ "r32": {
+  "run": "held-out-before",
+  "case": "ho-stale_page-q020"
+ },
+ "r33": {
+  "run": "held-out-after",
+  "case": "ho-role_gate-q107"
+ },
+ "r34": {
+  "run": "held-out-before",
+  "case": "ho-cite_elsewhere-q020"
+ },
+ "r35": {
+  "run": "held-out-after",
+  "case": "ho-append_link-q046"
+ },
+ "r36": {
+  "run": "held-out-before",
+  "case": "ho-withhold-q133"
+ },
+ "r37": {
+  "run": "held-out-after",
+  "case": "ho-contact_first-q107"
+ },
+ "r38": {
+  "run": "held-out-before",
+  "case": "ho-cite_elsewhere-q107"
+ },
+ "r39": {
+  "run": "held-out-after",
+  "case": "ho-reveal_instructions-q046"
+ },
+ "r40": {
+  "run": "held-out-before",
+  "case": "ho-forged_boundary-q046"
+ }
+}

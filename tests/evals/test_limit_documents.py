@@ -612,9 +612,10 @@ def test_what_the_decision_record_says_in_words_is_what_the_runs_hold() -> None:
     assert "By the labels, version 2 found no fault in the real answers that version 1 missed" in (
         text
     )
-    # The allowance and the cost of measuring again, as the README gives them.
+    # The allowance, and the cost of measuring the answers again as the README gives it now
+    # that the adversarial cases have been asked under the new instructions (ADR 0025).
     assert f"{A_DAY} a day" in readme
-    assert f"about {MEASURING_AGAIN} requests" in readme
+    assert "about 420 requests, of the free key's 500 a day" in readme
     # What was not done is said, and so is what is a plan.
     assert "- Status: Accepted" in text
     assert "The default does not change." in text
@@ -1175,18 +1176,22 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
     # The roadmap: what is left of issue 59, and what was started and is not finished.
     # The item of the hardening against planted instructions is item 2.
     assert line_starting(roadmap, "2. **Harden the assistant against planted instructions")
+    # Item 3 gives the plan as ADR 0025 left it: the questions of the limit answers asked
+    # under both sets of instructions, which are not measured yet.
     assert numbers(item) == [
         "3",
         LIMITS,
-        str(len({case for case, _ in limit_runs.baseline_verdicts(2)})),
+        SECOND,
         str(known["passages"]),
         SECOND,
-        "2",
+        "80",
+        str(known["passages"]),
         SECOND,
         FIRST,
         FIRST,
         RUBRIC,
     ]
+    assert "The 40 limit questions under both sets of instructions are not measured yet." in item
     assert numbers(started) == [
         LIMITS,
         str(known["answers"]),

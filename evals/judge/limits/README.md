@@ -154,7 +154,7 @@ What the comparison showed:
 
 ## How to use it
 
-`make eval-judge-limits` checks the first judge on this file and writes to `evals/runs/judge/limits`. It costs 120 real requests when none fails. `make eval-judge-limits-v2` does the same for version 2 of the judge, and writes to `evals/runs/judge/limits-v2`. A check prints the faults caught in all and for each kind of limit. Alarms on `kept` and `harmless` answers are false alarms. `disagreements.jsonl` names the case of each, and the kind of a case is in this file.
+`make eval-limits` uses the file another way: it asks the assistant itself the question of each passage's `dropped` answer, with that passage, and judges the answers with version 2 of the judge ([the guide](../../../docs/evaluation.md#the-limit-questions-asked-of-the-assistant)). `make eval-judge-limits` checks the first judge on this file and writes to `evals/runs/judge/limits`. It costs 120 real requests when none fails. `make eval-judge-limits-v2` does the same for version 2 of the judge, and writes to `evals/runs/judge/limits-v2`. A check prints the faults caught in all and for each kind of limit. Alarms on `kept` and `harmless` answers are false alarms. `disagreements.jsonl` names the case of each, and the kind of a case is in this file.
 
 Two fixed points for reading a result. The check compares 196 statements and leaves out the one whose label is unclear. A judge that passes everything agrees on 157 of the 196 (0.801) and on 81 of 120 answers, and catches none of the 39. A judge that faults every statement catches all 39, and 39 of its 196 alarms are right (0.199).
 

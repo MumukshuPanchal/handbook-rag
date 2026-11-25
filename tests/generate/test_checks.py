@@ -3,6 +3,7 @@
 Every model here is a stand-in. No request is sent.
 """
 
+import dataclasses
 import re
 from typing import cast
 
@@ -12,7 +13,11 @@ from google import genai
 from handbook_rag.cache import rules
 from handbook_rag.evals.adversarial import INSTRUCTION_CANARIES, find_canaries
 from handbook_rag.generate import checks, markers
-from handbook_rag.generate.base import holds_the_gap_form
+from handbook_rag.generate.base import (
+    holds_the_gap_form,
+    only_the_gap_form,
+    read_the_gap_form_as_a_decline,
+)
 from handbook_rag.generate.checks import (
     COPY_MIN_WORDS,
     HeldBack,
@@ -32,9 +37,11 @@ from handbook_rag.generate.prompt import (
     CHECKED_VERSIONS,
     CURRENT_INSTRUCTIONS,
     GAP_FORM,
+    GAP_FORM_VERSIONS,
     NOT_FOUND_MESSAGE,
     SYSTEM_PROMPTS,
 )
+from handbook_rag.measuring import measuring_the_model
 from tests.generate.test_gemini import MODEL, FakeClient, answer_pieces
 from tests.support import make_chunk
 
@@ -416,3 +423,90 @@ def test_a_reply_a_check_changed_or_marked_is_not_kept_in_the_cache() -> None:
 
     assert rules.storable(kept)
     assert not rules.storable(changed)
+
+
+# A reply that is nothing but the fixed form for a missing part: the model's own decline
+
+GAP_ONLY = f"{GAP_FORM} how to write an SQL query that returns the ten most recent rows."
+
+
+@pytest.mark.parametrize(
+    ("text", "only"),
+    [
+        (GAP_ONLY, True),
+        (f"**{GAP_FORM.lower()}** who pays.\n\n{GAP_FORM} when it starts.", True),
+        (f"{GAP_FORM}.", True),
+        (f"{GAP_FORM} who pays. Leave is sixteen weeks.", False),
+        (f"Leave is sixteen weeks. {GAP_FORM} who pays.", False),
+        (NOT_FOUND_MESSAGE, False),
+        ("", False),
+        ("The passages found do not saying.", False),
+    ],
+)
+def test_a_reply_is_only_the_gap_form_when_every_sentence_begins_with_it(
+    text: str, only: bool
+) -> None:
+    assert only_the_gap_form(text) is only
+
+
+def test_only_the_gap_form_is_read_as_the_fixed_decline_and_the_words_are_kept() -> None:
+    segments = (Segment(GAP_ONLY),)
+
+    assert read_the_gap_form_as_a_decline(segments, answered=True) == (
+        (Segment(NOT_FOUND_MESSAGE),),
+        False,
+        GAP_ONLY,
+    )
+    # A decline already, or a reply with anything else in it, is left as it is.
+    assert read_the_gap_form_as_a_decline(segments, answered=False) == (segments, False, "")
+    answer_and_gap = (cited("Sixteen weeks.", LEAVE), Segment(f" {GAP_FORM} who pays."))
+    assert read_the_gap_form_as_a_decline(answer_and_gap, answered=True) == (
+        answer_and_gap,
+        True,
+        "",
+    )
+
+
+def test_the_versions_that_give_the_gap_form_have_their_replies_checked_too() -> None:
+    # The decline is passed on by the hold-back that only checked versions have.
+    assert GAP_FORM_VERSIONS <= CHECKED_VERSIONS
+
+
+def test_a_reply_of_the_gap_form_alone_is_shown_as_a_decline_with_no_check_and_no_note() -> None:
+    client = FakeClient(
+        answer_pieces(
+            f"{GAP_FORM} how to write ", "an SQL query that returns the ten most recent rows."
+        )
+    )
+    received: list[str] = []
+
+    answer = checked_generator(client).generate("q", [LEAVE], on_text=received.append)
+
+    assert (answer.text, answer.answered) == (NOT_FOUND_MESSAGE, False)
+    assert answer.checks == ()
+    assert answer.model_text == GAP_ONLY
+    assert received == [NOT_FOUND_MESSAGE]
+    # A decline the model wrote is kept by the cache, as every decline is.
+    assert rules.storable(dataclasses.replace(answer, requests=1))
+    assert rules.kept_from_the_second_tier(answer) == rules.DECLINE
+
+
+def test_the_gap_form_after_an_uncited_statement_is_still_a_reply_that_cites_nothing() -> None:
+    client = FakeClient(answer_pieces(f"Leave is sixteen weeks. {GAP_FORM} who pays."))
+
+    answer = checked_generator(client).generate("q", [LEAVE])
+
+    assert answer.model_text == ""
+    assert [check.name for check in answer.checks] == ["cites_nothing"]
+
+
+def test_under_the_first_instructions_a_reply_of_the_gap_form_alone_is_left_as_it_is() -> None:
+    client = FakeClient(answer_pieces(GAP_ONLY))
+    with measuring_the_model():
+        old = GeminiGenerator(
+            cast(genai.Client, client), model=MODEL, max_tokens=4000, instructions=1
+        )
+
+    answer = old.generate("q", [LEAVE])
+
+    assert (answer.text, answer.answered, answer.model_text) == (GAP_ONLY, True, "")

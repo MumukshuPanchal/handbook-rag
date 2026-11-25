@@ -70,12 +70,18 @@ PINNED = {
     # so the answers of version 2 go to a new, empty collection, and nothing stored under
     # version 1 is served under version 2. The layout is part of that name too, named with
     # a fixed code (wiring.answer_request_fingerprint): the code of each request is not.
-    "generate/base.py": "ae6cc407b672e56f",
+    #
+    # Then a reply under version 2 that is nothing but the fixed form for a missing part
+    # became a decline by the model, shown as the fixed declining sentence (base.py), where
+    # before the check for a reply that cites nothing declined it. Such a reply was never
+    # stored, since a reply a check changed is not kept; now it is kept as a decline, which
+    # is served to the very same question only. No stored answer becomes wrong: it stays.
+    "generate/base.py": "b0d37f218f520b8f",
     "generate/checks.py": "c800929a4574c530",
-    "generate/claude.py": "c29ccfd78f175ed2",
-    "generate/gemini.py": "ec342c8b8b68764c",
+    "generate/claude.py": "a458e78d7400ee9d",
+    "generate/gemini.py": "daaed3b21bddf6c4",
     "generate/markers.py": "db2add40ed28b909",
-    "generate/models.py": "88dd2e0ecc7bced0",
+    "generate/models.py": "39defe6e664fb8ca",
     # How passages are found: the question's vectors, the search, and what orders them.
     "index/embedder.py": "42df4fad32f4e53d",
     "index/sparse.py": "1852989448469c03",

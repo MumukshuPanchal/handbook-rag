@@ -1336,9 +1336,36 @@ def _echo_answer_scores(
             f"  tokens       {report.tokens['input_mean']:,.0f} in and "
             f"{report.tokens['output_mean']:,.0f} out per question"
         )
+    _echo_reply_checks(report)
     for criterion in criteria:
         if criterion.metric in judges:
             _echo_judge_record(criterion, judges[criterion.metric])
+
+
+def _echo_reply_checks(report: answer_runs.AnswerReport) -> None:
+    """What the checks of the reply did, split by whether the handbook answers the question.
+
+    A reply that a check declined on a question the handbook answers costs a right call:
+    that is the checks' cost. Whether its words were a right answer is for a reader, who
+    finds them in the saved reply. A reply that was nothing but the fixed form for a
+    missing part is the model's own decline, and is counted apart from the checks.
+    """
+
+    def counted(ids: Mapping[str, list[str]]) -> str:
+        answerable, unanswerable = ids.get("answerable", []), ids.get("unanswerable", [])
+        named = f" ({', '.join(answerable)})" if answerable else ""
+        return (
+            f"{len(answerable)} to questions the handbook answers{named}, "
+            f"{len(unanswerable)} to questions it does not"
+        )
+
+    for name, ids in report.reply_checks.items():
+        typer.echo(f"  check        {name}: {counted(ids)}")
+    if report.declined_in_the_gap_form:
+        typer.echo(
+            "  gap form     replies that were nothing but the fixed form for a missing part, "
+            f"shown as declines: {counted(report.declined_in_the_gap_form)}"
+        )
 
 
 def _version_option(version: int) -> str:
@@ -2329,10 +2356,14 @@ def eval_reply_checks(
             removed = check.removed.replace("\n", " ")
             shown = f"  {removed[:100]!r}" if removed else ""
             typer.echo(f"  {item.reply_to:<30} {check.name:<24} {check.action:<13}{shown}")
+    gap_form = [t.reply_to for t in tried if t.model_text]
+    for reply_to in gap_form:
+        typer.echo(f"  {reply_to:<30} the fixed form alone: shown as a decline, no check")
     typer.echo(
         "  fired        "
         + ", ".join(f"{name} {count}" for name, count in fired.items())
         + f"; replies changed or marked: {sum(bool(t.checked.checks) for t in tried)}"
+        + f"; read as the model's decline: {len(gap_form)}"
     )
     long = [
         (t.reply_to, len(plain_words(t.record.text).split()))

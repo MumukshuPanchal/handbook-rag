@@ -98,6 +98,13 @@ stand. Answer the question from them.
 SYSTEM_PROMPTS: Final[Mapping[int, str]] = MappingProxyType({1: SYSTEM_PROMPT, 2: SYSTEM_PROMPT_V2})
 """The instructions of each version, for a model whose API cites passages itself."""
 
+GAP_FORM_VERSIONS: Final = frozenset({2})
+"""The versions whose instructions give the fixed form for a part the passages do not
+answer (:data:`GAP_FORM`). A reply under one of them that is nothing but that form is a
+decline, and is shown as the fixed declining sentence (``base.read_the_gap_form_as_a_decline``).
+Each is a version whose replies are checked too, so the decline is passed on as the checks'
+replies are."""
+
 CHECKED_VERSIONS: Final = frozenset({2})
 """The versions whose replies are checked in code before anyone is given them
 (``checks.py``). Version 1 is the old assistant, which had no checks."""

@@ -10,11 +10,13 @@ import pytest
 
 from handbook_rag.evals.answers import (
     METRIC_IDS,
+    AnswerRecord,
     Passage,
     ReplyError,
     Statement,
     add_attempts,
     append_record,
+    as_read_today,
     attempts_so_far,
     check_run,
     in_run_order,
@@ -32,8 +34,9 @@ from handbook_rag.evals.dataset import DatasetError, GoldenQuestion, locate_evid
 from handbook_rag.evals.retrieval import FailedQuestion
 from handbook_rag.evals.stage import SavedRunError
 from handbook_rag.generate.base import GenerationError
-from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
-from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
+from handbook_rag.generate.checks import CITES_NOTHING, NOTES
+from handbook_rag.generate.models import Answer, Citation, ReplyCheck, Segment, TokenUsage
+from handbook_rag.generate.prompt import GAP_FORM, NOT_FOUND_MESSAGE
 from handbook_rag.index.store import ScoredChunk, VectorStoreError
 from handbook_rag.ingest.models import Chunk, Document
 
@@ -1226,3 +1229,80 @@ def test_passages_are_kept_by_id_and_not_by_their_text(tmp_path: Path) -> None:
     assert Passage(1, "chunk-finance/expenses.md", "finance/expenses.md", "Title", ()) in (
         load_records(tmp_path / "answers.jsonl")["q001"].passages
     )
+
+
+# Replies that a check of the reply declined, and replies of the fixed form alone
+
+GAP_ONLY = f"{GAP_FORM} where to park."
+
+
+def declined_by_the_check(question: GoldenQuestion, words: str) -> Answer:
+    check = ReplyCheck(CITES_NOTHING, "declined", NOTES[CITES_NOTHING], words)
+    return dataclasses.replace(declines(question), checks=(check,))
+
+
+def saved(tmp_path: Path, *answers: tuple[GoldenQuestion, Answer]) -> dict[str, AnswerRecord]:
+    path = tmp_path / "answers.jsonl"
+    rows = []
+    for question, answer in answers:
+        spans = locate_evidence(question, {document.doc_id: document for document in DOCUMENTS})
+        rows.append(json.dumps(dataclasses.asdict(record_answer(question, answer, spans))))
+    path.write_text("".join(row + "\n" for row in rows))
+    return load_records(path)
+
+
+def test_a_saved_reply_of_the_gap_form_alone_that_a_check_declined_is_read_as_the_models_decline(
+    tmp_path: Path,
+) -> None:
+    records = saved(
+        tmp_path,
+        (PARKING_QUESTION, declined_by_the_check(PARKING_QUESTION, GAP_ONLY)),
+        (LEAVE_QUESTION, declined_by_the_check(LEAVE_QUESTION, "Sixteen weeks.")),
+    )
+
+    parking, leave = records[PARKING_QUESTION.id], records[LEAVE_QUESTION.id]
+    assert (parking.checks, parking.model_text, parking.answered) == ((), GAP_ONLY, False)
+    # A real answer that cited nothing stays a check's decline: it is the checks' cost.
+    assert [check.name for check in leave.checks] == [CITES_NOTHING]
+    assert leave.model_text == ""
+    assert as_read_today(leave) == leave
+
+
+def test_a_run_counts_what_the_checks_declined_apart_from_the_models_own_declines() -> None:
+    gap = dataclasses.replace(declines(PARKING_QUESTION), model_text=GAP_ONLY)
+    records = {
+        LEAVE_QUESTION.id: record_answer(
+            LEAVE_QUESTION, declined_by_the_check(LEAVE_QUESTION, "Sixteen weeks."), []
+        ),
+        LAPTOP_QUESTION.id: record_answer(LAPTOP_QUESTION, good_reply(LAPTOP_QUESTION), []),
+        PARKING_QUESTION.id: record_answer(PARKING_QUESTION, gap, []),
+    }
+
+    report = summarise_answers(QUESTIONS, records)
+
+    assert report.reply_checks == {CITES_NOTHING: {"answerable": [LEAVE_QUESTION.id]}}
+    assert report.declined_in_the_gap_form == {"unanswerable": [PARKING_QUESTION.id]}
+    # The decline of the right call is counted where it always was: the checks' cost.
+    leave = next(item for item in report.scored if item.question is LEAVE_QUESTION)
+    assert leave.scores["right_call"] == 0.0
+
+
+def test_a_run_writes_the_split_only_when_there_is_one(tmp_path: Path) -> None:
+    gap = dataclasses.replace(declines(PARKING_QUESTION), model_text=GAP_ONLY)
+    with_gap = summarise_answers(
+        QUESTIONS, {PARKING_QUESTION.id: record_answer(PARKING_QUESTION, gap, [])}
+    )
+    without = summarise_answers(
+        QUESTIONS,
+        {PARKING_QUESTION.id: record_answer(PARKING_QUESTION, declines(PARKING_QUESTION), [])},
+    )
+
+    write_answer_run(with_gap, tmp_path, "a", "d", {}, attempts=1)
+    write_answer_run(without, tmp_path, "b", "d", {}, attempts=1)
+
+    first = json.loads((tmp_path / "a" / "summary.json").read_text())
+    second = json.loads((tmp_path / "b" / "summary.json").read_text())
+    assert first["declined_in_the_gap_form"] == {"unanswerable": [PARKING_QUESTION.id]}
+    assert "reply_checks" not in first
+    assert "declined_in_the_gap_form" not in second
+    assert "reply_checks" not in second

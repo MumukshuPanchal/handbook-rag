@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from handbook_rag.evals.answers import AnswerRecord
 from handbook_rag.evals.dataset import DatasetError
+from handbook_rag.generate.base import read_the_gap_form_as_a_decline
 from handbook_rag.generate.checks import CheckedReply, check_reply
 from handbook_rag.generate.models import Citation, Segment
 from handbook_rag.ingest.models import Chunk
@@ -29,6 +30,9 @@ class TriedReply:
     reply_to: str
     record: AnswerRecord
     checked: CheckedReply
+    model_text: str = ""
+    """The reply's words, when they were nothing but the fixed form for a missing part and
+    would be shown as the fixed declining sentence: the model's decline, not a check's."""
 
 
 def given_passages(
@@ -53,7 +57,12 @@ def given_passages(
 
 
 def try_checks(record: AnswerRecord, given: Sequence[Chunk]) -> TriedReply:
-    """Make the checks on a saved reply as they are made on a reply being written."""
+    """Make the checks on a saved reply as they are made on a reply being written.
+
+    As the generator does under instructions that give the fixed form for a missing part,
+    a reply that is nothing but that form is first read as a decline, and the checks then
+    leave it alone.
+    """
     segments = tuple(
         Segment(
             statement.text,
@@ -61,6 +70,12 @@ def try_checks(record: AnswerRecord, given: Sequence[Chunk]) -> TriedReply:
         )
         for statement in record.statements
     )
+    segments, answered, model_text = read_the_gap_form_as_a_decline(
+        segments, answered=record.answered
+    )
     return TriedReply(
-        record.question_id, record, check_reply(segments, given, answered=record.answered)
+        record.question_id,
+        record,
+        check_reply(segments, given, answered=answered),
+        model_text,
     )

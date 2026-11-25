@@ -166,6 +166,44 @@ def holds_the_gap_form(segments: Sequence[Segment]) -> bool:
     return f" {_words(GAP_FORM)} " in f" {_words(''.join(s.text for s in segments))} "
 
 
+def only_the_gap_form(text: str) -> bool:
+    """Whether a text is nothing but sentences in the fixed form for a part the passages do
+    not answer, so that it states no answer at all.
+
+    The text is cut into sentences at line breaks and after a full stop, a question mark or
+    an exclamation mark, and every sentence that holds a word must begin with the form.
+    Words are compared as in :func:`is_answered`. A sentence cut in a wrong place (after
+    "e.g.") does not begin with the form, and the text is then not taken for one: it stays
+    a reply for the checks to read.
+    """
+    form = _words(GAP_FORM)
+    sentences = [_words(part) for part in _SENTENCE_BREAK.split(text.strip())]
+    spoken = [sentence for sentence in sentences if sentence]
+    return bool(spoken) and all(
+        sentence == form or sentence.startswith(form + " ") for sentence in spoken
+    )
+
+
+def read_the_gap_form_as_a_decline(
+    segments: Sequence[Segment], *, answered: bool
+) -> tuple[tuple[Segment, ...], bool, str]:
+    """A reply that is nothing but the fixed form for a missing part, read as the decline it is.
+
+    Instructions that give the form (``prompt.GAP_FORM_VERSIONS``) ask for it after an
+    answer to the part the passages do answer. A model may write it alone, for a question
+    the passages do not answer at all, in place of the fixed declining sentence. That says
+    what the sentence says, so it is shown and counted as the sentence: the reply becomes
+    the fixed declining sentence and is not an answer, with no note, since nothing was
+    withheld. Returns the segments, whether the reply is an answer, and the model's own
+    words when they were replaced (empty otherwise). A reply that is not an answer, or
+    that holds anything besides the form, is returned as it is.
+    """
+    text = "".join(segment.text for segment in segments)
+    if not answered or not only_the_gap_form(text):
+        return tuple(segments), answered, ""
+    return (Segment(NOT_FOUND_MESSAGE),), False, text.strip()
+
+
 def plain_words(text: str) -> str:
     """A text as its words alone, as a reply is compared with the fixed sentence.
 
@@ -173,6 +211,11 @@ def plain_words(text: str) -> str:
     punctuation and Markdown count for as little there as they do here.
     """
     return _words(text)
+
+
+# Where one sentence ends and the next begins: a line break, or a full stop, a question
+# mark or an exclamation mark followed by white space.
+_SENTENCE_BREAK = re.compile(r"\n+|(?<=[.!?])\s+")
 
 
 def _words(text: str) -> str:

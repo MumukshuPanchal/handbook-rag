@@ -17,6 +17,7 @@ as soon as it arrives, a run that was stopped continues where it left off, and a
 keeps failing stops itself.
 """
 
+import dataclasses
 import hashlib
 import json
 import statistics
@@ -37,7 +38,8 @@ from handbook_rag.evals.stage import (
     load_rows,
     write_json,
 )
-from handbook_rag.generate.base import GenerationError
+from handbook_rag.generate.base import GenerationError, only_the_gap_form
+from handbook_rag.generate.checks import CITES_NOTHING
 from handbook_rag.generate.models import Answer, ReplyCheck
 from handbook_rag.index.store import VectorStoreError
 from handbook_rag.ingest.models import Chunk, Document
@@ -111,6 +113,10 @@ class AnswerRecord:
     """The checks of the reply in code that fired (``generate/checks.py``). The
     statements are the reply as they left it, and each check keeps the words it took
     out. A reply saved before there were checks has none."""
+    model_text: str = ""
+    """The model's own words, when the generator showed the fixed declining sentence in
+    their place because they were nothing but the fixed form for a missing part
+    (``Answer.model_text``). A decline by the model, not a check."""
 
     @property
     def text(self) -> str:
@@ -203,7 +209,28 @@ def record_reply(
         seconds=answer.seconds,
         seconds_to_first_text=answer.seconds_to_first_text,
         checks=answer.checks,
+        model_text=answer.model_text,
     )
+
+
+def as_read_today(record: AnswerRecord) -> AnswerRecord:
+    """A saved reply as today's generator would have given it.
+
+    Before the generator read a reply that is nothing but the fixed form for a missing
+    part as a decline (``base.read_the_gap_form_as_a_decline``), such a reply went to the
+    check for a reply that cites nothing, which declined it and said so. The reply shown
+    was the same fixed declining sentence. What differs is whose decline it is: the
+    model's, with no note. So a saved reply whose one check is that one, and whose words
+    are nothing but the form, is read with no check and with those words as the model's.
+    Every other reply is read as it was saved.
+    """
+    if (
+        len(record.checks) == 1
+        and record.checks[0].name == CITES_NOTHING
+        and only_the_gap_form(record.checks[0].removed)
+    ):
+        return dataclasses.replace(record, checks=(), model_text=record.checks[0].removed)
+    return record
 
 
 def score_answer(question: GoldenQuestion, record: AnswerRecord) -> dict[str, float]:
@@ -453,7 +480,7 @@ def _records(rows: Sequence[tuple[int, dict[str, Any]]], path: Path) -> dict[str
             )
         except (KeyError, TypeError) as error:
             raise SavedRunError(f"{path}:{number} is not a saved reply: {error}") from error
-        records[record.question_id] = record
+        records[record.question_id] = as_read_today(record)
     return records
 
 
@@ -477,6 +504,15 @@ class AnswerReport:
     by_group: dict[str, dict[str, dict[str, Estimate]]]
     timing: dict[str, float]
     tokens: dict[str, float]
+    reply_checks: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    """For each check of the reply in code that fired, the questions it fired on, split
+    by whether the handbook answers them: ``answerable`` and ``unanswerable``. A reply
+    declined on a question the handbook answers costs a right call, whatever its words;
+    each kept its words in the saved reply, for a reader to say whether it was a right
+    answer. On a question the handbook does not answer, a decline is the right call."""
+    declined_in_the_gap_form: dict[str, list[str]] = field(default_factory=dict)
+    """The questions whose reply was nothing but the fixed form for a missing part, shown
+    as the fixed declining sentence: declines by the model, split as above."""
 
 
 def summarise_answers(
@@ -527,7 +563,18 @@ def summarise_answers(
             "input_mean": statistics.fmean(record.input_tokens for record in asked),
             "output_mean": statistics.fmean(record.output_tokens for record in asked),
         }
+    reply_checks: dict[str, dict[str, list[str]]] = {}
+    gap_form: dict[str, list[str]] = {}
+    for item in scored:
+        for check in item.record.checks:
+            reply_checks.setdefault(check.name, {}).setdefault(item.question.type, []).append(
+                item.question.id
+            )
+        if item.record.model_text:
+            gap_form.setdefault(item.question.type, []).append(item.question.id)
     return AnswerReport(
+        reply_checks=reply_checks,
+        declined_in_the_gap_form=gap_form,
         scored=scored,
         failures=failed,
         not_asked=len(questions) - len(scored) - len(failed),
@@ -638,6 +685,13 @@ def write_answer_run(
         "timing": report.timing,
         "tokens": report.tokens,
     }
+    # What the checks of the reply did, and which replies the model wrote in the fixed form
+    # alone. Written only when there is any, so that a run of instructions without checks
+    # is summarised as every run before there were checks.
+    if report.reply_checks:
+        summary["reply_checks"] = report.reply_checks
+    if report.declined_in_the_gap_form:
+        summary["declined_in_the_gap_form"] = report.declined_in_the_gap_form
     if judges:
         # For each judged score: who judged, what it cost, and how far that judge agreed
         # with labelled answers.

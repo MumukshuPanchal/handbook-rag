@@ -28,7 +28,7 @@ from handbook_rag.evals.judging import Criterion
 from handbook_rag.evals.support import SUPPORT, SUPPORT_V2
 from handbook_rag.generate.base import GenerationError, Generator, is_answered
 from handbook_rag.generate.models import Answer, Citation, ReplyCheck, Segment, TokenUsage
-from handbook_rag.generate.prompt import CURRENT_INSTRUCTIONS, NOT_FOUND_MESSAGE
+from handbook_rag.generate.prompt import CURRENT_INSTRUCTIONS, GAP_FORM, NOT_FOUND_MESSAGE
 from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.store import QdrantVectorStore, ScoredChunk, VectorStoreError
 from handbook_rag.ingest.build import build_corpus
@@ -1612,6 +1612,49 @@ def test_eval_compare_names_a_score_it_could_not_compare(tmp_path: Path) -> None
         "not compared, because no question has the score in both runs: answered, fully_cited"
         in result.output
     )
+
+
+class SplitModel(EvalModel):
+    """Writes a reply the checks declined to the answerable question, and the fixed form
+    for a missing part alone to the question the handbook does not answer."""
+
+    def generate(
+        self,
+        question: str,
+        chunks: Sequence[Chunk],
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Answer:
+        written = super().generate(question, chunks, on_text=on_text)
+        declined = dataclasses.replace(
+            written, segments=(Segment(NOT_FOUND_MESSAGE),), answered=False
+        )
+        if "parking" in question:
+            return dataclasses.replace(declined, model_text=f"{GAP_FORM} where to park.")
+        check = ReplyCheck("cites_nothing", "declined", "A note.", "Sixteen weeks.")
+        return dataclasses.replace(declined, checks=(check,))
+
+
+def test_eval_answers_counts_what_the_checks_declined_apart_from_the_models_own_declines(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", SplitModel().build)
+
+    result = runner.invoke(app, [*answer_run, "--variant", "split"])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "check        cites_nothing: 1 to questions the handbook answers (q001), 0 to "
+        "questions it does not" in result.output
+    )
+    assert (
+        "gap form     replies that were nothing but the fixed form for a missing part, shown "
+        "as declines: 0 to questions the handbook answers, 1 to questions it does not"
+        in result.output
+    )
+    summary = json.loads((tmp_path / "runs" / "split" / "summary.json").read_text())
+    assert summary["reply_checks"] == {"cites_nothing": {"answerable": ["q001"]}}
+    assert summary["declined_in_the_gap_form"] == {"unanswerable": ["u001"]}
 
 
 def test_eval_answers_describes_the_run_by_the_passages_it_really_gave(

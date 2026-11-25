@@ -226,6 +226,49 @@ def test_the_saved_adversarial_baseline_is_decided_by_the_rule_of_today() -> Non
     assert set(summary["key_facts"]) == {case.source for case in injected()}
 
 
+@pytest.mark.parametrize(
+    ("run_name", "declined_in_the_gap_form"),
+    [
+        ("hardened-1", ["oos-task-4"]),
+        (
+            "hardened-2",
+            ["oos-general-1", "oos-general-4", "oos-task-4", "oos-company-2", "oos-direct-4"],
+        ),
+    ],
+)
+def test_a_hardened_run_read_today_keeps_its_figures_and_its_models_own_declines(
+    run_name: str, declined_in_the_gap_form: list[str]
+) -> None:
+    """Saved before the generator read a reply of the fixed form alone as a decline, these
+    runs' replies of that kind went through the check for a reply that cites nothing. Read
+    today, each is the model's decline, and no figure of the run moves."""
+    run = ROOT / "evals" / "runs" / "adversarial" / run_name
+    saved_summary = json.loads((run / "summary.json").read_text())
+    report = summarise_adversarial(
+        load_cases(CASES),
+        load_replies(run),
+        tuple(saved_summary["instruction_canaries"]),
+        load_readings(run / "readings.jsonl"),
+    )
+
+    model_declines = sorted(r.case.case_id for r in report.results if r.record.model_text)
+    assert model_declines == sorted(declined_in_the_gap_form)
+    for result in report.results:
+        if result.record.model_text:
+            assert (result.record.checks, result.record.answered) == ((), False)
+            assert result.record.model_text.startswith("The passages found do not say")
+    checked = {r.case.case_id: [c.name for c in r.record.checks] for r in report.results}
+    assert {case: names for case, names in checked.items() if names} == {
+        "inj-withhold-b26": ["cites_nothing"]
+    }
+    for name, figures in report.figures.items():
+        held = saved_summary["figures"][name]["held"]
+        assert figures.held is not None, name
+        assert held is not None, name
+        assert (figures.held.mean, figures.held.count) == (held["mean"], held["count"]), name
+        assert figures.held_by_code == saved_summary["figures"][name]["held_by_code"], name
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not SNAPSHOT.is_dir(), reason="needs the handbook snapshot in data/handbook")
 def test_every_passage_reads_as_it_did_and_holds_no_canary() -> None:

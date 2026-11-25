@@ -72,13 +72,17 @@ def test_the_checks_are_made_on_every_saved_reply_of_an_answer_run(
         ),
         saved("q2", given, Segment("Sixteen weeks.")),
         saved("q3", given, Segment("Sixteen weeks.", (Citation(leave),))),
+        saved("q4", given, Segment("The passages found do not say where to park.")),
     ]
     (run / "answers.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
 
     result = runner.invoke(app, ["eval-reply-checks", "--run", str(run)])
 
     assert result.exit_code == 0, result.output
-    assert "replies      3, of which 3 are answers" in result.output
+    assert "replies      4, of which 4 are answers" in result.output
+    assert "q4                             the fixed form alone: shown as a decline, no check" in (
+        result.output
+    )
     assert (
         f"q1                             address_in_closing_line  dropped_line   'More: {LINK}'"
         in (result.output)
@@ -90,7 +94,7 @@ def test_the_checks_are_made_on_every_saved_reply_of_an_answer_run(
     assert "q3 " not in result.output
     assert (
         "fired        cites_nothing 1, address_in_closing_line 1, mostly_a_copy 0; "
-        "replies changed or marked: 2" in result.output
+        "replies changed or marked: 2; read as the model's decline: 1" in result.output
     )
 
 

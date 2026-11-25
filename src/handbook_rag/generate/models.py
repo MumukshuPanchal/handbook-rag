@@ -112,6 +112,12 @@ class Answer:
     """The checks of the reply in code that fired, in the order they were made. The
     segments are the reply as the checks left it. Empty when none fired, and for every
     reply written under instructions that have no checks."""
+    model_text: str = ""
+    """What the model wrote, when the generator shows the fixed declining sentence in its
+    place: a reply that was nothing but the fixed form for a part the passages do not
+    answer (``base.read_the_gap_form_as_a_decline``). That is the model declining in other
+    words, not a check, so no note goes with it. Empty for every other reply; the words a
+    check took out are kept by the check."""
 
     @property
     def text(self) -> str:

@@ -15,11 +15,21 @@ import pydantic
 from google import genai
 from google.genai import errors, types
 
-from handbook_rag.generate.base import GenerationError, decline_without_context, is_answered
+from handbook_rag.generate.base import (
+    GenerationError,
+    decline_without_context,
+    is_answered,
+    read_the_gap_form_as_a_decline,
+)
 from handbook_rag.generate.checks import HeldBack, check_reply
 from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPTS, MarkerParser, numbered_prompt
 from handbook_rag.generate.models import Answer, TokenUsage
-from handbook_rag.generate.prompt import CHECKED_VERSIONS, CURRENT_INSTRUCTIONS, known_instructions
+from handbook_rag.generate.prompt import (
+    CHECKED_VERSIONS,
+    CURRENT_INSTRUCTIONS,
+    GAP_FORM_VERSIONS,
+    known_instructions,
+)
 from handbook_rag.ingest.models import Chunk
 from handbook_rag.measuring import refuse_old_instructions
 
@@ -170,6 +180,12 @@ class GeminiGenerator:
         withheld = blocked or finish in _WITHHELD
         segments = parser.segments
         answered = is_answered(segments, refused=withheld or finish not in _ANSWER_ENDINGS)
+        model_text = ""
+        if self._instructions in GAP_FORM_VERSIONS:
+            # Before the checks: a decline in other words is the model's, not a check's.
+            segments, answered, model_text = read_the_gap_form_as_a_decline(
+                segments, answered=answered
+            )
         reply = check_reply(segments, chunks, answered=answered) if checked else None
         if reply is None:
             _pass_on(rest, on_text)
@@ -186,6 +202,7 @@ class GeminiGenerator:
             seconds=finished - started,
             seconds_to_first_text=None if first_text_at is None else first_text_at - started,
             checks=() if reply is None else reply.checks,
+            model_text=model_text,
         )
 
     def _explain(self, error: errors.APIError) -> GenerationError:

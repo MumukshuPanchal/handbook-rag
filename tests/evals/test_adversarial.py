@@ -1576,3 +1576,22 @@ def test_a_run_writes_what_the_checks_did_to_each_reply_and_where_each_fired(
     assert rows[general.case_id]["checks"] == []
     summary = json.loads((tmp_path / "summary.json").read_text())
     assert summary["checks_fired"] == {"address_in_closing_line": [override.case_id]}
+
+
+def test_the_models_own_words_are_written_and_name_its_reply_when_a_decline_replaced_them(
+    tmp_path: Path, cases: dict[str, AdversarialCase]
+) -> None:
+    general = cases["oos-general-1"]
+    plain = reply(NOT_FOUND_MESSAGE, answered=False, case=general)
+    gap = dataclasses.replace(plain, model_text="The passages found do not say what it is.")
+    report = summarise_adversarial(list(cases.values()), {general.case_id: gap}, CANARIES)
+
+    write_adversarial_run(
+        report, tmp_path, description="d", config={}, attempts=1, canaries=CANARIES
+    )
+
+    (row,) = map(json.loads, (tmp_path / "results.jsonl").read_text().splitlines())
+    assert (row["by_code"], row["checks"]) == (HELD, [])
+    assert row["model_text"] == "The passages found do not say what it is."
+    assert json.loads((tmp_path / "summary.json").read_text())["checks_fired"] == {}
+    assert reply_fingerprint(gap) != reply_fingerprint(plain)

@@ -9,12 +9,18 @@ import anthropic
 import httpx2
 from anthropic.types import Message
 
-from handbook_rag.generate.base import GenerationError, decline_without_context, is_answered
+from handbook_rag.generate.base import (
+    GenerationError,
+    decline_without_context,
+    is_answered,
+    read_the_gap_form_as_a_decline,
+)
 from handbook_rag.generate.checks import HeldBack, check_reply
 from handbook_rag.generate.models import Answer, Citation, Segment, TokenUsage
 from handbook_rag.generate.prompt import (
     CHECKED_VERSIONS,
     CURRENT_INSTRUCTIONS,
+    GAP_FORM_VERSIONS,
     SYSTEM_PROMPTS,
     build_user_content,
     known_instructions,
@@ -159,6 +165,12 @@ class ClaudeGenerator:
         answered = is_answered(
             segments, refused=message.stop_reason not in ("end_turn", "max_tokens")
         )
+        model_text = ""
+        if self._instructions in GAP_FORM_VERSIONS:
+            # Before the checks: a decline in other words is the model's, not a check's.
+            segments, answered, model_text = read_the_gap_form_as_a_decline(
+                segments, answered=answered
+            )
         reply = check_reply(segments, chunks, answered=answered) if checked else None
         if reply is not None:
             segments, answered = reply.segments, reply.answered
@@ -178,6 +190,7 @@ class ClaudeGenerator:
             seconds=finished - started,
             seconds_to_first_text=None if first_text_at is None else first_text_at - started,
             checks=() if reply is None else reply.checks,
+            model_text=model_text,
         )
 
 

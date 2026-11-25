@@ -432,6 +432,7 @@ def write_limit_run(
                 "cites": sorted(record.cited),
                 "reply": record.text_with_markers,
                 "checks": [asdict(check) for check in record.checks],
+                "model_text": record.model_text,
                 "judged": result.judgement is not None,
                 "faulted": result.faulted,
                 "verdicts": (

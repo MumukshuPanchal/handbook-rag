@@ -4883,6 +4883,7 @@ class AnswersEverything(EvalModel):
         segments = (
             Segment("A first line.", (Citation(chunks[0]),)),
             Segment("\nA second line.", (Citation(chunks[0]),)),
+            Segment("\nA third line.", (Citation(chunks[0]),)),
         )
         return dataclasses.replace(written, segments=segments, answered=True)
 
@@ -4906,13 +4907,54 @@ def test_eval_answers_asks_only_the_questions_of_one_type_and_lists_their_answer
     assert "answered     1 of the 1 questions the handbook does not answer, each in full:" in (
         result.output
     )
-    assert "    u001  A first line.[1]\n          A second line.[1]\n" in result.output
+    assert (
+        "    u001  A first line.[1]\n          A second line.[1]\n          A third line.[1]\n"
+        in result.output
+    )
     run = json.loads((tmp_path / "runs" / "only" / "run.json").read_text())
     assert run["config"]["questions"] == "unanswerable"
-    # A run of one type is not continued with every question, nor the other way.
+    # A run of one type is not continued with every question.
     every = runner.invoke(app, [*answer_run, "--variant", "only"])
     assert every.exit_code == 1
     assert "made with other settings" in every.output
     wrong = runner.invoke(app, [*answer_run, "--variant", "x", "--only", "some"])
     assert wrong.exit_code == 1
     assert "--only takes 'answerable' or 'unanswerable', not 'some'." in wrong.output
+
+
+class FormWithMarkers(EvalModel):
+    """Replies to the parking question with the fixed form alone, which carried markers:
+    a decline in the model's own words, as the generator gives it."""
+
+    def generate(
+        self,
+        question: str,
+        chunks: Sequence[Chunk],
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Answer:
+        written = super().generate(question, chunks, on_text=on_text)
+        if "parking" not in question:
+            return written
+        words = f"{GAP_FORM} how much the parking allowance is."
+        return dataclasses.replace(
+            written, segments=(Segment(words),), answered=False, model_text=words
+        )
+
+
+def test_eval_answers_counts_the_replies_in_the_form_with_markers_apart(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", FormWithMarkers().build)
+
+    result = runner.invoke(app, [*answer_run, "--variant", "form"])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "of them with citation markers, shown in the model's words with no source: 0 to "
+        "questions the handbook answers, 1 to questions it does not" in result.output
+    )
+    # A run of every question is not continued as a run of one type either.
+    one_type = runner.invoke(app, [*answer_run, "--variant", "form", "--only", "unanswerable"])
+    assert one_type.exit_code == 1
+    assert "made with other settings" in one_type.output

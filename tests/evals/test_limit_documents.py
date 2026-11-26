@@ -1178,6 +1178,7 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
     # Item 3 gives the questions of the limit answers asked under both sets of instructions,
     # as the runs hold them (tests/evals/test_hardening_documents.py holds the figures).
     pairs, blind = hardening_runs.limit_pairs(), hardening_runs.limit_reading_pairs()
+    leaning = hardening_runs.limit_reading_pairs(unsure_as_left_out=True)
     kept = {
         v: sum(
             row["label"] == "kept"
@@ -1200,9 +1201,10 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
         str(goods[1]),
         str(len(pairs["better"])),
         f"{hardening_runs.sign_test(len(pairs['better']), len(pairs['worse'])):.3f}",
+        str(len(leaning["better"])),
+        f"{hardening_runs.sign_test(len(leaning['better']), len(leaning['worse'])):.3f}",
         str(kept[1]),
         str(kept[2]),
-        str(len(blind["better"])),
         f"{hardening_runs.sign_test(len(blind['better']), len(blind['worse'])):.4f}",
         SECOND,
         FIRST,

@@ -21,12 +21,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from typer.testing import CliRunner
 
+from handbook_rag.cli import app
 from handbook_rag.evals import adversarial
 from handbook_rag.evals.answers import load_records
+from handbook_rag.evals.compare import compare_runs
 from handbook_rag.evals.dataset import load_golden_set
 from handbook_rag.evals.metrics import share_with_interval
 from handbook_rag.evals.support import passage_hash
+from handbook_rag.generate.base import only_the_gap_form, parts_only_of_the_form
 from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPTS
 from tests.evals import hardening_runs as runs
 from tests.test_readme_results import line_starting, table
@@ -985,10 +989,17 @@ def test_the_documents_give_the_answer_evaluation_under_version_2_once_it_is_the
         pytest.skip(
             "the answer evaluation has not been run under version 2 of the instructions yet"
         )
-    for path in (ADR, README):
-        assert runs.ANSWERS_PENDING not in read(path), (
-            f"{path.name} still says the answer evaluation under version 2 is not run: give "
-            "its figures beside the baseline, and hold them here"
+    # Any wording that says the run is still to come, in every document that gives it.
+    not_run = re.compile(
+        r"answer evaluation (?:under version 2 )?is not run yet|not run yet under|"
+        r"answer evaluation under version 2 is still to come",
+        re.IGNORECASE,
+    )
+    for path in (ADR, README, GUIDE, CHANGELOG, ROADMAP, CARD):
+        found = not_run.search(read(path))
+        assert found is None, (
+            f"{path.name} still says the answer evaluation under version 2 is not run "
+            f"({found.group() if found else ''}): give its figures, and hold them here"
         )
 
 
@@ -1061,3 +1072,135 @@ def test_the_tables_of_the_answer_run_under_version_2_are_the_runs() -> None:
     guide = table(read(GUIDE), "| | Version 1 (`baseline`) | Version 2, as the run was made |")
     assert [row[1:] for row in readme] == expected
     assert [row[1:] for row in guide] == [expected[0], expected[2], expected[1], expected[3]]
+
+
+def test_the_documents_name_the_decline_that_is_not_shown_as_the_fixed_sentence() -> None:
+    """A reply made only of the fixed form, with markers, is shown in its own words: every
+    sentence that says a decline is the fixed sentence names that exception."""
+    row = next(
+        line for line in read(ADR).splitlines() if line.startswith("| `words_beside_a_decline`")
+    )
+    assert "except a reply made only of the fixed form for a missing part" in row
+    assert "except a reply made only of the fixed form for a missing part" in read(CHANGELOG)
+    for path in (README, ARCHITECTURE, CARD):
+        assert "in its own words with no source" in read(path), path.name
+    assert "the reply is one fixed sentence with no sources ([ADR 0010]" in read(README)
+    assert "or the fixed sentence that declines" not in read(README)
+
+
+def test_the_documents_say_who_read_and_what_the_rule_told_the_blind_reader() -> None:
+    hardened = [
+        json.loads(line)["reply"]
+        for line in read(runs.LIMIT_RUNS[2] / "results.jsonl").splitlines()
+    ]
+    first = [
+        json.loads(line)["reply"]
+        for line in read(runs.LIMIT_RUNS[1] / "results.jsonl").splitlines()
+    ]
+    rule = read(runs.LIMIT_READING / "RULE.md")
+
+    # What the files show: the form in 5 replies of version 2 and none of version 1, the
+    # example of the rule, and its two instructions the note does not hold.
+    assert sum("passages found do not say" in reply.lower() for reply in hardened) == 5
+    assert not any("passages found do not say" in reply.lower() for reply in first)
+    assert '"new team members"' in rule
+    assert "new team members" in runs.limit_replies(2)["lim-026"].lower()
+    assert "Every question comes twice in the file" in rule
+    assert "careful second reader" in rule
+    for path in (ADR, GUIDE):
+        text = read(path)
+        assert "is the wording of version 2's answer to `lim-026`" in text, path.name
+        assert "every question comes twice in the file" in text, path.name
+        assert "5 of version 2's 40 replies hold the fixed form" in text, path.name
+        assert "git holds it from 14:34" in text, path.name
+        assert "independent reader session" not in text, path.name
+    for path in (ADR, GUIDE, LIMIT_CARD):
+        assert "started by the session that coordinates the work for this reading alone" in (
+            read(path)
+        ), path.name
+    assert "labelled by no one" not in read(LIMIT_CARD)
+    for path in (ADR, README, GUIDE, LIMIT_CARD, CHANGELOG, ROADMAP):
+        assert "p = 0.125" in read(path), path.name
+    for path in (CHANGELOG, ROADMAP, ADR):
+        assert "decided on after the judge's figure was known" in read(path), path.name
+    assert "is not shown by the blind reading" in read(ADR)
+
+
+def test_the_documents_carry_the_label_of_the_reading_after_the_run_and_no_unsaved_figure() -> None:
+    header = "Read again after the one change, not a result under line e"
+    for path in (README, GUIDE):
+        assert header in read(path), path.name
+        assert "15 of the correctness" not in read(path), path.name
+    for path in (ADR, GUIDE):
+        assert "its verdicts are not in the repository yet" in read(path), path.name
+    assert "27 verdicts" not in read(ROADMAP)
+    assert "last 27" not in read(ROADMAP)
+
+
+def test_the_saved_answer_run_gives_the_run_as_it_was_made_beside_todays_reading() -> None:
+    summary = json.loads(read(runs.ANSWER_RUN_V2 / "summary.json"))
+    again = summary["read_again_after_the_run"]
+    rows = {
+        row["prompt_id"]: row
+        for row in map(json.loads, read(runs.ANSWER_RUN_V2 / "results.jsonl").splitlines())
+    }
+    comparison = compare_runs(runs.RUNS / "answers" / "baseline", runs.ANSWER_RUN_V2)
+
+    assert again["questions"] == ["u002", "u024"]
+    assert round(again["metrics_as_made"]["declined"]["mean"] * 33) == 27
+    assert round(again["metrics_as_made"]["right_call"]["mean"] * 165) == 153
+    assert sorted(case for case, row in rows.items() if "grade_as_made" in row) == ["u002", "u024"]
+    assert all(rows[case]["answered_as_made"] for case in ("u002", "u024"))
+    assert "Read again after the run: u002, u024." in read(runs.ANSWER_RUN_V2 / "change.md")
+    today, made = comparison.metrics["right_call"].change, comparison.as_made
+    assert made is not None
+    assert (today.better, today.worse, f"{today.sign_test:.3f}") == (1, 4, "0.375")
+    as_made = made.metrics["right_call"].change
+    assert (as_made.better, as_made.worse, f"{as_made.sign_test:.3f}") == (1, 6, "0.125")
+
+
+def test_the_commands_that_give_the_answer_run_give_it_as_it_was_made_too() -> None:
+    """Whoever runs the comparison the decision record names for line b sees 0.125 beside
+    0.375, and the table of runs says the same under its row."""
+    answers = str(runs.RUNS / "answers")
+    compared = CliRunner().invoke(app, ["eval-compare", "baseline", "hardened", "--runs", answers])
+    tabled = CliRunner().invoke(app, ["eval-table", "--runs", answers])
+
+    assert compared.exit_code == 0, compared.output
+    assert "read again   hardened: today's code reads the saved replies of u002, u024" in (
+        compared.output
+    )
+    before, after = compared.output.split("read again", 1)
+    assert re.search(r"Right call .* 1\s+4\s+160\s+0\.375", before)
+    assert re.search(r"Right call .* 1\s+6\s+158\s+0\.125", after)
+    assert tabled.exit_code == 0, tabled.output
+    assert "`hardened`: today's code reads the saved replies of u002, u024" in tabled.output
+    assert "As the run was made: Right call 0.927" in tabled.output
+
+
+def test_cutting_at_each_citation_marker_moves_no_saved_reply() -> None:
+    """The cut at a marker can only read fewer replies as the fixed form alone: on every
+    saved reply of this pull request it reads the same as the cut without it."""
+    files = [
+        runs.ANSWER_RUN_V2 / "answers.jsonl",
+        *(runs.RUNS / run / "replies.jsonl" for run in runs.RUNS_OF_THE_HARDENING),
+        *(runs.LIMIT_RUNS[version] / "answers.jsonl" for version in (1, 2)),
+    ]
+    cited_replies = 0
+    for path in files:
+        for row in map(json.loads, path.read_text(encoding="utf-8").splitlines()):
+            parts = [(s["text"], bool(s["cites"])) for s in row["statements"]]
+            joined = "".join(text for text, _ in parts)
+            if any(cited for _, cited in parts):
+                cited_replies += 1
+                assert parts_only_of_the_form(parts) == only_the_gap_form(joined), row[
+                    "question_id"
+                ]
+    assert cited_replies > 200
+    for case in ("u002", "u024"):
+        row = next(
+            json.loads(line)
+            for line in (runs.ANSWER_RUN_V2 / "answers.jsonl").read_text().splitlines()
+            if json.loads(line)["question_id"] == case
+        )
+        assert len(row["statements"]) == 1, case

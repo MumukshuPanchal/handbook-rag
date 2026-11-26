@@ -6,11 +6,10 @@ these figures: ``tests/test_readme_results.py`` for the README, and
 ``tests/evals/test_hardening_documents.py`` for the decision record, the guide, the card,
 the changelog and the roadmap. So every document is held to the same numbers.
 
-Three measurements are not in yet: the held-out cases asked of the old and the new
-assistant, the 40 limit questions under both sets of instructions, and the answer
-evaluation under version 2. While a run of one is absent, the documents say so in one
-fixed sentence, below. Once it is there, a test fails until that sentence is gone and the
-documents give its figures.
+Two measurements are not wholly in yet: the correctness judge's reading of the answer
+evaluation under version 2, and the confirmation run of the 33 questions the handbook does
+not answer. While one is absent, the documents say so in one fixed sentence, below. Once
+it is there, a test fails until that sentence is gone and the documents give its figures.
 """
 
 import functools

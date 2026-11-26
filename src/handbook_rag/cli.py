@@ -34,6 +34,7 @@ from handbook_rag.evals.cache_report import report_lines
 from handbook_rag.evals.careful import Pacer
 from handbook_rag.evals.compare import (
     ComparisonError,
+    RunComparison,
     compare_runs,
     metric_labels,
     overview_of_runs,
@@ -1008,6 +1009,29 @@ def eval_compare(
         f"{'difference (95% interval)':<27} better  worse   same  sign p"
     )
     labels = metric_labels(runs) or {name: name for name in comparison.metrics}
+    _echo_comparison_rows(comparison, labels)
+    if comparison.as_made is not None:
+        typer.echo("")
+        for run in (comparison.base, comparison.candidate):
+            if run.read_again:
+                typer.echo(
+                    f"  read again   {run.name}: today's code reads the saved replies of "
+                    f"{', '.join(run.read_again)} otherwise than the code that made the run, "
+                    "and the rows above are today's reading. As the runs were made, a reply "
+                    "read again keeping only the scores code gives:"
+                )
+        _echo_comparison_rows(comparison.as_made, labels)
+    typer.echo("")
+    typer.echo("  clear    the interval excludes zero: chance is an unlikely explanation")
+    typer.echo("  unclear  the two runs cannot be told apart with this many questions")
+    typer.echo(
+        "  sign p   the exact two-sided sign test on the questions whose score changed, "
+        "for a score of 0 or 1 for each question"
+    )
+
+
+def _echo_comparison_rows(comparison: RunComparison, labels: Mapping[str, str]) -> None:
+    """One row for each metric the two runs share, and what could not be compared."""
     for metric_id, label in labels.items():
         if metric_id not in comparison.metrics:
             continue
@@ -1029,13 +1053,6 @@ def eval_compare(
     if comparison.not_compared:
         names = ", ".join(labels.get(name, name) for name in comparison.not_compared)
         typer.echo(f"  not compared, because no question has the score in both runs: {names}")
-    typer.echo("")
-    typer.echo("  clear    the interval excludes zero: chance is an unlikely explanation")
-    typer.echo("  unclear  the two runs cannot be told apart with this many questions")
-    typer.echo(
-        "  sign p   the exact two-sided sign test on the questions whose score changed, "
-        "for a score of 0 or 1 for each question"
-    )
 
 
 @app.command(name="eval-table")
@@ -1064,6 +1081,20 @@ def eval_table(
         typer.echo(f"error: no run has the metric: {', '.join(unknown)}", err=True)
         raise typer.Exit(code=1)
     typer.echo(results_table(overviews, labels, chosen), nl=False)
+    # A run some of whose replies today's code reads otherwise: the table gives today's
+    # reading, and the run as it was made goes under it.
+    for overview in overviews:
+        if overview.read_again and overview.metrics_as_made is not None:
+            made = ", ".join(
+                f"{labels.get(name, name)} {overview.metrics_as_made[name].mean:.3f}"
+                for name in chosen
+                if name in overview.metrics_as_made
+            )
+            typer.echo(
+                f"\n`{overview.name}`: today's code reads the saved replies of "
+                f"{', '.join(overview.read_again)} otherwise than the code that made the run; "
+                f"the row above is today's reading. As the run was made: {made}."
+            )
 
 
 QUESTION_TYPES = ("answerable", "unanswerable")

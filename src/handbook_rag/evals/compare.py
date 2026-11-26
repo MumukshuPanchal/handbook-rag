@@ -5,6 +5,7 @@ numbers come from a sample of questions. This module reads two runs of the same 
 set and reports the difference per question, with a confidence interval.
 """
 
+import dataclasses
 import json
 import re
 import statistics
@@ -29,6 +30,10 @@ class RunScores:
     """Question id to metric id to score."""
     fingerprints: dict[str, str]
     failed: int
+    read_again: tuple[str, ...] = ()
+    """Questions whose saved reply today's code reads otherwise than the run saved it."""
+    scores_as_made: dict[str, dict[str, float]] | None = None
+    """The scores as the run was made, where it has questions read again."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +55,9 @@ class RunComparison:
     metrics: dict[str, MetricComparison]
     not_compared: tuple[str, ...] = ()
     """Scores that a run has, but that no question has in both runs."""
+    as_made: "RunComparison | None" = None
+    """The same comparison of the runs as they were made, when either has questions read
+    again by code changed after it was made."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +70,8 @@ class RunOverview:
     metrics: dict[str, Estimate]
     median_latency_s: float | None
     config: dict[str, object]
+    read_again: tuple[str, ...] = ()
+    metrics_as_made: dict[str, Estimate] | None = None
 
 
 def metric_labels(flow_dir: Path) -> dict[str, str]:
@@ -89,6 +99,7 @@ def load_run(run_dir: Path) -> RunScores:
         raise ComparisonError(f"no run found at {run_dir}")
     scores: dict[str, dict[str, float]] = {}
     fingerprints: dict[str, str] = {}
+    as_made: dict[str, dict[str, float]] = {}
     for line in _lines(results):
         row = json.loads(line)
         if row.get("status") != "ok":
@@ -100,13 +111,20 @@ def load_run(run_dir: Path) -> RunScores:
             )
         scores[row["prompt_id"]] = {name: float(value) for name, value in row["grade"].items()}
         fingerprints[row["prompt_id"]] = row["fingerprint"]
+        if "grade_as_made" in row:
+            as_made[row["prompt_id"]] = {k: float(v) for k, v in row["grade_as_made"].items()}
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    read_again = tuple(summary.get("read_again_after_the_run", {}).get("questions", ()))
     return RunScores(
         name=run_dir.name,
         description=summary.get("description", ""),
         scores=scores,
         fingerprints=fingerprints,
         failed=int(summary.get("questions_failed", 0)),
+        read_again=read_again,
+        # A judged score of a reply read again is left out as it was made: only code's
+        # scores are kept for the run as it was made.
+        scores_as_made={q: as_made.get(q, s) for q, s in scores.items()} if read_again else None,
     )
 
 
@@ -141,6 +159,22 @@ def compare_runs(base_dir: Path, candidate_dir: Path) -> RunComparison:
             "Run both again on the current golden set."
         )
 
+    comparison = _compare(base, candidate)
+    if base.read_again or candidate.read_again:
+        made = _compare(_as_made(base), _as_made(candidate))
+        comparison = dataclasses.replace(comparison, as_made=made)
+    return comparison
+
+
+def _as_made(run: RunScores) -> RunScores:
+    """A run's scores as it was made."""
+    if run.scores_as_made is None:
+        return run
+    return dataclasses.replace(run, scores=run.scores_as_made, read_again=(), scores_as_made=None)
+
+
+def _compare(base: RunScores, candidate: RunScores) -> RunComparison:
+    """Compare the scores of two runs of the same questions, question by question."""
     order = sorted(base.scores)
     # Not every score applies to every question: a retrieval score needs evidence, and a
     # score about an answer needs an answer. Each metric is compared on the questions for
@@ -191,6 +225,7 @@ def overview_of_runs(flow_dir: Path) -> list[RunOverview]:
     overviews: list[RunOverview] = []
     for summary_path in flow_dir.glob("*/summary.json"):
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        again = summary.get("read_again_after_the_run") or {}
         latencies = [
             float(row["latency_s"])
             for line in _lines(summary_path.parent / "results.jsonl")
@@ -206,6 +241,12 @@ def overview_of_runs(flow_dir: Path) -> list[RunOverview]:
                 },
                 median_latency_s=statistics.median(latencies) if latencies else None,
                 config=dict(summary.get("config", {})),
+                read_again=tuple(again.get("questions", ())),
+                metrics_as_made=(
+                    {name: Estimate(**e) for name, e in again["metrics_as_made"].items()}
+                    if again
+                    else None
+                ),
             )
         )
     if not overviews:

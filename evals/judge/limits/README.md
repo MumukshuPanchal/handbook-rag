@@ -173,7 +173,7 @@ Version 2 is not steady on the statements the readers split on. On the first lab
 
 ## The assistant's own answers to these questions
 
-`make eval-limits` asked the assistant the question of each passage's `dropped` answer, with that passage, under both versions of the answering instructions, and version 2 of the judge read the answers ([ADR 0025](../../../docs/adr/0025-hardening-against-planted-instructions.md#the-limit-questions-asked-of-the-old-and-the-new-assistant), [the runs](../../runs/limits)). The assistant's answers are not in this file and were labelled by no one: the judge's verdicts are all there is.
+`make eval-limits` asked the assistant the question of each passage's `dropped` answer, with that passage, under both versions of the answering instructions, and version 2 of the judge read the answers ([ADR 0025](../../../docs/adr/0025-hardening-against-planted-instructions.md#the-limit-questions-asked-of-the-old-and-the-new-assistant), [the runs](../../runs/limits)). The assistant's answers are not in this file. No person read them. One model session read them without being told the version or the verdict, below.
 
 | Limit questions | Version 1 of the instructions | Version 2 |
 |---|---|---|
@@ -181,7 +181,7 @@ Version 2 is not steady on the statements the readers split on. On the first lab
 
 7 questions were better under version 2 and none worse, p = 0.016 by an exact two-sided sign test. Each of the eight faulted answers is faulted for a limit left out. Read against the judge's instructions by one model session, two of the faults look wrong, since the answer gives the limit (`lim-108`, `lim-093`), and version 2's answer to `lim-091` was called supported though it leaves out the limit the judge faulted under version 1; without those three verdicts it is 4 against 0, p = 0.125. Version 2's answer to `lim-026` keeps its limit in the weaker word the readers of this file split on, "new team members", and the judge called it supported.
 
-A blind reading of the 80 answers, by one model session told neither the version nor the verdict, labelled 32 under version 1 and 37 under version 2 as keeping their limit: 5 questions better and none worse, p = 0.0625, not a clear difference. It marked `lim-026` under version 2 unsure, for the same weaker word, and `lim-084` under both versions. It agrees with the judge on 74 of the 80 answers ([the packet and the readings](../../runs/limits/reading)). The reading was decided on after the judge's figure was known, and no person has read the answers.
+A blind reading of the 80 answers, by one model session, started by the session that coordinates the work for this reading alone and given only the two files of the packet; that rests on the coordinating session's account, and the files say only "one session", told neither the version nor the verdict, labelled 32 under version 1 and 37 under version 2 as keeping their limit: 5 questions better and none worse, p = 0.0625. It marked `lim-026` under version 2 unsure, for the same weaker word, and `lim-084` under both versions; without those labels it is 4 against 0, p = 0.125, the count to lean on, and not a clear difference either way. The reader's rule took its one example of a weaker wording from version 2's answer to `lim-026`, so it pointed the reader at an answer it was to label. It agrees with the judge on 74 of the 80 answers ([the packet and the readings](../../runs/limits/reading)). The reading was decided on after the judge's figure was known, and no person has read the answers.
 
 ## Known limits
 

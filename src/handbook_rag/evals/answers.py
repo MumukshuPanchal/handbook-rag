@@ -38,7 +38,12 @@ from handbook_rag.evals.stage import (
     load_rows,
     write_json,
 )
-from handbook_rag.generate.base import GenerationError, only_the_gap_form, plain_words
+from handbook_rag.generate.base import (
+    GenerationError,
+    only_the_gap_form,
+    parts_only_of_the_form,
+    plain_words,
+)
 from handbook_rag.generate.checks import CITES_NOTHING, DECLINED, WORDS_BESIDE_A_DECLINE
 from handbook_rag.generate.models import Answer, ReplyCheck
 from handbook_rag.generate.prompt import GAP_FORM_VERSIONS, NOT_FOUND_MESSAGE
@@ -61,6 +66,12 @@ METRICS: list[dict[str, str]] = [
 METRIC_IDS = tuple(metric["id"] for metric in METRICS)
 
 ANSWERS_FILE = "answers.jsonl"
+READ_AGAIN_NOTE = (
+    "Today's code reads the saved replies of these questions otherwise than the code that "
+    "made the run did. The scores of this run's files are today's reading; metrics_as_made, "
+    "and grade_as_made in each of their rows, are the run as it was made, scored by code."
+)
+"""What a run's files say when today's code reads some of its replies otherwise."""
 CHANGED_REPLIES_FILE = "changed-replies.jsonl"
 """The replies to questions the handbook answers that a check changed or that were read as
 the fixed form, for a reader (:func:`changed_replies`)."""
@@ -236,7 +247,10 @@ def as_read_today(record: AnswerRecord, *, form_read: bool = False) -> AnswerRec
     - **One that carries citation markers.** Before, it was an answer. It is now a decline
       shown in the model's words with no source, and those words are the model's. This
       applies only to a run made under instructions that give the form (``form_read``):
-      under the others no reply was ever read so.
+      under the others no reply was ever read so. The reply is cut at each citation marker
+      too (``base.parts_only_of_the_form``). Where a check took a line out of it, the
+      reply was not the form alone when the generator read it, so, as today's generator
+      gives it, it is a decline after the checks, with the check and no ``model_text``.
 
     Every other reply is read as it was saved.
     """
@@ -246,12 +260,13 @@ def as_read_today(record: AnswerRecord, *, form_read: bool = False) -> AnswerRec
         and only_the_gap_form(record.checks[0].removed)
     ):
         return dataclasses.replace(record, checks=(), model_text=record.checks[0].removed)
-    if form_read and record.answered and record.cited and only_the_gap_form(record.text):
+    parts = [(statement.text, bool(statement.cites)) for statement in record.statements]
+    if form_read and record.answered and record.cited and parts_only_of_the_form(parts):
         return dataclasses.replace(
             record,
             answered=False,
             statements=tuple(Statement(statement.text, ()) for statement in record.statements),
-            model_text=record.text.strip(),
+            model_text="" if record.checks else record.text.strip(),
         )
     return record
 
@@ -268,16 +283,24 @@ def shown_in_the_models_words(record: AnswerRecord) -> bool:
 
 def gives_the_form(run_dir: Path) -> bool:
     """Whether a saved run was made under instructions that give the fixed form for a
-    missing part, as the settings it recorded say. A run with no record of its settings,
-    or one of version 1, was not."""
+    missing part, as the settings it recorded say.
+
+    A record of the settings that cannot be read is an error: a run of version 2 read as
+    one of version 1 would count a cited reply in the form as an answer. With no record at
+    all, the replies are read as they were saved: such replies are not those of a run of
+    this project, which records its settings before its first request, and a reply that
+    today's generator writes is saved as it reads it.
+    """
     settings = run_dir / RUN_FILE
     if not settings.is_file():
         return False
     try:
-        config = json.loads(settings.read_text(encoding="utf-8")).get("config", {})
-    except json.JSONDecodeError:
-        return False
-    return config.get("instructions_version", 1) in GAP_FORM_VERSIONS
+        saved = json.loads(settings.read_text(encoding="utf-8"))
+        config = saved["config"]
+        version = config.get("instructions_version", 1)
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as error:
+        raise SavedRunError(f"{settings} does not record the settings of a run: {error}") from error
+    return version in GAP_FORM_VERSIONS
 
 
 def score_answer(question: GoldenQuestion, record: AnswerRecord) -> dict[str, float]:
@@ -490,9 +513,24 @@ def append_record(run_dir: Path, record: AnswerRecord) -> None:
     answers_stage(run_dir).append(asdict(record))
 
 
-def load_records(path: Path) -> dict[str, AnswerRecord]:
-    """Read saved replies. The latest reply to a question wins."""
-    return _records(load_rows(path), path)
+def load_records(path: Path, *, as_saved: bool = False) -> dict[str, AnswerRecord]:
+    """Read saved replies. The latest reply to a question wins.
+
+    Each is read as today's generator would have given it (:func:`as_read_today`), or,
+    with ``as_saved``, exactly as the code that made the run saved it.
+    """
+    return _records(load_rows(path), path, as_saved=as_saved)
+
+
+def read_again(run_dir: Path) -> dict[str, AnswerRecord]:
+    """The saved replies of a run that today's code reads otherwise than they were saved,
+    by question, each as it was saved: so that the run as it was made stays in view."""
+    path = run_dir / ANSWERS_FILE
+    if not path.is_file():
+        return {}
+    rows = load_rows(path)
+    saved, today = _records(rows, path, as_saved=True), _records(rows, path)
+    return {case: record for case, record in saved.items() if today[case] != record}
 
 
 def load_failures(run_dir: Path) -> list[FailedQuestion]:
@@ -513,10 +551,12 @@ def saved_description(run_dir: Path) -> str | None:
     return description if isinstance(description, str) and description else None
 
 
-def _records(rows: Sequence[tuple[int, dict[str, Any]]], path: Path) -> dict[str, AnswerRecord]:
+def _records(
+    rows: Sequence[tuple[int, dict[str, Any]]], path: Path, *, as_saved: bool = False
+) -> dict[str, AnswerRecord]:
     records: dict[str, AnswerRecord] = {}
     # The settings are kept beside the replies, whichever kind of run holds them.
-    form_read = gives_the_form(path.parent)
+    form_read = not as_saved and gives_the_form(path.parent)
     for number, row in rows:
         try:
             record = AnswerRecord(
@@ -535,7 +575,9 @@ def _records(rows: Sequence[tuple[int, dict[str, Any]]], path: Path) -> dict[str
             )
         except (KeyError, TypeError) as error:
             raise SavedRunError(f"{path}:{number} is not a saved reply: {error}") from error
-        records[record.question_id] = as_read_today(record, form_read=form_read)
+        records[record.question_id] = (
+            record if as_saved else as_read_today(record, form_read=form_read)
+        )
     return records
 
 
@@ -762,6 +804,13 @@ def write_answer_run(
         flow_dir / "_state.json",
         {"metrics": METRICS, "perf_fields": [{"id": "latency_s", "unit": "s"}]},
     )
+    # Replies today's code reads otherwise than the run saved them: the run as it was made
+    # goes with today's reading in every file that gives the scores.
+    again = {
+        case: saved
+        for case, saved in read_again(run_dir).items()
+        if any(item.question.id == case and item.record != saved for item in report.scored)
+    }
     with (run_dir / "results.jsonl").open("w", encoding="utf-8") as output:
         for item in report.scored:
             question, record = item.question, item.record
@@ -778,6 +827,9 @@ def write_answer_run(
                 "input_tokens": record.input_tokens,
                 "output_tokens": record.output_tokens,
             }
+            if question.id in again:
+                row["answered_as_made"] = again[question.id].answered
+                row["grade_as_made"] = score_answer(question, again[question.id])
             output.write(json.dumps(row, ensure_ascii=False) + "\n")
             write_json(run_dir / "traces" / f"{question.id}_rep0.json", _trace(item))
 
@@ -814,6 +866,16 @@ def write_answer_run(
         summary["declined_in_the_gap_form"] = report.declined_in_the_gap_form
     if report.shown_in_the_models_words:
         summary["declined_in_the_gap_form_with_markers"] = report.shown_in_the_models_words
+    if again:
+        as_made = summarise_answers(
+            [item.question for item in report.scored],
+            {item.question.id: again.get(item.question.id, item.record) for item in report.scored},
+        )
+        summary["read_again_after_the_run"] = {
+            "questions": sorted(again),
+            "note": READ_AGAIN_NOTE,
+            "metrics_as_made": {name: asdict(e) for name, e in as_made.summary.items()},
+        }
     # For a reader of the replies a check changed or that were read as the fixed form, on
     # questions the handbook answers: a file of its own, without the run's totals.
     changed = changed_replies(report)
@@ -828,7 +890,12 @@ def write_answer_run(
         # with labelled answers.
         summary["judges"] = {metric: dict(record) for metric, record in judges.items()}
     write_json(run_dir / "summary.json", summary)
-    (run_dir / "change.md").write_text(f"{description}\n", encoding="utf-8")
+    read_again_line = (
+        f"\nRead again after the run: {', '.join(sorted(again))}. {READ_AGAIN_NOTE}\n"
+        if again
+        else ""
+    )
+    (run_dir / "change.md").write_text(f"{description}\n{read_again_line}", encoding="utf-8")
     return run_dir
 
 

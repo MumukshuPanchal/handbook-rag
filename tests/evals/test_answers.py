@@ -1504,3 +1504,99 @@ def test_a_cited_reply_in_the_form_to_an_answerable_question_goes_to_the_reader(
         "read as the fixed form for a missing part, with citation markers: a decline, "
         "shown in the model's words with no source"
     ]
+
+
+def test_a_saved_cited_reply_in_the_form_whose_line_a_check_dropped_is_read_as_today(
+    tmp_path: Path,
+) -> None:
+    """As today's generator gives it: the reply was not the form alone when it was read,
+    so it is a decline after the checks, with the check and no words of the form kept."""
+    (tmp_path / "run.json").write_text(
+        json.dumps({"config": {"instructions_version": 2}, "attempts": 1})
+    )
+    check = ReplyCheck(
+        ADDRESS_IN_CLOSING_LINE, "dropped_line", NOTES[ADDRESS_IN_CLOSING_LINE], "See x.org/a"
+    )
+    answer = dataclasses.replace(cited_form(PARKING_QUESTION), checks=(check,))
+
+    (record,) = saved(tmp_path, (PARKING_QUESTION, answer)).values()
+
+    assert (record.answered, record.model_text, record.checks) == (False, "", (check,))
+    assert not record.statements[0].cites
+
+
+def test_a_saved_reply_with_a_claim_cited_after_the_form_stays_an_answer(tmp_path: Path) -> None:
+    (tmp_path / "run.json").write_text(
+        json.dumps({"config": {"instructions_version": 2}, "attempts": 1})
+    )
+    answer = reply(
+        PARKING_QUESTION,
+        Segment(f"{GAP_FORM} who pays.", (Citation(LEAVE_CHUNK),)),
+        Segment("New parents get sixteen weeks.", (Citation(LEAVE_CHUNK),)),
+    )
+
+    (record,) = saved(tmp_path, (PARKING_QUESTION, answer)).values()
+
+    assert record.answered
+
+
+@pytest.mark.parametrize("written", ["{not json", '{"attempts": 1}', "[]"])
+def test_a_record_of_the_settings_that_cannot_be_read_is_an_error(
+    tmp_path: Path, written: str
+) -> None:
+    saved(tmp_path, (PARKING_QUESTION, cited_form(PARKING_QUESTION)))
+    (tmp_path / "run.json").write_text(written)
+
+    with pytest.raises(SavedRunError, match="does not record the settings of a run"):
+        load_records(tmp_path / "answers.jsonl")
+
+
+def test_restarting_a_run_removes_the_replies_it_listed_for_a_reader(tmp_path: Path) -> None:
+    open_run(tmp_path, CONFIG)
+    (tmp_path / CHANGED_REPLIES_FILE).write_text("{}\n")
+
+    open_run(tmp_path, CONFIG, restart=True)
+
+    assert not (tmp_path / CHANGED_REPLIES_FILE).exists()
+
+
+def test_a_run_read_again_after_it_was_made_gives_the_run_as_it_was_made_beside(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "v"
+    run_dir.mkdir()
+    (run_dir / "run.json").write_text(
+        json.dumps({"config": {"instructions_version": 2}, "attempts": 3})
+    )
+    records = saved(
+        run_dir,
+        (PARKING_QUESTION, cited_form(PARKING_QUESTION)),
+        (LEAVE_QUESTION, good_reply(LEAVE_QUESTION)),
+    )
+    report = summarise_answers(QUESTIONS, records)
+
+    write_answer_run(report, tmp_path, "v", "d", CONFIG, attempts=3)
+
+    summary = json.loads((run_dir / "summary.json").read_text())
+    again = summary["read_again_after_the_run"]
+    assert again["questions"] == [PARKING_QUESTION.id]
+    # Today the reply is a decline, the right call; as the run was made, it was an answer.
+    assert summary["metrics"]["declined"]["mean"] == 1.0
+    assert again["metrics_as_made"]["declined"]["mean"] == 0.0
+    rows = {
+        row["prompt_id"]: row
+        for row in map(json.loads, (run_dir / "results.jsonl").read_text().splitlines())
+    }
+    assert rows[PARKING_QUESTION.id]["answered_as_made"] is True
+    assert rows[PARKING_QUESTION.id]["grade_as_made"]["right_call"] == 0.0
+    assert "grade_as_made" not in rows[LEAVE_QUESTION.id]
+    assert f"Read again after the run: {PARKING_QUESTION.id}." in (
+        (run_dir / "change.md").read_text()
+    )
+    # A run that today's code reads as it was saved says nothing of it.
+    plain = summarise_answers(QUESTIONS, {LEAVE_QUESTION.id: records[LEAVE_QUESTION.id]})
+    (run_dir / "answers.jsonl").write_text(
+        (run_dir / "answers.jsonl").read_text().splitlines()[1] + "\n"
+    )
+    write_answer_run(plain, tmp_path, "v", "d", CONFIG, attempts=3)
+    assert "read_again_after_the_run" not in json.loads((run_dir / "summary.json").read_text())

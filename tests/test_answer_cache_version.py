@@ -111,8 +111,13 @@ PINNED = {
     # that is that form once a check has dropped a line after it is a decline too, and,
     # changed by a check, is not kept. Version 2 is not released, and an evaluation never
     # has a cache. It stays.
-    "generate/base.py": "0ee531a76b7e64ab",
-    "generate/checks.py": "c707db1c3e33db67",
+    #
+    # Then a citation marker cuts the reply into pieces too, when it is read as the fixed
+    # form alone: fewer replies are declines than just before, never more. A reply it moves,
+    # the form with a claim cited after a marker, is an answer again, as it was at 4f700b0,
+    # and is kept as such an answer was then. No stored answer becomes wrong. It stays.
+    "generate/base.py": "75a973f071d91367",
+    "generate/checks.py": "aa662f4044386628",
     "generate/claude.py": "0a4a690b15c721b1",
     "generate/gemini.py": "52356590fc24d86b",
     "generate/markers.py": "db2add40ed28b909",

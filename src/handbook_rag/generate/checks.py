@@ -42,8 +42,10 @@ beside it:
 
 - **Words beside a decline** (``words_beside_a_decline``): a reply that came to a normal
   end, is not an answer, and holds more words than the fixed declining sentence. *It is
-  shown as the fixed declining sentence alone.* Such a reply cites nothing, so none of it
-  was passed on before the end.
+  shown as the fixed declining sentence alone.* Such a reply cites nothing, or cites only
+  after the fixed sentence, which :class:`HeldBack` holds back, so none of it was passed on
+  before the end. A reply made only of the fixed form for a missing part, with citation
+  markers, is not one: it is left in its own words, with no source and no note.
 - **A reply that did not come to a proper end** (``unfinished_reply``): one the provider
   withheld or that stopped for another reason than its end or its length. *Its words after
   the last citation are dropped*, and what a citation follows, which may already have been
@@ -74,7 +76,7 @@ from typing import Final
 from handbook_rag.generate.base import (
     cites_the_decline,
     is_answered,
-    only_the_gap_form,
+    made_only_of_the_form,
     plain_words,
 )
 from handbook_rag.generate.models import ReplyCheck, Segment
@@ -165,9 +167,8 @@ def check_reply(
     if not answered:
         return _not_an_answer(replied, ended=ended)
     checked = _an_answer(replied, chunks)
-    left = "".join(segment.text for segment in checked.segments)
     if checked.answered and (
-        not is_answered(checked.segments, refused=False) or only_the_gap_form(left)
+        not is_answered(checked.segments, refused=False) or made_only_of_the_form(checked.segments)
     ):
         # What the checks left says no more than that the handbook lacks the answer, as
         # "[1] I could not find this in the handbook." does once a line after it is gone,
@@ -215,7 +216,7 @@ def _not_an_answer(replied: tuple[Segment, ...], *, ended: bool) -> CheckedReply
     text = "".join(segment.text for segment in replied)
     if ended:
         said = plain_words(text)
-        if not said or said == plain_words(NOT_FOUND_MESSAGE) or only_the_gap_form(text):
+        if not said or said == plain_words(NOT_FOUND_MESSAGE) or made_only_of_the_form(replied):
             # The words are left as they are, and a marker after them names no source. The
             # fixed form alone says what the declining sentence says, and its words may
             # have been passed on (``base.read_the_gap_form_as_a_decline``).

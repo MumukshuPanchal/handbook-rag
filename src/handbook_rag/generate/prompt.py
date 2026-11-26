@@ -101,7 +101,8 @@ SYSTEM_PROMPTS: Final[Mapping[int, str]] = MappingProxyType({1: SYSTEM_PROMPT, 2
 GAP_FORM_VERSIONS: Final = frozenset({2})
 """The versions whose instructions give the fixed form for a part the passages do not
 answer (:data:`GAP_FORM`). A reply under one of them that is nothing but that form is a
-decline, and is shown as the fixed declining sentence (``base.read_the_gap_form_as_a_decline``).
+decline: shown as the fixed declining sentence when it cites nothing, and in its own words with
+no source when it carried citation markers (``base.read_the_gap_form_as_a_decline``).
 Each is a version whose replies are checked too, so the decline is passed on as the checks'
 replies are."""
 

@@ -209,6 +209,33 @@ def only_the_gap_form(text: str) -> bool:
     )
 
 
+def made_only_of_the_form(segments: Sequence[Segment]) -> bool:
+    """Whether a reply is nothing but pieces in the fixed form for a missing part.
+
+    The text is cut as :func:`only_the_gap_form` cuts it, and also at the place of each
+    citation marker: what a marker follows is a piece of its own. So "… do not say who
+    pays.[1]New parents get sixteen weeks.[1]" holds a cited claim and is not the form
+    alone, and neither is a sentence in the form with a marker in its middle ("… do not say
+    who[1] pays."). A reply that cites nothing is cut as :func:`only_the_gap_form` cuts it.
+    """
+    return parts_only_of_the_form([(segment.text, bool(segment.citations)) for segment in segments])
+
+
+def parts_only_of_the_form(parts: Sequence[tuple[str, bool]]) -> bool:
+    """:func:`made_only_of_the_form` on a reply given as its texts, each with whether a
+    citation marker follows it, as a saved run keeps a reply."""
+    pieces: list[str] = []
+    piece = ""
+    for text, cited in parts:
+        piece += text
+        if cited:
+            pieces.append(piece)
+            piece = ""
+    pieces.append(piece)
+    spoken = [piece for piece in pieces if _words(piece)]
+    return bool(spoken) and all(only_the_gap_form(piece) for piece in spoken)
+
+
 def read_the_gap_form_as_a_decline(
     segments: Sequence[Segment], *, answered: bool
 ) -> tuple[tuple[Segment, ...], bool, str]:
@@ -229,14 +256,14 @@ def read_the_gap_form_as_a_decline(
       passed on while the reply is written (``checks.HeldBack``), so its words may already
       have reached the reader, and they are not taken back.
 
-    The words are what :func:`only_the_gap_form` takes for the form alone, which includes a
-    claim joined into a piece by "and", "although" or a dash: such a reply is counted as a
-    decline though it states something. Where it carried markers, the claim stays in the
-    words shown. A reply that is not an answer, or that holds anything besides the form,
-    is returned as it is.
+    The words are what :func:`made_only_of_the_form` takes for the form alone, which
+    includes a claim joined into a piece by "and", "although" or a dash: such a reply is
+    counted as a decline though it states something. Where it carried markers, the claim
+    stays in the words shown. A reply that is not an answer, or that holds anything besides
+    the form, is returned as it is.
     """
     text = "".join(segment.text for segment in segments)
-    if not answered or not only_the_gap_form(text):
+    if not answered or not made_only_of_the_form(segments):
         return tuple(segments), answered, ""
     if any(segment.citations for segment in segments):
         return tuple(Segment(segment.text) for segment in segments), False, text.strip()

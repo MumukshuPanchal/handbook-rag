@@ -605,8 +605,16 @@ def test_a_cited_piece_in_the_form_with_a_joined_claim_is_a_decline_that_shows_t
         f"{GAP} whether your report was approved. However, track it in Navan.[1]",
         # The form after an answer.
         f"Sixteen weeks [1]. {GAP} who pays.",
-        # The form in another language is not the form.
+        # The form in another language is not the form: a limit.
         "Die gefundenen Passagen sagen nicht, wer zahlt [1].",
+        # A citation marker ends a piece: the claim after it, cited apart, is a piece.
+        f"{GAP} who pays.[1]New parents get sixteen weeks.[1]",
+        # A marker in the middle of a sentence in the form: the rest is a piece of its own.
+        f"{GAP} who[1] pays.",
+        # The form beside the fixed declining sentence, with a marker: a limit, named.
+        f"{GAP} who pays.[1] {NOT_FOUND_MESSAGE}",
+        # A lead-in before the form: a decline in other words, a limit.
+        "Unfortunately, the passages found do not say who pays.[1]",
     ],
 )
 def test_the_form_beside_a_cited_claim_or_after_an_answer_stays_an_answer(text: str) -> None:

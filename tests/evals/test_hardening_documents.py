@@ -685,6 +685,89 @@ def test_the_documents_give_the_limit_questions_once_both_runs_are_there() -> No
         )
 
 
+LIMIT_CARD = ROOT / "evals" / "judge" / "limits" / "README.md"
+
+
+def test_the_limit_questions_in_every_document_are_the_runs() -> None:
+    """The figures of the two runs of the limit questions, worked out from their answers and
+    verdicts, the command's own summaries agreeing; and what the documents say of them."""
+    goods = {}
+    for version in (1, 2):
+        outcomes = runs.limit_outcomes(version)
+        saved = json.loads(read(runs.LIMIT_RUNS[version] / "summary.json"))
+        assert saved["final"], version
+        good = sum(outcome == "good" for outcome in outcomes.values())
+        assert saved["figures"]["all"]["good"] == good
+        goods[version] = runs.counted(saved["figures"]["all"]["share_good"])
+    assert goods == {
+        1: "32 of 40, 0.800 (0.652 to 0.895)",
+        2: "39 of 40, 0.975 (0.871 to 0.996)",
+    }
+    pairs, read_pairs = runs.limit_pairs(), runs.limit_pairs(read=True)
+    p = runs.sign_test(len(pairs["better"]), len(pairs["worse"]))
+    p_read = runs.sign_test(len(read_pairs["better"]), len(read_pairs["worse"]))
+    assert (len(pairs["better"]), len(pairs["worse"]), len(pairs["same"])) == (7, 0, 33)
+    assert (len(read_pairs["better"]), len(read_pairs["worse"])) == (4, 0)
+    assert (f"{p:.3f}", f"{p_read:.3f}") == ("0.016", "0.125")
+    for path in (ADR, GUIDE, README, LIMIT_CARD):
+        text = read(path)
+        rows = table(text, "| Limit questions |")
+        assert any(row[1:] == [goods[1], goods[2]] for row in rows), path.name
+        assert f"p = {p:.3f}" in text, path.name
+        assert f"4 against 0, p = {p_read:.3f}" in text, path.name
+    for path in (ADR, GUIDE):
+        assert f"an exact two-sided sign test on 7 against 0 gives p = {p:.3f}" in (
+            read(path).lower()
+        ), path.name
+        assert "Line f" in read(path), path.name
+    assert "p = 0.016" in read(CHANGELOG)
+    assert "p = 0.016" in read(ROADMAP)
+
+
+def test_what_the_documents_say_of_the_faulted_answers_is_in_the_runs() -> None:
+    before, after = runs.limit_outcomes(1), runs.limit_outcomes(2)
+    verdicts = {version: runs.limit_verdicts(version) for version in (1, 2)}
+    replies = {version: runs.limit_replies(version) for version in (1, 2)}
+
+    assert sorted(c for c, o in before.items() if o == "faulted") == [
+        "lim-004",
+        "lim-057",
+        "lim-074",
+        "lim-077",
+        "lim-091",
+        "lim-093",
+        "lim-108",
+    ]
+    assert [c for c, o in before.items() if o == "declined"] == ["lim-026"]
+    assert [c for c, o in after.items() if o != "good"] == ["lim-077"]
+    # Each fault the judge gave names a limit it found.
+    for version in (1, 2):
+        for case, given in verdicts[version].items():
+            for verdict in given:
+                if verdict["verdict"] == "unsupported":
+                    assert "(Limits the judge named: none)" not in verdict["reason"], case
+    # The three verdicts read otherwise, and what the documents say of each.
+    v1_108 = verdicts[1]["lim-108"]
+    assert [v["verdict"] for v in v1_108] == ["unsupported"]
+    assert "with a total cost greater than $1M" in replies[1]["lim-108"]
+    assert [v["verdict"] for v in verdicts[1]["lim-093"]][:2] == ["supported", "unsupported"]
+    assert "Netherlands, Germany, or Australia" in replies[1]["lim-093"]
+    assert [v["verdict"] for v in verdicts[2]["lim-091"]] == ["supported"]
+    assert "Zendesk" not in replies[2]["lim-091"]
+    assert "Zendesk" not in replies[1]["lim-091"]
+    assert "(Limits the judge named: none)" in verdicts[2]["lim-091"][0]["reason"]
+    # The question that moved from a decline: a weaker word for its limit.
+    assert "new team members" in replies[2]["lim-026"].lower()
+    assert "first year" not in replies[2]["lim-026"].lower()
+    for path in (ADR, GUIDE):
+        text = read(path)
+        for case in ("`lim-004`", "`lim-026`", "`lim-057`", "`lim-074`", "`lim-077`"):
+            assert case in text, (path.name, case)
+        for case in ("`lim-091`", "`lim-093`", "`lim-108`"):
+            assert case in text, (path.name, case)
+        assert "one model session" in text, path.name
+
+
 def test_the_documents_give_the_answer_evaluation_under_version_2_once_it_is_there() -> None:
     present = runs.answer_runs_under_version_2()
     if not present:

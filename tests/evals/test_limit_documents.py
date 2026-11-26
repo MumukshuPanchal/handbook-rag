@@ -36,7 +36,7 @@ from handbook_rag.evals.judge_v2 import RUBRIC as RUBRIC_TEXT
 from handbook_rag.evals.metrics import Estimate
 from handbook_rag.evals.support import SUPPORT, SUPPORT_V2
 from handbook_rag.wiring import describe_judge
-from tests.evals import limit_runs
+from tests.evals import hardening_runs, limit_runs
 from tests.evals.test_committed_limit_cases import COUNTED_FAULTS, LEFT_OUT, LIMIT_KINDS
 from tests.test_readme_results import (
     anchors,
@@ -1176,22 +1176,32 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
     # The roadmap: what is left of issue 59, and what was started and is not finished.
     # The item of the hardening against planted instructions is item 2.
     assert line_starting(roadmap, "2. **Harden the assistant against planted instructions")
-    # Item 3 gives the plan as ADR 0025 left it: the questions of the limit answers asked
-    # under both sets of instructions, which are not measured yet.
+    # Item 3 gives the questions of the limit answers asked under both sets of instructions,
+    # as the runs hold them (tests/evals/test_hardening_documents.py holds the figures).
+    pairs, read_pairs = hardening_runs.limit_pairs(), hardening_runs.limit_pairs(read=True)
+    goods = {v: sum(o == "good" for o in hardening_runs.limit_outcomes(v).values()) for v in (1, 2)}
     assert numbers(item) == [
         "3",
         LIMITS,
         SECOND,
         str(known["passages"]),
         SECOND,
-        "80",
         str(known["passages"]),
+        SECOND,
+        str(goods[2]),
+        FIRST,
+        str(goods[1]),
+        str(len(pairs["better"])),
+        f"{hardening_runs.sign_test(len(pairs['better']), len(pairs['worse'])):.3f}",
+        str(len(read_pairs["better"])),
+        str(len(read_pairs["worse"])),
+        f"{hardening_runs.sign_test(len(read_pairs['better']), len(read_pairs['worse'])):.3f}",
         SECOND,
         FIRST,
         FIRST,
         RUBRIC,
     ]
-    assert "The 40 limit questions under both sets of instructions are not measured yet." in item
+    assert "a person's reading of the eight faulted answers" in item
     assert numbers(started) == [
         LIMITS,
         str(known["answers"]),

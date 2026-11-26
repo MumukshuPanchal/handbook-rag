@@ -1,0 +1,277 @@
+{
+  "description": "The 40 questions of the limit set, each with its passage, answered by gemini-3.5-flash-lite, and judged by gemini-3.5-flash-lite (version 2).",
+  "config": {
+    "handbook_commit": "e645aac6dc6fbb0b759b92ed32f016aaed5ef4b8",
+    "chunking": "v1-max320-min60-overlap40",
+    "answer_model": "gemini-3.5-flash-lite",
+    "answer_max_tokens": 4000,
+    "answer_context_chunks": 5,
+    "citations": "numbered markers",
+    "instructions": "35a6e0b051e7ec92"
+  },
+  "judge": {
+    "config": {
+      "judge_model": "gemini-3.5-flash-lite",
+      "judge_max_tokens": 2000,
+      "judge_instructions": "df21bed5111c82e1",
+      "judge_request": "9e159c93b6115867",
+      "judge_version": 2
+    },
+    "attempts": 55
+  },
+  "questions": 40,
+  "questions_replied": 40,
+  "questions_failed": [],
+  "questions_not_asked": 0,
+  "attempts": 43,
+  "final": true,
+  "waiting_for_the_judge": [],
+  "figures": {
+    "all": {
+      "questions": 40,
+      "replied": 40,
+      "answered": 39,
+      "judged": 39,
+      "faulted": 7,
+      "share_faulted": {
+        "mean": 0.1794871794871795,
+        "low": 0.08977265424428488,
+        "high": 0.32668045793218536,
+        "count": 39
+      },
+      "good": 32,
+      "share_good": {
+        "mean": 0.8,
+        "low": 0.6524269352437856,
+        "high": 0.8950001032811362,
+        "count": 40
+      },
+      "outcomes": {
+        "good": 32,
+        "faulted": 7,
+        "declined_by_the_model": 1,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "how_much": {
+      "questions": 6,
+      "replied": 6,
+      "answered": 6,
+      "judged": 6,
+      "faulted": 1,
+      "share_faulted": {
+        "mean": 0.16666666666666666,
+        "low": 0.03005336941181501,
+        "high": 0.5635028250257673,
+        "count": 6
+      },
+      "good": 5,
+      "share_good": {
+        "mean": 0.8333333333333334,
+        "low": 0.4364971749742326,
+        "high": 0.969946630588185,
+        "count": 6
+      },
+      "outcomes": {
+        "good": 5,
+        "faulted": 1,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "only_if": {
+      "questions": 7,
+      "replied": 7,
+      "answered": 7,
+      "judged": 7,
+      "faulted": 0,
+      "share_faulted": {
+        "mean": 0.0,
+        "low": 0.0,
+        "high": 0.35433043867586833,
+        "count": 7
+      },
+      "good": 7,
+      "share_good": {
+        "mean": 1.0,
+        "low": 0.6456695613241317,
+        "high": 1.0,
+        "count": 7
+      },
+      "outcomes": {
+        "good": 7,
+        "faulted": 0,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "unless": {
+      "questions": 6,
+      "replied": 6,
+      "answered": 6,
+      "judged": 6,
+      "faulted": 0,
+      "share_faulted": {
+        "mean": 0.0,
+        "low": 0.0,
+        "high": 0.39033429165637346,
+        "count": 6
+      },
+      "good": 6,
+      "share_good": {
+        "mean": 1.0,
+        "low": 0.6096657083436264,
+        "high": 1.0,
+        "count": 6
+      },
+      "outcomes": {
+        "good": 6,
+        "faulted": 0,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "what": {
+      "questions": 4,
+      "replied": 4,
+      "answered": 4,
+      "judged": 4,
+      "faulted": 1,
+      "share_faulted": {
+        "mean": 0.25,
+        "low": 0.04558726029536886,
+        "high": 0.6993581599030917,
+        "count": 4
+      },
+      "good": 3,
+      "share_good": {
+        "mean": 0.75,
+        "low": 0.30064184009690814,
+        "high": 0.954412739704631,
+        "count": 4
+      },
+      "outcomes": {
+        "good": 3,
+        "faulted": 1,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "when": {
+      "questions": 5,
+      "replied": 5,
+      "answered": 4,
+      "judged": 4,
+      "faulted": 0,
+      "share_faulted": {
+        "mean": 0.0,
+        "low": 0.0,
+        "high": 0.4898908403969213,
+        "count": 4
+      },
+      "good": 4,
+      "share_good": {
+        "mean": 0.8,
+        "low": 0.375534627029995,
+        "high": 0.9637758917743693,
+        "count": 5
+      },
+      "outcomes": {
+        "good": 4,
+        "faulted": 0,
+        "declined_by_the_model": 1,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "where": {
+      "questions": 7,
+      "replied": 7,
+      "answered": 7,
+      "judged": 7,
+      "faulted": 5,
+      "share_faulted": {
+        "mean": 0.7142857142857143,
+        "low": 0.358934449531054,
+        "high": 0.9177810767507166,
+        "count": 7
+      },
+      "good": 2,
+      "share_good": {
+        "mean": 0.2857142857142857,
+        "low": 0.0822189232492833,
+        "high": 0.6410655504689459,
+        "count": 7
+      },
+      "outcomes": {
+        "good": 2,
+        "faulted": 5,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "who": {
+      "questions": 5,
+      "replied": 5,
+      "answered": 5,
+      "judged": 5,
+      "faulted": 0,
+      "share_faulted": {
+        "mean": 0.0,
+        "low": 0.0,
+        "high": 0.43448246865939283,
+        "count": 5
+      },
+      "good": 5,
+      "share_good": {
+        "mean": 1.0,
+        "low": 0.5655175313406071,
+        "high": 1.0,
+        "count": 5
+      },
+      "outcomes": {
+        "good": 5,
+        "faulted": 0,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    }
+  },
+  "tokens": {
+    "input_total": 17550.0,
+    "output_total": 2333.0,
+    "input_mean": 438.75,
+    "output_mean": 58.325
+  }
+}

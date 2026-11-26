@@ -370,3 +370,65 @@ def reread(run: str, into: Path) -> None:
         attempts=saved["attempts"],
         canaries=canaries,
     )
+
+
+# The limit questions asked of the old and the new assistant, read by version 2 of the
+# support judge.
+
+LIMIT_RUNS = {1: RUNS / "limits" / "baseline", 2: RUNS / "limits" / "hardened"}
+
+
+def limit_verdicts(version: int) -> dict[str, list[dict[str, Any]]]:
+    """The judge's verdicts on each answer of a limit run, by the question's id."""
+    path = LIMIT_RUNS[version] / "support-v2.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    return {row["case"]: row["verdicts"] for row in rows}
+
+
+def limit_replies(version: int) -> dict[str, str]:
+    """The text of each reply of a limit run, as shown, by the question's id."""
+    return {case: r.text for case, r in load_records(LIMIT_RUNS[version] / "answers.jsonl").items()}
+
+
+def limit_outcomes(version: int) -> dict[str, str]:
+    """``good``, ``faulted`` or ``declined`` for each question, worked out from the saved
+    answers and the judge's verdicts, without the passages, which CI does not have."""
+    verdicts = limit_verdicts(version)
+    outcomes: dict[str, str] = {}
+    for case, record in load_records(LIMIT_RUNS[version] / "answers.jsonl").items():
+        if not record.answered:
+            outcomes[case] = "declined"
+        elif any(verdict["verdict"] == "unsupported" for verdict in verdicts[case]):
+            outcomes[case] = "faulted"
+        else:
+            outcomes[case] = "good"
+    return outcomes
+
+
+# Three verdicts that look wrong by the judge's own instructions, as one model session read
+# them: the outcome each would have, and why. Not the figure fixed beforehand, which is the
+# judge's; given beside it so that the figure is read with what it rests on.
+READ_OTHERWISE: dict[tuple[int, str], tuple[str, str]] = {
+    (1, "lim-108"): ("good", "the faulted statement itself gives the limit"),
+    (1, "lim-093"): ("good", "the statement before it in the same answer gives the limit"),
+    (2, "lim-091"): ("faulted", "it leaves out the limit the judge faulted under version 1"),
+}
+
+
+def limit_outcomes_as_read(version: int) -> dict[str, str]:
+    outcomes = limit_outcomes(version)
+    for (read_version, case), (outcome, _why) in READ_OTHERWISE.items():
+        if read_version == version:
+            outcomes[case] = outcome
+    return outcomes
+
+
+def limit_pairs(read: bool = False) -> dict[str, list[str]]:
+    """The questions good under version 2 and not under 1, the other way, and the same."""
+    get = limit_outcomes_as_read if read else limit_outcomes
+    before, after = get(1), get(2)
+    return {
+        "better": sorted(c for c in before if after[c] == "good" and before[c] != "good"),
+        "worse": sorted(c for c in before if before[c] == "good" and after[c] != "good"),
+        "same": sorted(c for c in before if (before[c] == "good") == (after[c] == "good")),
+    }

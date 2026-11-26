@@ -1,0 +1,278 @@
+{
+  "description": "The 40 questions of the limit set, each with its passage, answered by gemini-3.5-flash-lite under the answering instructions of version 2, and judged by gemini-3.5-flash-lite (version 2).",
+  "config": {
+    "handbook_commit": "e645aac6dc6fbb0b759b92ed32f016aaed5ef4b8",
+    "chunking": "v1-max320-min60-overlap40",
+    "answer_model": "gemini-3.5-flash-lite",
+    "answer_max_tokens": 4000,
+    "answer_context_chunks": 5,
+    "citations": "numbered markers",
+    "instructions": "880b0c9f82f4d566",
+    "instructions_version": 2
+  },
+  "judge": {
+    "config": {
+      "judge_model": "gemini-3.5-flash-lite",
+      "judge_max_tokens": 2000,
+      "judge_instructions": "df21bed5111c82e1",
+      "judge_request": "9e159c93b6115867",
+      "judge_version": 2
+    },
+    "attempts": 41
+  },
+  "questions": 40,
+  "questions_replied": 40,
+  "questions_failed": [],
+  "questions_not_asked": 0,
+  "attempts": 40,
+  "final": true,
+  "waiting_for_the_judge": [],
+  "figures": {
+    "all": {
+      "questions": 40,
+      "replied": 40,
+      "answered": 40,
+      "judged": 40,
+      "faulted": 1,
+      "share_faulted": {
+        "mean": 0.025,
+        "low": 0.004426831453704345,
+        "high": 0.12881369088183614,
+        "count": 40
+      },
+      "good": 39,
+      "share_good": {
+        "mean": 0.975,
+        "low": 0.8711863091181637,
+        "high": 0.9955731685462956,
+        "count": 40
+      },
+      "outcomes": {
+        "good": 39,
+        "faulted": 1,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "how_much": {
+      "questions": 6,
+      "replied": 6,
+      "answered": 6,
+      "judged": 6,
+      "faulted": 0,
+      "share_faulted": {
+        "mean": 0.0,
+        "low": 0.0,
+        "high": 0.39033429165637346,
+        "count": 6
+      },
+      "good": 6,
+      "share_good": {
+        "mean": 1.0,
+        "low": 0.6096657083436264,
+        "high": 1.0,
+        "count": 6
+      },
+      "outcomes": {
+        "good": 6,
+        "faulted": 0,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "only_if": {
+      "questions": 7,
+      "replied": 7,
+      "answered": 7,
+      "judged": 7,
+      "faulted": 0,
+      "share_faulted": {
+        "mean": 0.0,
+        "low": 0.0,
+        "high": 0.35433043867586833,
+        "count": 7
+      },
+      "good": 7,
+      "share_good": {
+        "mean": 1.0,
+        "low": 0.6456695613241317,
+        "high": 1.0,
+        "count": 7
+      },
+      "outcomes": {
+        "good": 7,
+        "faulted": 0,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "unless": {
+      "questions": 6,
+      "replied": 6,
+      "answered": 6,
+      "judged": 6,
+      "faulted": 0,
+      "share_faulted": {
+        "mean": 0.0,
+        "low": 0.0,
+        "high": 0.39033429165637346,
+        "count": 6
+      },
+      "good": 6,
+      "share_good": {
+        "mean": 1.0,
+        "low": 0.6096657083436264,
+        "high": 1.0,
+        "count": 6
+      },
+      "outcomes": {
+        "good": 6,
+        "faulted": 0,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "what": {
+      "questions": 4,
+      "replied": 4,
+      "answered": 4,
+      "judged": 4,
+      "faulted": 0,
+      "share_faulted": {
+        "mean": 0.0,
+        "low": 0.0,
+        "high": 0.4898908403969213,
+        "count": 4
+      },
+      "good": 4,
+      "share_good": {
+        "mean": 1.0,
+        "low": 0.5101091596030786,
+        "high": 1.0,
+        "count": 4
+      },
+      "outcomes": {
+        "good": 4,
+        "faulted": 0,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "when": {
+      "questions": 5,
+      "replied": 5,
+      "answered": 5,
+      "judged": 5,
+      "faulted": 0,
+      "share_faulted": {
+        "mean": 0.0,
+        "low": 0.0,
+        "high": 0.43448246865939283,
+        "count": 5
+      },
+      "good": 5,
+      "share_good": {
+        "mean": 1.0,
+        "low": 0.5655175313406071,
+        "high": 1.0,
+        "count": 5
+      },
+      "outcomes": {
+        "good": 5,
+        "faulted": 0,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "where": {
+      "questions": 7,
+      "replied": 7,
+      "answered": 7,
+      "judged": 7,
+      "faulted": 1,
+      "share_faulted": {
+        "mean": 0.14285714285714285,
+        "low": 0.025679624057823904,
+        "high": 0.5131278321392249,
+        "count": 7
+      },
+      "good": 6,
+      "share_good": {
+        "mean": 0.8571428571428571,
+        "low": 0.48687216786077503,
+        "high": 0.974320375942176,
+        "count": 7
+      },
+      "outcomes": {
+        "good": 6,
+        "faulted": 1,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    },
+    "who": {
+      "questions": 5,
+      "replied": 5,
+      "answered": 5,
+      "judged": 5,
+      "faulted": 0,
+      "share_faulted": {
+        "mean": 0.0,
+        "low": 0.0,
+        "high": 0.43448246865939283,
+        "count": 5
+      },
+      "good": 5,
+      "share_good": {
+        "mean": 1.0,
+        "low": 0.5655175313406071,
+        "high": 1.0,
+        "count": 5
+      },
+      "outcomes": {
+        "good": 5,
+        "faulted": 0,
+        "declined_by_the_model": 0,
+        "declined_in_the_gap_form": 0,
+        "declined_by_a_check": 0,
+        "unfinished": 0,
+        "nothing_to_judge": 0,
+        "waiting_for_the_judge": 0
+      }
+    }
+  },
+  "tokens": {
+    "input_total": 44415.0,
+    "output_total": 2523.0,
+    "input_mean": 1110.375,
+    "output_mean": 63.075
+  }
+}

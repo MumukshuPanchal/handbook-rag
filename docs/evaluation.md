@@ -782,7 +782,34 @@ An answer counts as **faulted** when the judge calls one of its statements unsup
 
 **The figure that counts is the answers with no statement faulted, out of all the questions.** A question that got no answer counts against it, whatever the cause, and the command names the cause of each: the model declined, its reply was the fixed form for a missing part alone, a check declined its reply, or the reply did not come to a proper end. The share of judged answers that are faulted is given beside it, as before, and is not the headline: a question that got no answer drops out of it, so the instructions that decline more would look better by it. Both are given once every question has a reply and every answer a verdict. `--against baseline` compares a final run with another final run of the same questions, question by question by the figure that counts, with an exact sign test on the questions that differ. What these runs report, and what result would keep the hardening from being merged, was written down before the runs under version 2 ([the note](experiments/2026-11-25-2318-before-the-last-runs.md), and [its addendum](experiments/2026-11-26-0055-before-the-last-runs-addendum.md), which adds that version 2 clearly worse than version 1 by the figure that counts blocks it).
 
-**What it can carry.** The questions were chosen because their passages state a limit, so the share is a share on this set, not on the questions people ask. The judge is wrong sometimes: on the limit answers version 2 caught 33 of the 39 limits left out, with one false alarm in 157 statements ([the section above](#limits-that-an-answer-leaves-out)). So the comparison of two runs on the same questions is what matters, not the rate of either. The 40 limit questions under both sets of instructions are not measured yet.
+**What it can carry.** The questions were chosen because their passages state a limit, so the share is a share on this set, not on the questions people ask. The judge is wrong sometimes: on the limit answers version 2 caught 33 of the 39 limits left out, with one false alarm in 157 statements ([the section above](#limits-that-an-answer-leaves-out)). So the comparison of two runs on the same questions is what matters, not the rate of either.
+
+### Both versions of the instructions, on the 40 questions
+
+Version 1 answered on the evening of 25 November 2026, 7 of its answers judged that evening and the other 32 on 26 November, in [`limits/baseline`](../evals/runs/limits/baseline): 43 requests to the answer model and 55 to the judge. Version 2 answered on 26 November, in [`limits/hardened`](../evals/runs/limits/hardened): 81 requests.
+
+| Limit questions | Version 1 (`limits/baseline`) | Version 2 (`limits/hardened`) |
+|---|---|---|
+| Answers with no statement faulted, of the 40 questions | 32 of 40, 0.800 (0.652 to 0.895) | 39 of 40, 0.975 (0.871 to 0.996) |
+| Answers the judge faulted | 7 | 1 |
+| Declined by the model | 1 | 0 |
+| Judged answers faulted, not the headline | 7 of 39, 0.179 (0.090 to 0.327) | 1 of 40, 0.025 (0.004 to 0.129) |
+
+| Kind of limit | Questions | Faulted under version 1 | Faulted under version 2 |
+|---|---|---|---|
+| where | 7 | 5 | 1 |
+| how much | 6 | 1 | 0 |
+| what | 4 | 1 | 0 |
+| when | 5 | 0, and 1 declined | 0 |
+| who | 5 | 0 | 0 |
+| only if | 7 | 0 | 0 |
+| unless | 6 | 0 | 0 |
+
+- **By the note fixed beforehand.** Question by question, 7 were good under version 2 and not under version 1, none the other way, 33 the same: an exact two-sided sign test on 7 against 0 gives p = 0.016, a clear difference by the rule fixed beforehand. Line f of the addendum, version 2 clearly worse, is not met.
+- **What the verdicts name.** Each of the eight faulted answers is faulted for a limit left out, and for nothing else: six for a place or a company entity, one for a product and one for an amount. Version 2's one fault is `lim-077`, India's rule for entering time off given for everyone, as version 1 gave it too.
+- **Read against the judge's own instructions by one model session**, not an independent reader: six of the eight faults name a limit the answer does leave out. Two look wrong, since the judge's instructions count a limit as kept when the statement gives it or another statement of the same answer gives it: in `lim-108` the faulted statement says "with a total cost greater than $1M", and in `lim-093` the sentence before it names the countries. And version 2's answer to `lim-091` was called supported though it leaves out Zendesk Global, the limit the judge faulted in version 1's answer.
+- **The seven that moved.** `lim-004`, `lim-057` and `lim-074`: version 2 named the entity version 1 left out. `lim-026`: version 1 declined a question its passage answers, and version 2 answered with "new team members" for "only available during their first year of employment", the weaker word on which the limit set's readers split. `lim-108`, `lim-093` and `lim-091` moved on the three verdicts above. Without those three it is 4 against 0, p = 0.125: no clear difference. This reading is not the figure fixed beforehand, and no person has made it.
+- **What it can carry.** 40 questions chosen for their limits, each asked once; answers written on two days; a judge whose instructions were written with the limit set's card in view, which caught 33 of 39 written faults and, on the first labelled answers, faults statements the labels call supported, and whose errors here are as large as part of the difference; version 2 changes more than the request to keep limits; and no person or independent reader session read the answers ([ADR 0025](adr/0025-hardening-against-planted-instructions.md#the-limit-questions-asked-of-the-old-and-the-new-assistant)).
 
 ## A semantic cache, measured before it is built
 

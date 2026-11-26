@@ -608,7 +608,11 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
         all(verdict["verdict"] != "unsupported" for verdict in by_version_1[question]["verdicts"])
         for question in real
     )
+    goods = {v: sum(o == "good" for o in hardening_runs.limit_outcomes(v).values()) for v in (1, 2)}
+    pairs = hardening_runs.limit_pairs()
+    p = hardening_runs.sign_test(len(pairs["better"]), len(pairs["worse"]))
     assert numbers(limitation) == [
+        str(hardening_runs.LIMIT_QUESTIONS),
         str(len(labelled)),
         FIRST,
         str(len(first["caught"])),
@@ -624,8 +628,13 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
         SECOND,
         three(supported["mean"]),
         three((hits(supported) - len(real)) / supported["count"]),
-        SECOND,
         str(hardening_runs.LIMIT_QUESTIONS),
+        SECOND,
+        str(goods[1]),
+        FIRST,
+        str(goods[2]),
+        SECOND,
+        f"{p:.3f}",
         LIMITS_RECORD,
         hardening_runs.RECORD,
         LIMITS_ISSUE,
@@ -645,20 +654,21 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
         in limitation
     )
     assert (
-        f"in the saved answers version 2 faults {in_words(len(only))} statements for it, of "
+        f"In the saved answers version 2 faults {in_words(len(only))} statements for it, of "
         f"which the labels call {in_words(labels['supported'])} supported and leave the third "
         "unclear"
     ) in limitation
     assert "its score is reported beside version 1's, never in its place" in section
     assert "the plan changed when these runs came in" in section
-    assert "is not measured, and none is fixed.**" in limitation
+    assert "is measured only on 40 questions chosen for it, by a judge that errs.**" in limitation
     assert f"with {in_words(len(second['false_alarms']))} false alarm in" in limitation
     assert f"The {in_words(len(real))} real cases stay labelled unclear" in limitation
-    assert (
-        "whether that lowers how often answers leave one out is not measured yet: the "
-        f"{hardening_runs.LIMIT_QUESTIONS} limit questions under both sets of instructions are not "
-        "measured yet"
-    ) in limitation
+    assert "by one model session's reading three of its verdicts behind that look wrong" in (
+        limitation
+    )
+    assert "How often answers to the questions people ask leave out a limit is not measured" in (
+        limitation
+    )
 
 
 def test_the_readme_gives_version_2s_check_on_the_first_labelled_answers() -> None:

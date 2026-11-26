@@ -6,10 +6,11 @@ figures are worked out once, in ``hardening_runs``, and compared here with the d
 record, the guide, the adversarial card, the changelog and the roadmap; the README is held
 by ``tests/test_readme_results.py``.
 
-Two measurements are not in yet: the limit questions under both sets of instructions, and
-the answer evaluation under version 2. While their runs are absent the documents say so in
-one fixed sentence, and the tests at the end of this file wait, saying why. Once a run is
-there, they fail until the sentence is gone and the documents give its figures.
+Two measurements are not wholly in yet: the correctness judge's reading of the answer
+evaluation under version 2, and the confirmation run of the 33 questions the handbook does
+not answer. While one is absent the documents say so in one fixed sentence, and the tests at
+the end of this file wait, saying why. Once it is there, they fail until the sentence is
+gone and the documents give its figures.
 """
 
 import hashlib
@@ -30,7 +31,6 @@ from handbook_rag.evals.compare import compare_runs
 from handbook_rag.evals.dataset import load_golden_set
 from handbook_rag.evals.metrics import share_with_interval
 from handbook_rag.evals.support import passage_hash
-from handbook_rag.generate.base import only_the_gap_form, parts_only_of_the_form
 from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPTS
 from tests.evals import hardening_runs as runs
 from tests.test_readme_results import line_starting, table
@@ -979,8 +979,22 @@ def test_the_documents_give_the_answer_evaluation_under_version_2() -> None:
         assert f"{baseline_timing['median_seconds_to_first_text']:.1f} s" in body, path.name
         assert "2,499" in body, path.name
         assert "1,654" in body, path.name
+    # The verdicts of the judge of support taken from its earlier reading, as its saved
+    # verdicts show them: the answers whose fingerprint the checked run holds.
+    checked = {
+        json.loads(line)["fingerprint"]
+        for line in read(ROOT / "evals/runs/judge/baseline/judgements.jsonl").splitlines()
+        if line
+    }
+    reused = sum(
+        json.loads(line)["fingerprint"] in checked
+        for line in read(runs.ANSWER_RUN_V2 / "support.jsonl").splitlines()
+    )
+    assert reused == 15
     for path in (ADR, GUIDE):
-        assert "15 of" in read(path), path.name
+        assert f"{reused} of its 132 verdicts were not asked for" in read(path) or (
+            f"{reused} of the 132 verdicts of the judge of support were taken so" in read(path)
+        ), path.name
 
 
 def test_the_documents_give_the_answer_evaluation_under_version_2_once_it_is_there() -> None:
@@ -1178,29 +1192,26 @@ def test_the_commands_that_give_the_answer_run_give_it_as_it_was_made_too() -> N
     assert "As the run was made: Right call 0.927" in tabled.output
 
 
-def test_cutting_at_each_citation_marker_moves_no_saved_reply() -> None:
-    """The cut at a marker can only read fewer replies as the fixed form alone: on every
-    saved reply of this pull request it reads the same as the cut without it."""
-    files = [
-        runs.ANSWER_RUN_V2 / "answers.jsonl",
-        *(runs.RUNS / run / "replies.jsonl" for run in runs.RUNS_OF_THE_HARDENING),
-        *(runs.LIMIT_RUNS[version] / "answers.jsonl" for version in (1, 2)),
-    ]
-    cited_replies = 0
-    for path in files:
-        for row in map(json.loads, path.read_text(encoding="utf-8").splitlines()):
-            parts = [(s["text"], bool(s["cites"])) for s in row["statements"]]
-            joined = "".join(text for text, _ in parts)
-            if any(cited for _, cited in parts):
-                cited_replies += 1
-                assert parts_only_of_the_form(parts) == only_the_gap_form(joined), row[
-                    "question_id"
-                ]
-    assert cited_replies > 200
-    for case in ("u002", "u024"):
-        row = next(
-            json.loads(line)
-            for line in (runs.ANSWER_RUN_V2 / "answers.jsonl").read_text().splitlines()
-            if json.loads(line)["question_id"] == case
-        )
-        assert len(row["statements"]) == 1, case
+def test_the_documents_describe_the_reading_as_the_code_does_it() -> None:
+    """The reply's joined text is cut, a citation marker does not cut it, and what that
+    leaves is named among the limits; and the leftovers of the reviews are gone."""
+    text = read(ADR)
+    page = read(ROOT / "src" / "handbook_rag" / "static" / "demo.html")
+
+    assert "a list marker at the start of a line is left out" in text
+    assert "at the place of each citation marker" not in text
+    assert "A citation marker does not cut" in text
+    assert "A cited claim written straight after the form's full stop is taken into the piece." in (
+        text
+    )
+    assert "A marker in the middle of a sentence in the form keeps the reply an answer" not in text
+    assert "is for the answer evaluation to show" not in text
+    assert "**Whether version 2 keeps more limits is not shown.**" in text
+    assert "or in its own words that the passages do not say, with no sources" in page
+    assert "Or it declines</strong> with one fixed sentence when" not in page
+    card = read(LIMIT_CARD)
+    assert "keeps its limit in the weaker word" not in card
+    assert "but not labelled" not in card
+    told = "the reader was told more than the note of 14:22 holds"
+    for path in (README, LIMIT_CARD, CHANGELOG, ROADMAP):
+        assert told in read(path), path.name

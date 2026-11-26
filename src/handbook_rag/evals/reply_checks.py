@@ -34,8 +34,10 @@ class TriedReply:
     record: AnswerRecord
     checked: CheckedReply
     model_text: str = ""
-    """The reply's words, when they were nothing but the fixed form for a missing part and
-    would be shown as the fixed declining sentence: the model's decline, not a check's."""
+    """The reply's words, when they were nothing but the fixed form for a missing part and so
+    a decline: shown as the fixed declining sentence when they cited nothing, and as these
+    words, without their markers, when they carried them. The model's decline, not a
+    check's."""
 
 
 def given_passages(

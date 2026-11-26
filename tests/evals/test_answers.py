@@ -1525,19 +1525,45 @@ def test_a_saved_cited_reply_in_the_form_whose_line_a_check_dropped_is_read_as_t
     assert not record.statements[0].cites
 
 
-def test_a_saved_reply_with_a_claim_cited_after_the_form_stays_an_answer(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("claim", "answered"),
+    [(" New parents get sixteen weeks.", True), ("New parents get sixteen weeks.", False)],
+)
+def test_a_saved_reply_with_a_claim_cited_after_the_form_is_read_as_the_generator_reads_it(
+    tmp_path: Path, claim: str, answered: bool
+) -> None:
+    """The words are read joined. With white space after the form's full stop the claim is
+    a piece of its own, and the reply an answer; with none, the claim is taken into the
+    piece, and the reply is a decline: the limit the decision record names."""
     (tmp_path / "run.json").write_text(
         json.dumps({"config": {"instructions_version": 2}, "attempts": 1})
     )
     answer = reply(
         PARKING_QUESTION,
         Segment(f"{GAP_FORM} who pays.", (Citation(LEAVE_CHUNK),)),
-        Segment("New parents get sixteen weeks.", (Citation(LEAVE_CHUNK),)),
+        Segment(claim, (Citation(LEAVE_CHUNK),)),
     )
 
     (record,) = saved(tmp_path, (PARKING_QUESTION, answer)).values()
 
-    assert record.answered
+    assert record.answered is answered
+
+
+def test_a_saved_cited_reply_in_the_form_that_a_check_only_marked_is_read_as_today(
+    tmp_path: Path,
+) -> None:
+    """Today's generator reads such a reply as the form before the checks, which then leave
+    a decline alone: the model's words, and no check."""
+    (tmp_path / "run.json").write_text(
+        json.dumps({"config": {"instructions_version": 2}, "attempts": 1})
+    )
+    marked = ReplyCheck("mostly_a_copy", "marked", NOTES["mostly_a_copy"])
+    answer = dataclasses.replace(cited_form(PARKING_QUESTION), checks=(marked,))
+
+    (record,) = saved(tmp_path, (PARKING_QUESTION, answer)).values()
+
+    assert (record.answered, record.checks) == (False, ())
+    assert record.model_text == f"{GAP_FORM} where to park."
 
 
 @pytest.mark.parametrize("written", ["{not json", '{"attempts": 1}', "[]"])

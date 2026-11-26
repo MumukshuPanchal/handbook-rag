@@ -41,10 +41,9 @@ from handbook_rag.evals.stage import (
 from handbook_rag.generate.base import (
     GenerationError,
     only_the_gap_form,
-    parts_only_of_the_form,
     plain_words,
 )
-from handbook_rag.generate.checks import CITES_NOTHING, DECLINED, WORDS_BESIDE_A_DECLINE
+from handbook_rag.generate.checks import CITES_NOTHING, DECLINED, MARKED, WORDS_BESIDE_A_DECLINE
 from handbook_rag.generate.models import Answer, ReplyCheck
 from handbook_rag.generate.prompt import GAP_FORM_VERSIONS, NOT_FOUND_MESSAGE
 from handbook_rag.index.store import VectorStoreError
@@ -247,10 +246,13 @@ def as_read_today(record: AnswerRecord, *, form_read: bool = False) -> AnswerRec
     - **One that carries citation markers.** Before, it was an answer. It is now a decline
       shown in the model's words with no source, and those words are the model's. This
       applies only to a run made under instructions that give the form (``form_read``):
-      under the others no reply was ever read so. The reply is cut at each citation marker
-      too (``base.parts_only_of_the_form``). Where a check took a line out of it, the
-      reply was not the form alone when the generator read it, so, as today's generator
-      gives it, it is a decline after the checks, with the check and no ``model_text``.
+      under the others no reply was ever read so. Its words are read as the generator
+      reads them, joined (``base.only_the_gap_form``). Where a check took a line out of
+      it, the reply was not the form alone when the generator read it, so, as today's
+      generator gives it, it is a decline after the checks, with the check and no
+      ``model_text``. Where a check only marked it, the generator would have read it as the
+      form before the checks, which then leave a decline alone: so it is read with the
+      model's words and no check.
 
     Every other reply is read as it was saved.
     """
@@ -260,13 +262,14 @@ def as_read_today(record: AnswerRecord, *, form_read: bool = False) -> AnswerRec
         and only_the_gap_form(record.checks[0].removed)
     ):
         return dataclasses.replace(record, checks=(), model_text=record.checks[0].removed)
-    parts = [(statement.text, bool(statement.cites)) for statement in record.statements]
-    if form_read and record.answered and record.cited and parts_only_of_the_form(parts):
+    if form_read and record.answered and record.cited and only_the_gap_form(record.text):
+        took_words = [check for check in record.checks if check.action != MARKED]
         return dataclasses.replace(
             record,
             answered=False,
             statements=tuple(Statement(statement.text, ()) for statement in record.statements),
-            model_text="" if record.checks else record.text.strip(),
+            checks=tuple(took_words),
+            model_text="" if took_words else record.text.strip(),
         )
     return record
 

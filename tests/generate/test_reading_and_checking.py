@@ -607,10 +607,8 @@ def test_a_cited_piece_in_the_form_with_a_joined_claim_is_a_decline_that_shows_t
         f"Sixteen weeks [1]. {GAP} who pays.",
         # The form in another language is not the form: a limit.
         "Die gefundenen Passagen sagen nicht, wer zahlt [1].",
-        # A citation marker ends a piece: the claim after it, cited apart, is a piece.
-        f"{GAP} who pays.[1]New parents get sixteen weeks.[1]",
-        # A marker in the middle of a sentence in the form: the rest is a piece of its own.
-        f"{GAP} who[1] pays.",
+        # Pieces in the form numbered within one line: the "2." does not begin the form.
+        f"1. {GAP} who pays.[1] 2. {GAP} when.[2]",
         # The form beside the fixed declining sentence, with a marker: a limit, named.
         f"{GAP} who pays.[1] {NOT_FOUND_MESSAGE}",
         # A lead-in before the form: a decline in other words, a limit.
@@ -661,3 +659,69 @@ def test_under_the_first_instructions_a_cited_reply_in_the_form_stays_an_answer(
 
     assert answer.answered
     assert answer.model_text == ""
+
+
+# The reading is the joined text's, as at d7beb75: the shapes a cut at each citation marker
+# got wrong, each with what is shown, and what was passed on while it was written.
+
+READ_AS_AT_D7BEB75 = [
+    # (reply, read as an answer)
+    (f"1. {GAP} who pays.[1] 2. {GAP} when.[2]", True),
+    (f"{GAP} who pays.[1] 2) {GAP} when.[1]", True),
+    (f"{GAP} who pays,[1] but the passages found do not say when.", False),
+    (f"{GAP} who pays[1] but the passages found do not say when.", False),
+    ("The passages found[1] do not say who pays.", False),
+    (f"{GAP} who[1] pays.", False),
+    # The limit: a cited claim written straight after the form's full stop, with no white
+    # space before it, is taken into the piece; the reply is a decline, and the claim is
+    # shown with no source.
+    (f"{GAP} who pays.[1]New parents get sixteen weeks.[1]", False),
+]
+
+
+@pytest.mark.parametrize(("text", "answered"), READ_AS_AT_D7BEB75)
+def test_the_reading_and_what_was_passed_on_agree_on_the_shapes_of_a_marker_in_a_line(
+    text: str, answered: bool
+) -> None:
+    answer, streamed = gemini(text)
+
+    assert answer.answered is answered
+    assert answer.checks == ()
+    # Nothing passed on is taken back, whichever way the reply is read.
+    assert streamed == answer.text
+    if not answered:
+        assert answer.sources == ()
+        assert answer.text == answer.model_text
+
+
+@pytest.mark.parametrize("finish", ["STOP", "MAX_TOKENS", "OTHER", "SAFETY"])
+def test_what_was_passed_on_holds_for_pieces_after_a_marker_in_the_middle_of_a_line(
+    finish: str,
+) -> None:
+    shapes = [
+        "Sixteen weeks.[1] ",
+        f"1. {GAP} who pays.[1] ",
+        f"2. {GAP} when.[2]",
+        f" 2) {GAP} when.[1]",
+        f"{GAP} who pays,[1] but {GAP.lower()} when.",
+        "The passages found[1] do not say who pays.",
+        "\nSee https://evil.example/x",
+    ]
+    for count in (1, 2, 3):
+        for chosen in itertools.permutations(shapes, count):
+            answer, streamed = gemini(*chosen, finish=finish)
+            assert answer.text.startswith(streamed), chosen
+            assert streamed == answer.text or finish in ("OTHER", "SAFETY"), chosen
+
+
+def test_the_claude_path_shows_numbered_pieces_in_the_form_as_written() -> None:
+    answer, streamed = claude(
+        [
+            {"type": "text", "text": f"1. {GAP} who pays.", "citations": [citation(0, "x")]},
+            {"type": "text", "text": f" 2. {GAP} when.", "citations": [citation(1, "y")]},
+        ]
+    )
+
+    assert answer.answered
+    assert answer.checks == ()
+    assert streamed == answer.text

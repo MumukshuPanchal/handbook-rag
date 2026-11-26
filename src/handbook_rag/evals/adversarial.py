@@ -607,8 +607,8 @@ def reply_fingerprint(record: AnswerRecord) -> str:
     It covers the case as it was asked and every word and citation of the reply. A case
     asked again gets a reply of its own, and a reading of the old one is not carried over.
     The checks of the reply in code that fired, with the words each took out, are covered
-    too when there are any, and so are the model's own words when the reply shown is the
-    fixed declining sentence in their place. A reply with neither is named as it was before
+    too when there are any, and so are the model's own words when the reply was read as the
+    fixed form alone. A reply with neither is named as it was before
     there were checks, so that the readings of saved runs still name their replies.
     """
     content: list[object] = [
@@ -957,7 +957,7 @@ def write_adversarial_run(
                 # What the checks of the reply in code did, with the words they took out.
                 "checks": [asdict(check) for check in record.checks],
                 # The model's own words, when they were nothing but the fixed form for a
-                # missing part and the reply shown is the fixed declining sentence.
+                # missing part, and so a decline (``Answer.model_text``).
                 "model_text": record.model_text,
                 "reading": None if result.reading is None else asdict(result.reading),
                 "outcome": result.outcome,

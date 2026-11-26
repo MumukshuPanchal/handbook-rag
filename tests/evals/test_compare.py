@@ -292,3 +292,41 @@ def test_a_run_without_one_of_the_scores_gets_an_empty_cell(tmp_path: Path) -> N
 def test_a_directory_without_runs_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(ComparisonError, match="no runs found"):
         overview_of_runs(tmp_path)
+
+
+def read_again(run_dir: Path, question_id: str, as_made: float) -> None:
+    """Mark one question of a written run as read again by code changed after the run."""
+    rows = [json.loads(line) for line in (run_dir / "results.jsonl").read_text().splitlines()]
+    for row in rows:
+        if row["prompt_id"] == question_id:
+            row["grade_as_made"] = {"hit@5": as_made}
+    (run_dir / "results.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    summary = json.loads((run_dir / "summary.json").read_text())
+    summary["read_again_after_the_run"] = {"questions": [question_id], "metrics_as_made": {}}
+    (run_dir / "summary.json").write_text(json.dumps(summary))
+
+
+@pytest.mark.parametrize("which", ["base", "candidate"])
+def test_a_run_read_again_after_it_was_made_is_also_compared_as_it_was_made(
+    tmp_path: Path, which: str
+) -> None:
+    base = write_run(tmp_path, "base", {"q1": 1.0, "q2": 0.0})
+    candidate = write_run(tmp_path, "candidate", {"q1": 1.0, "q2": 0.0})
+    # Today the two runs agree; as it was made, the one read again scored q2 otherwise.
+    read_again(base if which == "base" else candidate, "q2", 1.0)
+
+    comparison = compare_runs(base, candidate)
+
+    assert comparison.metrics["hit@5"].change.same == 2
+    assert comparison.as_made is not None
+    made = comparison.as_made.metrics["hit@5"].change
+    assert (made.better, made.worse) == ((0, 1) if which == "base" else (1, 0))
+    # A score a question has today and not as made, such as a judged one, is left out.
+    assert comparison.as_made.metrics["mrr@10"].change.difference.count == 1
+
+
+def test_two_runs_that_nothing_reads_again_are_compared_once(tmp_path: Path) -> None:
+    base = write_run(tmp_path, "base", {"q1": 1.0})
+    candidate = write_run(tmp_path, "candidate", {"q1": 0.0})
+
+    assert compare_runs(base, candidate).as_made is None

@@ -76,7 +76,7 @@ from typing import Final
 from handbook_rag.generate.base import (
     cites_the_decline,
     is_answered,
-    made_only_of_the_form,
+    only_the_gap_form,
     plain_words,
 )
 from handbook_rag.generate.models import ReplyCheck, Segment
@@ -167,8 +167,9 @@ def check_reply(
     if not answered:
         return _not_an_answer(replied, ended=ended)
     checked = _an_answer(replied, chunks)
+    left = "".join(segment.text for segment in checked.segments)
     if checked.answered and (
-        not is_answered(checked.segments, refused=False) or made_only_of_the_form(checked.segments)
+        not is_answered(checked.segments, refused=False) or only_the_gap_form(left)
     ):
         # What the checks left says no more than that the handbook lacks the answer, as
         # "[1] I could not find this in the handbook." does once a line after it is gone,
@@ -216,7 +217,7 @@ def _not_an_answer(replied: tuple[Segment, ...], *, ended: bool) -> CheckedReply
     text = "".join(segment.text for segment in replied)
     if ended:
         said = plain_words(text)
-        if not said or said == plain_words(NOT_FOUND_MESSAGE) or made_only_of_the_form(replied):
+        if not said or said == plain_words(NOT_FOUND_MESSAGE) or only_the_gap_form(text):
             # The words are left as they are, and a marker after them names no source. The
             # fixed form alone says what the declining sentence says, and its words may
             # have been passed on (``base.read_the_gap_form_as_a_decline``).

@@ -1206,6 +1206,12 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
         str(kept[1]),
         str(kept[2]),
         f"{hardening_runs.sign_test(len(blind['better']), len(blind['worse'])):.4f}",
+        # The note of 14:22, the fixed form of version 2, and the decision record that
+        # tells what the reader was told.
+        "14",
+        "22",
+        SECOND,
+        hardening_runs.RECORD,
         SECOND,
         FIRST,
         FIRST,

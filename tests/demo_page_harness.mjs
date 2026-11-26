@@ -929,6 +929,26 @@ await step(
   "and the pay",
   declined("and the pay", { checks: [{ check: "cites_nothing", action: "declined", note: UNCITED }] }),
 );
+// A reply made only of the fixed form for a missing part, which carried citation markers:
+// the service sends it as a decline in the model's own words, with no source.
+const FORM = "The passages found do not say how much the backup care benefit pays per year.";
+await step(
+  "form declined",
+  "and the backup care",
+  stream([
+    ["searched", searched("and the backup care", "and the backup care", "unchanged")],
+    ["text", { text: FORM }],
+    [
+      "answer",
+      answer(searched("and the backup care", "and the backup care", "unchanged"), {
+        answer: FORM,
+        answered: false,
+        segments: [{ text: FORM, sources: [] }],
+        sources: [],
+      }),
+    ],
+  ]),
+);
 await step(
   "check cut",
   "and the dates",

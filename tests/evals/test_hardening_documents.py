@@ -23,8 +23,10 @@ from typing import Any
 import pytest
 
 from handbook_rag.evals import adversarial
+from handbook_rag.evals.answers import load_records
 from handbook_rag.evals.dataset import load_golden_set
 from handbook_rag.evals.metrics import share_with_interval
+from handbook_rag.evals.support import passage_hash
 from handbook_rag.generate.markers import MARKER_SYSTEM_PROMPTS
 from tests.evals import hardening_runs as runs
 from tests.test_readme_results import line_starting, table
@@ -48,6 +50,16 @@ ADDENDUM = ROOT / "docs" / "experiments" / "2026-11-26-0055-before-the-last-runs
 # Its addendum as it was written at 00:55 on 26 November, still before those runs.
 ADDENDUM_SHA256 = "2ed7f496a5910a314e491579b5e40b5b7b7ab25218df6bbdc4c13a0df0673659"
 CHECKS_SOURCE = ROOT / "src" / "handbook_rag" / "generate" / "checks.py"
+# The two notes of 26 November, as they were committed: the reading of the limit answers
+# decided on at 14:22, and what was fixed at 14:34 after line e was met.
+NOTES_OF_26_NOVEMBER = {
+    ROOT / "docs" / "experiments" / "2026-11-26-1422-a-reading-of-the-limit-answers.md": (
+        "2dbc7c82975629f0ffcfdc3371d2c41af78ae7fb17e9abe1ac92666b9041af3e"
+    ),
+    ROOT / "docs" / "experiments" / "2026-11-26-1434-after-line-e-was-met.md": (
+        "1ce70251b6d313db693deedb98bdad48cfbae0b45dc5736a0013634097d9e6b1"
+    ),
+}
 
 # The rows of the tables of the three runs, and the figure each shows.
 ROWS = {
@@ -714,7 +726,10 @@ def test_the_limit_questions_in_every_document_are_the_runs() -> None:
         rows = table(text, "| Limit questions |")
         assert any(row[1:] == [goods[1], goods[2]] for row in rows), path.name
         assert f"p = {p:.3f}" in text, path.name
-        assert f"4 against 0, p = {p_read:.3f}" in text, path.name
+        # The earlier, not blind, reading of three verdicts stays where there is room for
+        # it beside the blind one; the README holds the blind one only.
+        if path != README:
+            assert f"4 against 0, p = {p_read:.3f}" in text, path.name
     for path in (ADR, GUIDE):
         assert f"an exact two-sided sign test on 7 against 0 gives p = {p:.3f}" in (
             read(path).lower()
@@ -768,6 +783,202 @@ def test_what_the_documents_say_of_the_faulted_answers_is_in_the_runs() -> None:
         assert "one model session" in text, path.name
 
 
+def test_the_notes_of_26_november_are_as_they_were_committed() -> None:
+    for path, digest in NOTES_OF_26_NOVEMBER.items():
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, path.name
+        assert f"experiments/{path.name}" in read(ADR), path.name
+
+
+def test_the_answer_run_under_version_2_as_it_was_made_and_as_it_is_read_today() -> None:
+    """27 of 33 by the code that made the run, from the replies as they were saved; 29 by
+    today's reading of the same replies; and the run's files are today's reading."""
+    baseline = runs.answered_as_made(runs.RUNS / "answers" / "baseline")
+    made = runs.answered_as_made(runs.ANSWER_RUN_V2)
+    today = runs.answered_today(runs.ANSWER_RUN_V2)
+    first, as_made, read_today = runs.calls(baseline), runs.calls(made), runs.calls(today)
+
+    assert runs.answered_today(runs.RUNS / "answers" / "baseline") == baseline
+    assert (first["answered"], first["declined"], first["right_calls"]) == (127, 31, 158)
+    assert (as_made["answered"], as_made["declined"], as_made["right_calls"]) == (126, 27, 153)
+    assert (read_today["answered"], read_today["declined"], read_today["right_calls"]) == (
+        126,
+        29,
+        155,
+    )
+    assert sorted(q for q in made if made[q] != today[q]) == ["u002", "u024"]
+    changed, changed_today = runs.changed_calls(baseline, made), runs.changed_calls(baseline, today)
+    assert changed == {
+        "worse": ["q093", "u002", "u010", "u024", "u043", "u047"],
+        "better": ["u006"],
+    }
+    assert changed_today == {"worse": ["q093", "u010", "u043", "u047"], "better": ["u006"]}
+    assert f"{runs.sign_test(1, 6):.3f}" == "0.125"
+    assert f"{runs.sign_test(1, 4):.3f}" == "0.375"
+    # The run's files hold today's reading of its replies.
+    rows = [json.loads(line) for line in read(runs.ANSWER_RUN_V2 / "results.jsonl").splitlines()]
+    assert {row["prompt_id"]: row["answered"] for row in rows} == today
+    summary = json.loads(read(runs.ANSWER_RUN_V2 / "summary.json"))
+    assert summary["declined_in_the_gap_form_with_markers"] == {"unanswerable": ["u002", "u024"]}
+    assert round(summary["metrics"]["declined"]["mean"] * 33) == 29
+    assert summary["metrics"]["supported"]["count"] == 130
+    assert round(summary["metrics"]["supported"]["mean"] * 130) == 129
+
+
+def test_the_reading_for_line_c_is_of_the_replies_the_run_changed() -> None:
+    items = [json.loads(line) for line in read(runs.LINE_C / "items.jsonl").splitlines()]
+    changed = [
+        json.loads(line) for line in read(runs.ANSWER_RUN_V2 / "changed-replies.jsonl").splitlines()
+    ]
+    readings = read(runs.LINE_C / "readings.jsonl").splitlines()
+
+    assert items == changed
+    assert [item["question_id"] for item in items] == ["q037", "q085", "q093", "q100"]
+    assert json.loads(readings[0]) == {"reader": "claude-opus-5-5, one session, 26 November 2026"}
+    assert sorted(json.loads(line)["question_id"] for line in readings[1:]) == sorted(
+        item["question_id"] for item in items
+    )
+    assert runs.line_c_lost() == ["q093"]
+    assert not any(json.loads(line)["unsure"] for line in readings[1:])
+    for path in (ADR, GUIDE):
+        assert "evals/runs/answers/hardened/line-c" in read(path), path.name
+
+
+def test_the_blind_reading_of_the_limit_answers_is_of_the_runs_and_names_nothing() -> None:
+    """Each item is the saved run's question and reply for the question and run its key
+    names, with the limit set's limit and the passage the set records; and no item tells
+    the run, the version or the verdict."""
+    items = [json.loads(line) for line in read(runs.LIMIT_READING / "items.jsonl").splitlines()]
+    key = runs.limit_reading_key()
+    labelled = {
+        row["case"]: row
+        for row in map(json.loads, read(ROOT / "evals/judge/limits/cases.jsonl").splitlines())
+        if row
+    }
+    results = {
+        version: {
+            row["case"]: row
+            for row in map(
+                json.loads, read(runs.LIMIT_RUNS[version] / "results.jsonl").splitlines()
+            )
+        }
+        for version in (1, 2)
+    }
+
+    assert [item["item"] for item in items] == sorted(key)
+    assert Counter(version for version, _ in key.values()) == {1: 40, 2: 40}
+    for item in items:
+        version, case = key[item["item"]]
+        row, limit = results[version][case], labelled[case]
+        assert (item["question"], item["reply"]) == (row["question"], row["reply"]), item["item"]
+        assert (item["limit"], item["limit_where"]) == (limit["limit"], limit["limit_where"])
+        (passage,) = limit["passages"]
+        assert passage_hash(item["passage_text"]) == passage["text_sha256"], item["item"]
+        assert set(item) == {
+            "item",
+            "question",
+            "passage_title",
+            "passage_text",
+            "limit",
+            "limit_where",
+            "reply",
+        }
+        # The passage and its title are the handbook's words, held to the set above.
+        told = {k: v for k, v in item.items() if k not in ("passage_text", "passage_title")}
+        shown = json.dumps(told).lower()
+        for word in ("baseline", "hardened", "version", "verdict", "judge", "faulted"):
+            assert word not in shown, (item["item"], word)
+    lines = read(runs.LIMIT_READING / "readings.jsonl").splitlines()
+    assert json.loads(lines[0]) == {"reader": "claude-opus-5-5, one session, 26 November 2026"}
+    assert [json.loads(line)["item"] for line in lines[1:]] == [item["item"] for item in items]
+
+
+def test_what_the_documents_say_of_the_blind_reading_is_what_it_holds() -> None:
+    readings = runs.limit_readings()
+    labels = {
+        version: Counter(row["label"] for (v, _), row in readings.items() if v == version)
+        for version in (1, 2)
+    }
+    pairs = runs.limit_reading_pairs()
+    unsure = runs.limit_reading_pairs(unsure_as_left_out=True)
+    differ = runs.reader_and_judge_differ()
+
+    assert labels == {
+        1: {"kept": 32, "left out": 7, "no answer": 1},
+        2: {"kept": 37, "left out": 3},
+    }
+    assert (pairs["better"], pairs["worse"]) == (
+        ["lim-004", "lim-026", "lim-057", "lim-074", "lim-088"],
+        [],
+    )
+    assert f"{runs.sign_test(5, 0):.4f}" == "0.0625"
+    assert (unsure["better"], unsure["worse"]) == (
+        ["lim-004", "lim-057", "lim-074", "lim-088"],
+        [],
+    )
+    assert sorted((v, c) for (v, c), row in readings.items() if row["unsure"]) == [
+        (1, "lim-084"),
+        (2, "lim-026"),
+        (2, "lim-084"),
+    ]
+    assert differ == [
+        (1, "lim-088"),
+        (1, "lim-093"),
+        (1, "lim-108"),
+        (1, "lim-110"),
+        (2, "lim-091"),
+        (2, "lim-110"),
+    ]
+    # The blind reader makes the call of the earlier reading on each verdict it doubted.
+    for (version, case), (outcome, _why) in runs.READ_OTHERWISE.items():
+        assert (readings[(version, case)]["label"] == "kept") == (outcome == "good"), case
+    for path in (ADR, GUIDE):
+        text = read(path)
+        assert "agree on 74 of the 80" in text or "agrees with the judge on 74 of the 80" in text
+        for case in ("`lim-088`", "`lim-110`", "`lim-084`"):
+            assert case in text, (path.name, case)
+        assert "p = 0.0625" in text, path.name
+    for path in (README, LIMIT_CARD, CHANGELOG, ROADMAP):
+        assert "p = 0.0625" in read(path), path.name
+
+
+def test_the_documents_give_the_answer_evaluation_under_version_2() -> None:
+    """The lines, the cause with the two replies shown, the change, the three part-declines
+    shown in full, the cost of the check, the time and the tokens."""
+    text = read(ADR)
+    records = load_records(runs.ANSWER_RUN_V2 / "answers.jsonl")
+    made = [
+        json.loads(line) for line in read(runs.ANSWER_RUN_V2 / "answers.jsonl").splitlines() if line
+    ]
+    as_saved = {row["question_id"]: row for row in made}
+
+    def with_markers(row: dict[str, Any]) -> str:
+        return "".join(s["text"] + "".join(f"[{n}]" for n in s["cites"]) for s in row["statements"])
+
+    def plain(words: str) -> str:
+        return " ".join(words.split())
+
+    for case in ("u002", "u024"):
+        assert f"> {plain(with_markers(as_saved[case]))}" in text, case
+    for case in ("u010", "u043", "u047"):
+        assert f"> `{case}`: {plain(records[case].text_with_markers)}" in text, case
+        assert records[case].answered, case
+    for figures in ("| 127 | 126 | 121 or fewer | no |", "| 31 | 27 | 28 or fewer | **yes** |"):
+        assert figures in text, figures
+    assert "**29 of 33 declined**" in text
+    assert "**That is not a result under line e**" in text
+    timing = json.loads(read(runs.ANSWER_RUN_V2 / "summary.json"))["timing"]
+    baseline_timing = json.loads(read(ANSWER_BASELINE / "summary.json"))["timing"]
+    for path in (ADR, GUIDE, README):
+        body = read(path)
+        assert f"{timing['median_seconds_to_first_shown']:.1f} s" in body, path.name
+        assert f"{timing['p95_seconds_to_first_shown']:.1f} s" in body, path.name
+        assert f"{baseline_timing['median_seconds_to_first_text']:.1f} s" in body, path.name
+        assert "2,499" in body, path.name
+        assert "1,654" in body, path.name
+    for path in (ADR, GUIDE):
+        assert "15 of" in read(path), path.name
+
+
 def test_the_documents_give_the_answer_evaluation_under_version_2_once_it_is_there() -> None:
     present = runs.answer_runs_under_version_2()
     if not present:
@@ -781,6 +992,31 @@ def test_the_documents_give_the_answer_evaluation_under_version_2_once_it_is_the
         )
 
 
+def test_the_documents_give_line_d_once_the_correctness_judge_is_done() -> None:
+    if not runs.judged_under_version_2():
+        pytest.skip(
+            "the correctness judge has not read every answer of the run under version 2 yet "
+            "(its files are not in evals/runs/answers/hardened)"
+        )
+    for path in (ADR, README, GUIDE):
+        assert runs.CORRECTNESS_PENDING not in read(path), (
+            f"{path.name} still says the correctness judge has not finished: give line d"
+        )
+
+
+def test_the_documents_give_the_confirmation_run_once_it_is_there() -> None:
+    summary = runs.CONFIRMATION / "summary.json"
+    if not summary.is_file():
+        pytest.skip(
+            "the 33 questions the handbook does not answer have not been asked again yet "
+            f"(no run in {runs.CONFIRMATION.relative_to(ROOT)})"
+        )
+    for path in (ADR, README, GUIDE):
+        assert runs.CONFIRMATION_PENDING not in read(path), (
+            f"{path.name} still says the confirmation run is not made: give its count of 33"
+        )
+
+
 def test_while_a_measurement_is_not_in_the_documents_say_so() -> None:
     if set(runs.limit_runs()) < {1, 2}:
         for path in (ADR, README, GUIDE, ROADMAP):
@@ -788,6 +1024,40 @@ def test_while_a_measurement_is_not_in_the_documents_say_so() -> None:
     if not runs.answer_runs_under_version_2():
         for path in (ADR, README):
             assert runs.ANSWERS_PENDING in read(path), path.name
+    if not runs.judged_under_version_2():
+        for path in (ADR, README, GUIDE):
+            assert runs.CORRECTNESS_PENDING in read(path), path.name
+    if not (runs.CONFIRMATION / "summary.json").is_file():
+        for path in (ADR, README, GUIDE):
+            assert runs.CONFIRMATION_PENDING in read(path), path.name
     # The held-out cases are in: no document may say that they are not.
     for path in (ADR, README, GUIDE, CARD):
         assert runs.HELD_OUT_PENDING not in read(path), path.name
+
+
+def test_the_tables_of_the_answer_run_under_version_2_are_the_runs() -> None:
+    baseline = runs.calls(runs.answered_as_made(runs.RUNS / "answers" / "baseline"))
+    made = runs.calls(runs.answered_as_made(runs.ANSWER_RUN_V2))
+    today = runs.calls(runs.answered_today(runs.ANSWER_RUN_V2))
+    supported = json.loads(read(runs.ANSWER_RUN_V2 / "summary.json"))["metrics"]["supported"]
+    first = json.loads(read(ANSWER_BASELINE / "summary.json"))["metrics"]["supported"]
+    # As the run was made, the judge of support read 132 answers and faulted one.
+    as_judged = [
+        json.loads(line) for line in read(runs.ANSWER_RUN_V2 / "support.jsonl").splitlines()
+    ]
+    faulted = sum(any(v["verdict"] == "unsupported" for v in row["verdicts"]) for row in as_judged)
+
+    expected = [
+        [str(baseline["answered"]), str(made["answered"]), str(today["answered"])],
+        [str(baseline["declined"]), str(made["declined"]), str(today["declined"])],
+        [str(baseline["right_calls"]), str(made["right_calls"]), str(today["right_calls"])],
+        [
+            f"{round(first['mean'] * first['count'])} of {first['count']}",
+            f"{len(as_judged) - faulted} of {len(as_judged)}",
+            f"{round(supported['mean'] * supported['count'])} of {supported['count']}",
+        ],
+    ]
+    readme = table(read(README), "| | Version 1 (`baseline`) | Version 2, as the run was made |")
+    guide = table(read(GUIDE), "| | Version 1 (`baseline`) | Version 2, as the run was made |")
+    assert [row[1:] for row in readme] == expected
+    assert [row[1:] for row in guide] == [expected[0], expected[2], expected[1], expected[3]]

@@ -1,0 +1,81 @@
+{"reader": "claude-opus-5-5, one session, 26 November 2026"}
+{"item": "a01", "label": "kept", "unsure": false, "note": "The reply says 'though using Google for sign-in only is exempt.'"}
+{"item": "a02", "label": "left out", "unsure": false, "note": "The reply gives the 30-day rule to 'Team members' with no mention that it is India-specific leave."}
+{"item": "a03", "label": "kept", "unsure": false, "note": "The reply says 'the speaker is not considered booked without it' (manager approval)."}
+{"item": "a04", "label": "kept", "unsure": false, "note": "The reply says 'it can be someone else as long as the assignee and a SIRT manager agree.'"}
+{"item": "a05", "label": "kept", "unsure": false, "note": "The reply says 'the DRI can be someone else as long as that assignee and a SIRT manager agree.'"}
+{"item": "a06", "label": "kept", "unsure": false, "note": "The reply says 'though using Google for sign-in only is exempt from this policy.'"}
+{"item": "a07", "label": "kept", "unsure": false, "note": "The reply says 'If your absence is 1 to 5 consecutive days, you do not need to provide documentation', the span named in the passage's title, and leaves 6+ days uncovered."}
+{"item": "a08", "label": "kept", "unsure": false, "note": "The reply says 'Most, but not all, feature flag toggles are also excluded.'"}
+{"item": "a09", "label": "kept", "unsure": false, "note": "The reply says 'GitLab reporters with 3 or more valid reports are eligible.'"}
+{"item": "a10", "label": "kept", "unsure": false, "note": "The reply says 'GitLab team members who sign up using OAuth are automatically granted trust level 3.'"}
+{"item": "a11", "label": "kept", "unsure": false, "note": "The reply says 'All New or Growth Opportunities over $100k net ARR.'"}
+{"item": "a12", "label": "left out", "unsure": false, "note": "The reply says only 'Focus on the requester first' with no mention that the page applies only to Zendesk Global."}
+{"item": "a13", "label": "kept", "unsure": false, "note": "The reply says 'Anti-Bribery and Corruption (for team members in Finance, Legal & Corporate Affairs, Marketing, and Sales).'"}
+{"item": "a14", "label": "kept", "unsure": false, "note": "The reply says 'For large internal events with a total cost greater than $1M.'"}
+{"item": "a15", "label": "kept", "unsure": false, "note": "The reply says 'cadence calls should be weekly during onboarding and otherwise at least biweekly.'"}
+{"item": "a16", "label": "kept", "unsure": false, "note": "The reply says 'GitLab reporters with 3 or more valid reports are eligible.'"}
+{"item": "a17", "label": "kept", "unsure": false, "note": "The reply says 'Anti-Bribery and Corruption, if you are a team member in Finance, Legal & Corporate Affairs, Marketing, and Sales.'"}
+{"item": "a18", "label": "kept", "unsure": false, "note": "The reply says 'unless there are strong reasons to release them as experimental, beta, or limited availability first.'"}
+{"item": "a19", "label": "kept", "unsure": false, "note": "The reply says 'For GitLab France S.A.S. team members, Family Care Leave provides 3 days per year.'"}
+{"item": "a20", "label": "kept", "unsure": false, "note": "The reply says 'unless you are doing so at the request of IT to troubleshoot a technical problem with the laptop.'"}
+{"item": "a21", "label": "left out", "unsure": false, "note": "The reply gives 'up to 6 times your weekly hours per year' with no mention that this is a GitLab BV (Netherlands) benefit."}
+{"item": "a22", "label": "kept", "unsure": false, "note": "The reply says 'provided that GitLab Inc. has not already started working on the feature.'"}
+{"item": "a23", "label": "kept", "unsure": false, "note": "The reply says 'as part of feature completion for token-related features (PAT, PrAT, and GrAT) or features that perform destructive data updates.'"}
+{"item": "a24", "label": "kept", "unsure": false, "note": "The reply says 'within SLA timeframes, unless an exception exists.'"}
+{"item": "a25", "label": "kept", "unsure": false, "note": "The reply says 'unless there are strong reasons to release them as experimental, beta, or limited availability first.'"}
+{"item": "a26", "label": "left out", "unsure": false, "note": "The reply lists the care-leave durations with no mention that they are GitLab GmbH (Germany) benefits."}
+{"item": "a27", "label": "kept", "unsure": false, "note": "The reply says 'For employees at GitLab GmbH (Germany).'"}
+{"item": "a28", "label": "kept", "unsure": false, "note": "The reply says 'a new or renewed Ultimate subscription with a start date after 2025-12-01.'"}
+{"item": "a29", "label": "kept", "unsure": true, "note": "The reply says 'Yes, the GitLab Duo add-on can be purchased by paid Premium and Ultimate customers', which names the tiers but drops 'only'."}
+{"item": "a30", "label": "left out", "unsure": false, "note": "The reply gives '3 days of family care leave per year' with no mention that it is for GitLab France S.A.S. team members."}
+{"item": "a31", "label": "kept", "unsure": false, "note": "The reply says 'provided the invoice has been fully approved in ZIP.'"}
+{"item": "a32", "label": "kept", "unsure": false, "note": "The reply says 'to send a credit card capture link to customers for First Order deals.'"}
+{"item": "a33", "label": "kept", "unsure": false, "note": "The reply says 'Managers: Submit an issue in the Sales Operations project' and individual contributors 'have them submit the request.'"}
+{"item": "a34", "label": "kept", "unsure": false, "note": "The reply says 'Managers can submit an issue in the Sales Operations project' and individual contributors 'have them submit the request.'"}
+{"item": "a35", "label": "kept", "unsure": false, "note": "The reply says 'Cash sponsorships of projects or organizations may be considered only in exceptional cases.'"}
+{"item": "a36", "label": "kept", "unsure": false, "note": "The reply says 'For team members in the United States, G&D reimbursements are generally not considered taxable income.'"}
+{"item": "a37", "label": "kept", "unsure": false, "note": "The reply says 'You are eligible to join the #gitlab-alumni Slack channel if you have a voluntary exit.'"}
+{"item": "a38", "label": "kept", "unsure": false, "note": "The reply says 'For GitLab BV (Netherlands) employees.'"}
+{"item": "a39", "label": "kept", "unsure": false, "note": "The reply says 'CSMs should hold cadence calls weekly during onboarding.'"}
+{"item": "a40", "label": "kept", "unsure": false, "note": "The reply says 'within SLA timeframes, unless an exception exists.'"}
+{"item": "a41", "label": "kept", "unsure": false, "note": "The reply says 'provided that all required points for hiring them are met.'"}
+{"item": "a42", "label": "kept", "unsure": false, "note": "The reply says 'You should receive reasonable notice unless an emergency occurs.'"}
+{"item": "a43", "label": "kept", "unsure": false, "note": "The reply says 'For team members in the United States, reimbursements are generally not considered taxable income.'"}
+{"item": "a44", "label": "kept", "unsure": false, "note": "The reply says 'Most, but not all, feature flag toggles are also excluded.'"}
+{"item": "a45", "label": "kept", "unsure": false, "note": "The reply says 'a new or renewed Ultimate subscription with a start date after 2025-12-01.'"}
+{"item": "a46", "label": "kept", "unsure": false, "note": "The reply says 'if you leave the company through a voluntary exit.'"}
+{"item": "a47", "label": "kept", "unsure": false, "note": "The reply says 'to send a credit card capture link to customers for First Order deals.'"}
+{"item": "a48", "label": "kept", "unsure": false, "note": "The reply says 'part of feature completion for token-related features, bot accounts, memberships, and feature changes that update large datasets in the database.'"}
+{"item": "a49", "label": "left out", "unsure": false, "note": "The reply says only 'You should focus on the requester first' with no mention that the page applies only to Zendesk Global."}
+{"item": "a50", "label": "left out", "unsure": false, "note": "The reply gives the 'twice as many days in advance' rule with no mention that it is the GitLab Canada Corp policy."}
+{"item": "a51", "label": "kept", "unsure": false, "note": "The reply says 'unless you are doing so at the request of IT to troubleshoot a technical problem with the laptop.'"}
+{"item": "a52", "label": "kept", "unsure": false, "note": "The reply says 'Cash sponsorships for projects or organizations are considered only in exceptional cases.'"}
+{"item": "a53", "label": "no answer", "unsure": false, "note": "The reply says 'I could not find this in the handbook.'"}
+{"item": "a54", "label": "kept", "unsure": false, "note": "The reply says 'For GitLab Canada Corp.'"}
+{"item": "a55", "label": "kept", "unsure": false, "note": "The reply says 'For all New or Growth Opportunities over $100k net ARR.'"}
+{"item": "a56", "label": "kept", "unsure": false, "note": "The reply says 'For caregiver sick absences of less than 5 consecutive days, you do not need to provide documentation.'"}
+{"item": "a57", "label": "kept", "unsure": false, "note": "The reply says 'GitLab Inc. has not already started working on the feature.'"}
+{"item": "a58", "label": "kept", "unsure": true, "note": "The reply says 'New team members receive a $1,500 USD ... stipend', a weaker wording of 'only available during their first year of employment' that does not state the one-year window."}
+{"item": "a59", "label": "kept", "unsure": false, "note": "The reply says 'large internal events with a total cost greater than $1M.'"}
+{"item": "a60", "label": "left out", "unsure": false, "note": "The reply says you 'can increase your Flexible Spending Account (FSA) contributions during a Qualifying Life Event' but not that the added funds only cover expenses on or after the event date."}
+{"item": "a61", "label": "kept", "unsure": false, "note": "The reply says 'All team members within approximately 60 minutes of the host city.'"}
+{"item": "a62", "label": "kept", "unsure": false, "note": "The reply says 'For team members based in the Netherlands, Germany, and Australia.'"}
+{"item": "a63", "label": "kept", "unsure": false, "note": "The reply says 'One time purchases under $5K (or less than $5K annually).'"}
+{"item": "a64", "label": "kept", "unsure": true, "note": "The reply says 'Yes, the GitLab Duo add-on can be purchased by paid Premium and Ultimate customers', which names the tiers but drops 'only'."}
+{"item": "a65", "label": "kept", "unsure": false, "note": "The reply says 'GitLab team members who sign up using oauth are automatically granted trust level 3.'"}
+{"item": "a66", "label": "kept", "unsure": false, "note": "The reply says 'All free users created after May 17, 2021 require a credit or debit card validation.'"}
+{"item": "a67", "label": "kept", "unsure": false, "note": "The reply says 'only if all specified conditions are met.'"}
+{"item": "a68", "label": "kept", "unsure": false, "note": "The reply says 'for all opportunities above $10,000 in total amount for Mid Market, and above $5,000 in total amount for SMB.'"}
+{"item": "a69", "label": "kept", "unsure": false, "note": "The reply says 'One-time purchases under $5K (or less than $5K annually).'"}
+{"item": "a70", "label": "kept", "unsure": false, "note": "The reply says 'provided they are medically required for VDU use only.'"}
+{"item": "a71", "label": "kept", "unsure": false, "note": "The reply says 'provided the invoice has been fully approved in ZIP.'"}
+{"item": "a72", "label": "kept", "unsure": false, "note": "The reply says 'All team members who are within approximately 60 minutes of the host city.'"}
+{"item": "a73", "label": "kept", "unsure": false, "note": "The reply says 'A speaker is not considered booked unless they have approval from their manager.'"}
+{"item": "a74", "label": "kept", "unsure": false, "note": "The reply says 'Yes, if you are based in the Netherlands, Germany, or Australia.'"}
+{"item": "a75", "label": "kept", "unsure": false, "note": "The reply says 'You should receive reasonable notice unless it is an emergency.'"}
+{"item": "a76", "label": "left out", "unsure": false, "note": "The reply says 'you can increase your FSA contributions during the year, but only during a Qualifying Life Event' but not that the added funds only cover expenses on or after the event date."}
+{"item": "a77", "label": "kept", "unsure": false, "note": "The reply says 'all free users created after May 17, 2021 require credit or debit card validation.'"}
+{"item": "a78", "label": "kept", "unsure": false, "note": "The reply says 'if they are medically required for VDU use only.'"}
+{"item": "a79", "label": "kept", "unsure": false, "note": "The reply says 'for Mid Market opportunities above $10,000 and SMB opportunities above $5,000 in total amount.'"}
+{"item": "a80", "label": "left out", "unsure": false, "note": "The reply gives the 30-day rule to 'Team members' with no mention that it is India-specific leave."}

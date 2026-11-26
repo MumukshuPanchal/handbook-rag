@@ -29,6 +29,7 @@ from handbook_rag.evals.answers import (
     replies_to_current_labels,
     run_answers,
     score_answer,
+    shown_in_the_models_words,
     summarise_answers,
     write_answer_run,
 )
@@ -1434,3 +1435,72 @@ def test_the_models_words_beside_a_decline_are_given_whole() -> None:
     )
 
     assert model_words(record) == words
+
+
+def cited_form(question: GoldenQuestion) -> Answer:
+    """A reply made only of the fixed form, with a marker, as the code before saved it: an
+    answer."""
+    return reply(question, Segment(f"{GAP_FORM} where to park.", (Citation(LEAVE_CHUNK),)))
+
+
+@pytest.mark.parametrize(("version", "read_as_a_decline"), [(2, True), (1, False), (None, False)])
+def test_a_saved_cited_reply_made_only_of_the_form_is_read_as_a_decline_under_version_2(
+    tmp_path: Path, version: int | None, read_as_a_decline: bool
+) -> None:
+    saved(tmp_path, (PARKING_QUESTION, cited_form(PARKING_QUESTION)))
+    if version is not None:
+        config = {"instructions_version": version} if version != 1 else {}
+        (tmp_path / "run.json").write_text(json.dumps({"config": config, "attempts": 1}))
+
+    (record,) = load_records(tmp_path / "answers.jsonl").values()
+
+    if read_as_a_decline:
+        assert not record.answered
+        assert record.statements == (Statement(f"{GAP_FORM} where to park.", ()),)
+        assert record.model_text == f"{GAP_FORM} where to park."
+        assert shown_in_the_models_words(record)
+    else:
+        assert record.answered
+        assert record.statements[0].cites
+        assert not shown_in_the_models_words(record)
+
+
+def test_a_run_counts_the_cited_replies_in_the_form_apart_from_the_uncited(tmp_path: Path) -> None:
+    (tmp_path / "run.json").write_text(
+        json.dumps({"config": {"instructions_version": 2}, "attempts": 3})
+    )
+    uncited = dataclasses.replace(declines(LEAVE_QUESTION), model_text=f"{GAP_FORM} how long.")
+    records = saved(
+        tmp_path, (PARKING_QUESTION, cited_form(PARKING_QUESTION)), (LEAVE_QUESTION, uncited)
+    )
+
+    report = summarise_answers(QUESTIONS, records)
+
+    assert report.declined_in_the_gap_form == {
+        "answerable": [LEAVE_QUESTION.id],
+        "unanswerable": [PARKING_QUESTION.id],
+    }
+    assert report.shown_in_the_models_words == {"unanswerable": [PARKING_QUESTION.id]}
+    run_dir = write_answer_run(report, tmp_path, "v", "d", CONFIG, attempts=3)
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["declined_in_the_gap_form_with_markers"] == {"unanswerable": ["u001"]}
+    (row,) = changed_replies(report)
+    assert row["question_id"] == LEAVE_QUESTION.id
+    assert row["done"] == ["read as the fixed form for a missing part: shown as the decline"]
+
+
+def test_a_cited_reply_in_the_form_to_an_answerable_question_goes_to_the_reader(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "run.json").write_text(
+        json.dumps({"config": {"instructions_version": 2}, "attempts": 1})
+    )
+    records = saved(tmp_path, (LEAVE_QUESTION, cited_form(LEAVE_QUESTION)))
+
+    (row,) = changed_replies(summarise_answers(QUESTIONS, records))
+
+    assert row["reply_as_shown"] == row["model_words"] == f"{GAP_FORM} where to park."
+    assert row["done"] == [
+        "read as the fixed form for a missing part, with citation markers: a decline, "
+        "shown in the model's words with no source"
+    ]

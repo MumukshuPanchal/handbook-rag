@@ -38,9 +38,10 @@ from handbook_rag.evals.stage import (
     load_rows,
     write_json,
 )
-from handbook_rag.generate.base import GenerationError, only_the_gap_form
+from handbook_rag.generate.base import GenerationError, only_the_gap_form, plain_words
 from handbook_rag.generate.checks import CITES_NOTHING, DECLINED, WORDS_BESIDE_A_DECLINE
 from handbook_rag.generate.models import Answer, ReplyCheck
+from handbook_rag.generate.prompt import GAP_FORM_VERSIONS, NOT_FOUND_MESSAGE
 from handbook_rag.index.store import VectorStoreError
 from handbook_rag.ingest.models import Chunk, Document
 
@@ -117,9 +118,10 @@ class AnswerRecord:
     statements are the reply as they left it, and each check keeps the words it took
     out. A reply saved before there were checks has none."""
     model_text: str = ""
-    """The model's own words, when the generator showed the fixed declining sentence in
-    their place because they were nothing but the fixed form for a missing part
-    (``Answer.model_text``). A decline by the model, not a check."""
+    """The model's own words, when they were nothing but the fixed form for a missing part
+    and the reply is a decline (``Answer.model_text``): shown as the fixed declining
+    sentence when they cited nothing, and as these words when they carried markers
+    (:func:`shown_in_the_models_words`). A decline by the model, not a check."""
     seconds_to_first_shown: float | None = None
     """When the first words were passed on to the reader (``Answer.seconds_to_first_shown``).
     A reply saved before this was recorded has none."""
@@ -220,15 +222,22 @@ def record_reply(
     )
 
 
-def as_read_today(record: AnswerRecord) -> AnswerRecord:
+def as_read_today(record: AnswerRecord, *, form_read: bool = False) -> AnswerRecord:
     """A saved reply as today's generator would have given it.
 
-    Before the generator read a reply that is nothing but the fixed form for a missing
-    part as a decline (``base.read_the_gap_form_as_a_decline``), such a reply went to the
-    check for a reply that cites nothing, which declined it and said so. The reply shown
-    was the same fixed declining sentence. What differs is whose decline it is: the
-    model's, with no note. So a saved reply whose one check is that one, and whose words
-    are nothing but the form, is read with no check and with those words as the model's.
+    Two readings of a reply that is nothing but the fixed form for a missing part
+    (``base.read_the_gap_form_as_a_decline``) came after replies were saved:
+
+    - **One that cites nothing.** Before, it went to the check for a reply that cites
+      nothing, which declined it and said so. The reply shown was the same fixed declining
+      sentence; what differs is whose decline it is, the model's, with no note. So a saved
+      reply whose one check is that one, and whose words are nothing but the form, is read
+      with no check and with those words as the model's.
+    - **One that carries citation markers.** Before, it was an answer. It is now a decline
+      shown in the model's words with no source, and those words are the model's. This
+      applies only to a run made under instructions that give the form (``form_read``):
+      under the others no reply was ever read so.
+
     Every other reply is read as it was saved.
     """
     if (
@@ -237,7 +246,38 @@ def as_read_today(record: AnswerRecord) -> AnswerRecord:
         and only_the_gap_form(record.checks[0].removed)
     ):
         return dataclasses.replace(record, checks=(), model_text=record.checks[0].removed)
+    if form_read and record.answered and record.cited and only_the_gap_form(record.text):
+        return dataclasses.replace(
+            record,
+            answered=False,
+            statements=tuple(Statement(statement.text, ()) for statement in record.statements),
+            model_text=record.text.strip(),
+        )
     return record
+
+
+def shown_in_the_models_words(record: AnswerRecord) -> bool:
+    """Whether a reply read as the fixed form alone carried citation markers.
+
+    Such a reply is shown in the model's own words, with no source; one that cites nothing
+    is shown as the fixed declining sentence. So a saved run tells the two apart by the
+    words shown, with no request.
+    """
+    return bool(record.model_text) and plain_words(record.text) != plain_words(NOT_FOUND_MESSAGE)
+
+
+def gives_the_form(run_dir: Path) -> bool:
+    """Whether a saved run was made under instructions that give the fixed form for a
+    missing part, as the settings it recorded say. A run with no record of its settings,
+    or one of version 1, was not."""
+    settings = run_dir / RUN_FILE
+    if not settings.is_file():
+        return False
+    try:
+        config = json.loads(settings.read_text(encoding="utf-8")).get("config", {})
+    except json.JSONDecodeError:
+        return False
+    return config.get("instructions_version", 1) in GAP_FORM_VERSIONS
 
 
 def score_answer(question: GoldenQuestion, record: AnswerRecord) -> dict[str, float]:
@@ -407,7 +447,13 @@ def answers_stage(run_dir: Path) -> Stage:
         ANSWERS_FILE,
         RUN_FILE,
         holds="replies",
-        outputs=("results.jsonl", "errors.jsonl", "summary.json", "change.md"),
+        outputs=(
+            "results.jsonl",
+            "errors.jsonl",
+            "summary.json",
+            "change.md",
+            CHANGED_REPLIES_FILE,
+        ),
         traces=True,
     )
 
@@ -469,6 +515,8 @@ def saved_description(run_dir: Path) -> str | None:
 
 def _records(rows: Sequence[tuple[int, dict[str, Any]]], path: Path) -> dict[str, AnswerRecord]:
     records: dict[str, AnswerRecord] = {}
+    # The settings are kept beside the replies, whichever kind of run holds them.
+    form_read = gives_the_form(path.parent)
     for number, row in rows:
         try:
             record = AnswerRecord(
@@ -487,7 +535,7 @@ def _records(rows: Sequence[tuple[int, dict[str, Any]]], path: Path) -> dict[str
             )
         except (KeyError, TypeError) as error:
             raise SavedRunError(f"{path}:{number} is not a saved reply: {error}") from error
-        records[record.question_id] = as_read_today(record)
+        records[record.question_id] = as_read_today(record, form_read=form_read)
     return records
 
 
@@ -518,8 +566,12 @@ class AnswerReport:
     each kept its words in the saved reply, for a reader to say whether it was a right
     answer. On a question the handbook does not answer, a decline is the right call."""
     declined_in_the_gap_form: dict[str, list[str]] = field(default_factory=dict)
-    """The questions whose reply was nothing but the fixed form for a missing part, shown
-    as the fixed declining sentence: declines by the model, split as above."""
+    """The questions whose reply was nothing but the fixed form for a missing part and so
+    a decline by the model, split as above."""
+    shown_in_the_models_words: dict[str, list[str]] = field(default_factory=dict)
+    """Of those, the replies that carried citation markers, shown in the model's words with
+    no source (:func:`shown_in_the_models_words`), split as above. The others were shown
+    as the fixed declining sentence."""
 
 
 def summarise_answers(
@@ -577,6 +629,7 @@ def summarise_answers(
         }
     reply_checks: dict[str, dict[str, list[str]]] = {}
     gap_form: dict[str, list[str]] = {}
+    as_written: dict[str, list[str]] = {}
     for item in scored:
         for check in item.record.checks:
             reply_checks.setdefault(check.name, {}).setdefault(item.question.type, []).append(
@@ -584,9 +637,12 @@ def summarise_answers(
             )
         if item.record.model_text:
             gap_form.setdefault(item.question.type, []).append(item.question.id)
+        if shown_in_the_models_words(item.record):
+            as_written.setdefault(item.question.type, []).append(item.question.id)
     return AnswerReport(
         reply_checks=reply_checks,
         declined_in_the_gap_form=gap_form,
+        shown_in_the_models_words=as_written,
         scored=scored,
         failures=failed,
         not_asked=len(questions) - len(scored) - len(failed),
@@ -662,7 +718,12 @@ def changed_replies(report: AnswerReport) -> list[dict[str, object]]:
         if question.type != "answerable" or not (record.checks or record.model_text):
             continue
         done = [f"{check.name}: {check.action}" for check in record.checks]
-        if record.model_text:
+        if shown_in_the_models_words(record):
+            done.append(
+                "read as the fixed form for a missing part, with citation markers: "
+                "a decline, shown in the model's words with no source"
+            )
+        elif record.model_text:
             done.append("read as the fixed form for a missing part: shown as the decline")
         rows.append(
             {
@@ -751,6 +812,8 @@ def write_answer_run(
         summary["reply_checks"] = report.reply_checks
     if report.declined_in_the_gap_form:
         summary["declined_in_the_gap_form"] = report.declined_in_the_gap_form
+    if report.shown_in_the_models_words:
+        summary["declined_in_the_gap_form_with_markers"] = report.shown_in_the_models_words
     # For a reader of the replies a check changed or that were read as the fixed form, on
     # questions the handbook answers: a file of its own, without the run's totals.
     changed = changed_replies(report)

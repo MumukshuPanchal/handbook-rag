@@ -217,21 +217,29 @@ def read_the_gap_form_as_a_decline(
     Instructions that give the form (``prompt.GAP_FORM_VERSIONS``) ask for it after an
     answer to the part the passages do answer. A model may write it alone, for a question
     the passages do not answer at all, in place of the fixed declining sentence. That says
-    what the sentence says, so it is shown and counted as the sentence: the reply becomes
-    the fixed declining sentence and is not an answer, with no note, since nothing was
-    withheld. Returns the segments, whether the reply is an answer, and the model's own
-    words when they were replaced (empty otherwise).
+    what the sentence says, so such a reply is not an answer, and no source is listed
+    under it, whether or not it carries citation markers. Returns the segments, whether
+    the reply is an answer, and the model's own words when the reply was read so (empty
+    otherwise).
 
-    Only a reply that cites nothing is read so. One that cites a passage is an answer in
-    the form, or holds one, and stays an answer for the checks: and since a citation lets
-    the text before it be passed on while the reply is written, reading it as a decline
-    would take back what was passed on. A reply that is not an answer, or that holds
-    anything besides the form, is returned as it is.
+    - **It cites nothing**: it is shown as the fixed declining sentence, with no note,
+      since nothing of it was passed on while it was written.
+    - **It carries citation markers**: it is shown in the model's own words, without the
+      markers, which would point at no source. A citation lets the text before it be
+      passed on while the reply is written (``checks.HeldBack``), so its words may already
+      have reached the reader, and they are not taken back.
+
+    The words are what :func:`only_the_gap_form` takes for the form alone, which includes a
+    claim joined into a piece by "and", "although" or a dash: such a reply is counted as a
+    decline though it states something. Where it carried markers, the claim stays in the
+    words shown. A reply that is not an answer, or that holds anything besides the form,
+    is returned as it is.
     """
     text = "".join(segment.text for segment in segments)
-    cites = any(segment.citations for segment in segments)
-    if not answered or cites or not only_the_gap_form(text):
+    if not answered or not only_the_gap_form(text):
         return tuple(segments), answered, ""
+    if any(segment.citations for segment in segments):
+        return tuple(Segment(segment.text) for segment in segments), False, text.strip()
     return (Segment(NOT_FOUND_MESSAGE),), False, text.strip()
 
 

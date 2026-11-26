@@ -611,6 +611,15 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
     goods = {v: sum(o == "good" for o in hardening_runs.limit_outcomes(v).values()) for v in (1, 2)}
     pairs = hardening_runs.limit_pairs()
     p = hardening_runs.sign_test(len(pairs["better"]), len(pairs["worse"]))
+    blind = hardening_runs.limit_reading_pairs()
+    kept = {
+        v: sum(
+            row["label"] == "kept"
+            for (version, _), row in hardening_runs.limit_readings().items()
+            if version == v
+        )
+        for v in (1, 2)
+    }
     assert numbers(limitation) == [
         str(hardening_runs.LIMIT_QUESTIONS),
         str(len(labelled)),
@@ -635,6 +644,9 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
         str(goods[2]),
         SECOND,
         f"{p:.3f}",
+        str(kept[1]),
+        str(kept[2]),
+        f"{hardening_runs.sign_test(len(blind['better']), len(blind['worse'])):.4f}",
         LIMITS_RECORD,
         hardening_runs.RECORD,
         LIMITS_ISSUE,
@@ -663,7 +675,7 @@ def test_the_section_on_dropped_limits_is_the_committed_checks() -> None:
     assert "is measured only on 40 questions chosen for it, by a judge that errs.**" in limitation
     assert f"with {in_words(len(second['false_alarms']))} false alarm in" in limitation
     assert f"The {in_words(len(real))} real cases stay labelled unclear" in limitation
-    assert "by one model session's reading three of its verdicts behind that look wrong" in (
+    assert "a blind reading by one model session found 32 and 37 that keep their limit" in (
         limitation
     )
     assert "How often answers to the questions people ask leave out a limit is not measured" in (

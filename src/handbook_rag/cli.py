@@ -1066,6 +1066,10 @@ def eval_table(
     typer.echo(results_table(overviews, labels, chosen), nl=False)
 
 
+QUESTION_TYPES = ("answerable", "unanswerable")
+"""The types of a golden question, as ``eval-answers --only`` takes them."""
+
+
 @app.command(name="eval-answers")
 @measures
 def eval_answers(
@@ -1100,6 +1104,15 @@ def eval_answers(
         typer.Option("--restart", help="Discard the replies this run has saved, and start again."),
     ] = False,
     instructions: Annotated[int, _INSTRUCTIONS_OPTION] = CURRENT_INSTRUCTIONS,
+    only: Annotated[
+        str | None,
+        typer.Option(
+            help=(
+                "Ask only the questions of one type: 'answerable' or 'unanswerable'. The run "
+                "records the choice, and is not continued with another."
+            )
+        ),
+    ] = None,
 ) -> None:
     """Answer every golden question and score what code can check. One real request each.
 
@@ -1108,16 +1121,25 @@ def eval_answers(
     """
     settings = get_settings()
     instructions = _instructions(instructions)
+    if only is not None and only not in QUESTION_TYPES:
+        typer.echo(
+            f"error: --only takes {' or '.join(map(repr, QUESTION_TYPES))}, not {only!r}.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     config = {
         **wiring.describe_retrieval(settings),
         **wiring.describe_generation(settings, instructions),
+        # Recorded only when given, so that a run of every question records what it did.
+        **({} if only is None else {"questions": only}),
     }
     run_dir = output / variant
     try:
         if not restart:
             # Before the models are loaded, which takes a while.
             answer_runs.check_run(run_dir, config)
-        questions = _load_questions(dataset)
+        every_question = _load_questions(dataset)
+        questions = [q for q in every_question if only is None or q.type == only]
         corpus = build_corpus(settings)
         retriever = wiring.make_retriever(settings)
         # One attempt per request: no request is then sent a second time unseen, and the
@@ -1149,8 +1171,13 @@ def eval_answers(
     typer.echo(f"Answer evaluation: {variant}")
     typer.echo(f"  model        {settings.answer_model}")
     typer.echo(f"  instructions {_instructions_note(instructions)}")
+    chosen = (
+        "in the golden set"
+        if only is None
+        else f"of the golden set's {len(every_question)}, those of the type {only}"
+    )
     typer.echo(
-        f"  questions    {len(questions)} in the golden set, {reusable} already answered, "
+        f"  questions    {len(questions)} {chosen}, {reusable} already answered, "
         f"{to_ask} to ask now"
     )
     if to_ask:
@@ -1396,6 +1423,24 @@ def _echo_reply_checks(report: answer_runs.AnswerReport) -> None:
             "  gap form     replies that were nothing but the fixed form for a missing part, "
             f"shown as declines: {counted(report.declined_in_the_gap_form)}"
         )
+    if report.shown_in_the_models_words:
+        typer.echo(
+            "               of them with citation markers, shown in the model's words with no "
+            f"source: {counted(report.shown_in_the_models_words)}"
+        )
+    # Every reply that counts as an answer to a question the handbook does not answer, in
+    # full, so that a reader can see whether it says that the passages do not say.
+    answered = [item for item in unanswerable if item.record.answered]
+    if answered:
+        typer.echo(
+            f"  answered     {len(answered)} of the {len(unanswerable)} questions the handbook "
+            "does not answer, each in full:"
+        )
+        for item in answered:
+            lines = item.record.text_with_markers.strip().splitlines() or [""]
+            typer.echo(f"    {item.question.id}  {lines[0]}")
+            for line in lines[1:]:
+                typer.echo(f"    {'':<{len(item.question.id)}}  {line}")
 
 
 def _version_option(version: int) -> str:

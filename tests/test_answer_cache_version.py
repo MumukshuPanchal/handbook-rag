@@ -101,8 +101,18 @@ PINNED = {
     # served to the very same question only. The product no longer answers under version
     # 1 and an evaluation never has a cache, so the collection of version 1 is never read
     # again; version 2 is not released. It stays.
-    "generate/base.py": "e5ed32ac306da474",
-    "generate/checks.py": "3f3480b023da93b6",
+    #
+    # After line e was met on the answer evaluation under version 2: a reply made only of
+    # the fixed form for a missing part is a decline whether or not it carries citation
+    # markers. With markers, it is shown in the model's words with no source; before, it was
+    # an answer with sources. Such an answer, stored before, holds the fixed form, so the
+    # second tier never served it: it is served to the very same question only, as the
+    # decline it now is would be, and it is no more wrong than when it was stored. A reply
+    # that is that form once a check has dropped a line after it is a decline too, and,
+    # changed by a check, is not kept. Version 2 is not released, and an evaluation never
+    # has a cache. It stays.
+    "generate/base.py": "0ee531a76b7e64ab",
+    "generate/checks.py": "c707db1c3e33db67",
     "generate/claude.py": "0a4a690b15c721b1",
     "generate/gemini.py": "52356590fc24d86b",
     "generate/markers.py": "db2add40ed28b909",

@@ -61,7 +61,7 @@ ANSWERED = (
     "malformed checks",
     "malformed items",
 )
-DECLINED = ("declined", "cached", "check declined")
+DECLINED = ("declined", "cached", "check declined", "form declined")
 FAILED = (
     "error after text",
     "unreadable answer",
@@ -70,6 +70,9 @@ FAILED = (
     "stream cut",
     "failure before new",
 )
+# The words of a reply made only of the fixed form, which carried citation markers: the
+# service sends it as a decline in those words, with no source (ADR 0025).
+FORM = "The passages found do not say how much the backup care benefit pays per year."
 # Steps recorded while an answer was still coming, when its turn had not ended.
 UNDER_WAY = ("waiting", "writing")
 
@@ -172,8 +175,13 @@ def turn_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         step = steps[name]
         if not step["decline"] or step["error"] or step["answer"]:
             found.append(f"a decline is not shown as a calm notice ({name})")
-        if "I could not find this in the handbook." not in " ".join(step["notice"]):
+        words = FORM if name == "form declined" else "I could not find this in the handbook."
+        if words not in " ".join(step["notice"]):
             found.append(f"a decline does not show the reply's own words ({name})")
+        if step["chips"] or step["cards"]:
+            found.append(f"a decline shows a number or a source card ({name})")
+        if step["sourcesNone"] != "Nothing is cited: this reply is not an answer.":
+            found.append(f"a decline does not say that nothing is cited ({name})")
     withheld = steps["withheld"]
     if not withheld["unfinished"] or withheld["decline"] or withheld["error"]:
         found.append("a reply that was withheld or cut off is shown as a decline or a failure")

@@ -610,3 +610,15 @@ def test_a_citation_that_follows_the_decline_is_held_back_and_all_after_it() -> 
     )
 
     assert received == ["Sixteen weeks."]
+
+
+def test_a_cited_reply_of_the_form_alone_is_read_as_a_decline_in_its_words_with_no_citation() -> (
+    None
+):
+    segments = (cited(f"{GAP_FORM} who pays.", LEAVE), Segment(f" {GAP_FORM} when."))
+
+    assert read_the_gap_form_as_a_decline(segments, answered=True) == (
+        (Segment(f"{GAP_FORM} who pays."), Segment(f" {GAP_FORM} when.")),
+        False,
+        f"{GAP_FORM} who pays. {GAP_FORM} when.",
+    )

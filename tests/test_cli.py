@@ -4867,3 +4867,52 @@ def test_ask_with_earlier_questions_that_hold_no_letter_says_nothing_of_follow_u
     assert "Searched for" not in result.output
     assert rewriter.calls == []
     assert model.asked == ["how many weeks of leave"]
+
+
+class AnswersEverything(EvalModel):
+    """Answers every question from its first passage, parking included, over two lines."""
+
+    def generate(
+        self,
+        question: str,
+        chunks: Sequence[Chunk],
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Answer:
+        written = super().generate(question, chunks, on_text=on_text)
+        segments = (
+            Segment("A first line.", (Citation(chunks[0]),)),
+            Segment("\nA second line.", (Citation(chunks[0]),)),
+        )
+        return dataclasses.replace(written, segments=segments, answered=True)
+
+
+def test_eval_answers_asks_only_the_questions_of_one_type_and_lists_their_answers_in_full(
+    monkeypatch: pytest.MonkeyPatch, answer_run: list[str], tmp_path: Path
+) -> None:
+    model = AnswersEverything()
+    monkeypatch.setattr("handbook_rag.wiring.make_generator", model.build)
+
+    result = runner.invoke(app, [*answer_run, "--variant", "only", "--only", "unanswerable"])
+
+    assert result.exit_code == 0, result.output
+    assert model.questions == ["how much is the parking allowance"]
+    assert (
+        "1 of the golden set's 2, those of the type unanswerable, 0 already answered, 1 to ask now"
+        in result.output
+    )
+    assert "declined 0 of the 1 it does not" in result.output
+    # Each reply that counts as an answer to a question the handbook does not answer, whole.
+    assert "answered     1 of the 1 questions the handbook does not answer, each in full:" in (
+        result.output
+    )
+    assert "    u001  A first line.[1]\n          A second line.[1]\n" in result.output
+    run = json.loads((tmp_path / "runs" / "only" / "run.json").read_text())
+    assert run["config"]["questions"] == "unanswerable"
+    # A run of one type is not continued with every question, nor the other way.
+    every = runner.invoke(app, [*answer_run, "--variant", "only"])
+    assert every.exit_code == 1
+    assert "made with other settings" in every.output
+    wrong = runner.invoke(app, [*answer_run, "--variant", "x", "--only", "some"])
+    assert wrong.exit_code == 1
+    assert "--only takes 'answerable' or 'unanswerable', not 'some'." in wrong.output

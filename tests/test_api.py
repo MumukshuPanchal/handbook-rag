@@ -10,11 +10,12 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import suppress
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from google import genai
 from httpx2 import Response
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -51,8 +52,9 @@ from handbook_rag.api import (
 from handbook_rag.cli import app as cli
 from handbook_rag.config import Settings
 from handbook_rag.generate.base import GenerationError, Generator
+from handbook_rag.generate.gemini import GeminiGenerator
 from handbook_rag.generate.models import Answer, Citation, ReplyCheck, Segment, TokenUsage
-from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
+from handbook_rag.generate.prompt import GAP_FORM, NOT_FOUND_MESSAGE
 from handbook_rag.generate.retrying import RetryingGenerator
 from handbook_rag.index.indexer import index_chunks
 from handbook_rag.index.store import (
@@ -73,6 +75,9 @@ from handbook_rag.streaming import (
     Text,
     server_sent_event,
 )
+from tests.generate.test_gemini import MODEL as GEMINI_MODEL
+from tests.generate.test_gemini import FakeClient as GeminiClient
+from tests.generate.test_gemini import answer_pieces
 from tests.support import (
     FakeEmbedder,
     FakeSparseEncoder,
@@ -1702,3 +1707,25 @@ def test_a_request_cancelled_while_it_waits_for_its_answer_stops_the_model_call(
     assert isinstance(model.interrupted, CallerGone)
     assert model.written == []
     assert slots_in_use(application) == 0
+
+
+def test_a_cited_reply_made_only_of_the_fixed_form_is_a_decline_in_both_forms() -> None:
+    """The real generator of version 2, on a stand-in client: the words stay the model's,
+    and no source and no marker are given, in a response and at the end of a stream."""
+    words = f"{GAP_FORM} how much the backup care benefit pays per year."
+
+    def generator() -> GeminiGenerator:
+        client = GeminiClient(answer_pieces(words[:20], words[20:], "[1]"))
+        return GeminiGenerator(cast(genai.Client, client), model=GEMINI_MODEL, max_tokens=4000)
+
+    with TestClient(answering(generator())) as client:
+        body = client.post("/ask", json={"query": QUESTION}).json()
+    with TestClient(answering(generator())) as client:
+        streamed = client.post("/ask", json={"query": QUESTION, "stream": True})
+
+    assert (body["answer"], body["answered"], body["sources"]) == (words, False, [])
+    assert all(segment["sources"] == [] for segment in body["segments"])
+    last = json.loads(answer_event(streamed.content))
+    assert (last["answer"], last["answered"], last["sources"]) == (words, False, [])
+    texts = re.findall(rb"event: text\ndata: (\{.*?\})\n\n", streamed.content)
+    assert "".join(json.loads(text)["text"] for text in texts) == words

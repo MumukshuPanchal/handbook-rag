@@ -1,0 +1,5 @@
+{"reader": "claude-opus-5-5, one session, 26 November 2026"}
+{"question_id": "q037", "lost": false, "unsure": false, "note": "The model's own words say \"The passages found do not say who makes the final call\", so they never gave the fact (the Tenant Scale PM) that the decline then hid."}
+{"question_id": "q085", "lost": false, "unsure": false, "note": "The model's own words say \"The passages found do not say by what day each month product managers need to have recorded and posted their group kickoff calls\", so the 15th was never given and nothing was lost."}
+{"question_id": "q093", "lost": true, "unsure": false, "note": "The model wrote \"the backend upserts into the database tables in this order: 1. `packages` 2. `package_versions` 3. `dependency_files` 4. `project_dependencies`\", which matches the reference order, but the person saw only \"I could not find this in the handbook.\""}
+{"question_id": "q100", "lost": false, "unsure": false, "note": "The model's own words say \"The passages found do not say where outside code contributors' documentation should live\", so they never gave the fact (the GitLab project, not the handbook)."}

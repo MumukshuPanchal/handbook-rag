@@ -1,0 +1,9 @@
+{
+  "config": {
+    "judge_model": "gemini-3.5-flash-lite",
+    "judge_max_tokens": 2000,
+    "judge_instructions": "55cfbf9f3908dbee",
+    "judge_request": "e1dafe5ecd1168d3"
+  },
+  "attempts": 128
+}

@@ -1,0 +1,115 @@
+{
+  "run": "evals/runs/judge/baseline",
+  "config": {
+    "judge_model": "gemini-3.5-flash-lite",
+    "judge_max_tokens": 2000,
+    "judge_instructions": "55cfbf9f3908dbee",
+    "judge_request": "e1dafe5ecd1168d3"
+  },
+  "answers": {
+    "labelled": 169,
+    "judged": 169
+  },
+  "agreement": {
+    "statements": 259,
+    "same_decision": {
+      "mean": 0.9961389961389961,
+      "low": 0.9784576199704531,
+      "high": 0.9993181125712913,
+      "count": 259
+    },
+    "recall": {
+      "mean": 1.0,
+      "low": 0.9143324285798756,
+      "high": 1.0,
+      "count": 41
+    },
+    "precision": {
+      "mean": 0.9761904761904762,
+      "low": 0.8767879830621691,
+      "high": 0.9957845959122008,
+      "count": 42
+    },
+    "kappa": 0.9857,
+    "caught": {
+      "added_detail": [
+        5,
+        5
+      ],
+      "name": [
+        5,
+        5
+      ],
+      "negation": [
+        5,
+        5
+      ],
+      "number": [
+        5,
+        5
+      ],
+      "other_question": [
+        5,
+        5
+      ],
+      "real": [
+        1,
+        1
+      ],
+      "scope": [
+        5,
+        5
+      ],
+      "uncited": [
+        5,
+        5
+      ],
+      "wrong_passage": [
+        5,
+        5
+      ]
+    },
+    "matrix": {
+      "supported": {
+        "supported": 213,
+        "unsupported": 0,
+        "no_claim": 2
+      },
+      "unsupported": {
+        "supported": 0,
+        "unsupported": 41,
+        "no_claim": 0
+      },
+      "no_claim": {
+        "supported": 1,
+        "unsupported": 1,
+        "no_claim": 1
+      }
+    },
+    "answers": 169,
+    "same_answer": {
+      "mean": 0.9940828402366864,
+      "low": 0.967248658484073,
+      "high": 0.9989547112450159,
+      "count": 169
+    },
+    "answer_recall": {
+      "mean": 1.0,
+      "low": 0.9143324285798756,
+      "high": 1.0,
+      "count": 41
+    },
+    "answer_precision": {
+      "mean": 0.9761904761904762,
+      "low": 0.8767879830621691,
+      "high": 0.9957845959122008,
+      "count": 42
+    },
+    "same_verdict": {
+      "mean": 0.9845559845559846,
+      "low": 0.9609701228883477,
+      "high": 0.9939781606446402,
+      "count": 259
+    }
+  }
+}

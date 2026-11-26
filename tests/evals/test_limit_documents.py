@@ -612,10 +612,9 @@ def test_what_the_decision_record_says_in_words_is_what_the_runs_hold() -> None:
     assert "By the labels, version 2 found no fault in the real answers that version 1 missed" in (
         text
     )
-    # The allowance, and the cost of measuring the answers again as the README gives it now
-    # that the adversarial cases have been asked under the new instructions (ADR 0025).
+    # The allowance. The answers have been measured again under the new instructions since,
+    # and ADR 0025 gives what that run cost.
     assert f"{A_DAY} a day" in readme
-    assert "about 420 requests, of the free key's 500 a day" in readme
     # What was not done is said, and so is what is a plan.
     assert "- Status: Accepted" in text
     assert "The default does not change." in text
@@ -1178,7 +1177,15 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
     assert line_starting(roadmap, "2. **Harden the assistant against planted instructions")
     # Item 3 gives the questions of the limit answers asked under both sets of instructions,
     # as the runs hold them (tests/evals/test_hardening_documents.py holds the figures).
-    pairs, read_pairs = hardening_runs.limit_pairs(), hardening_runs.limit_pairs(read=True)
+    pairs, blind = hardening_runs.limit_pairs(), hardening_runs.limit_reading_pairs()
+    kept = {
+        v: sum(
+            row["label"] == "kept"
+            for (version, _), row in hardening_runs.limit_readings().items()
+            if version == v
+        )
+        for v in (1, 2)
+    }
     goods = {v: sum(o == "good" for o in hardening_runs.limit_outcomes(v).values()) for v in (1, 2)}
     assert numbers(item) == [
         "3",
@@ -1193,15 +1200,16 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
         str(goods[1]),
         str(len(pairs["better"])),
         f"{hardening_runs.sign_test(len(pairs['better']), len(pairs['worse'])):.3f}",
-        str(len(read_pairs["better"])),
-        str(len(read_pairs["worse"])),
-        f"{hardening_runs.sign_test(len(read_pairs['better']), len(read_pairs['worse'])):.3f}",
+        str(kept[1]),
+        str(kept[2]),
+        str(len(blind["better"])),
+        f"{hardening_runs.sign_test(len(blind['better']), len(blind['worse'])):.4f}",
         SECOND,
         FIRST,
         FIRST,
         RUBRIC,
     ]
-    assert "a person's reading of the eight faulted answers" in item
+    assert "a person's reading of the answers on which the reader and the judge differ" in item
     assert numbers(started) == [
         LIMITS,
         str(known["answers"]),

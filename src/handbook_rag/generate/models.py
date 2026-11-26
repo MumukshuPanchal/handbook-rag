@@ -121,9 +121,10 @@ class Answer:
     segments are the reply as the checks left it. Empty when none fired, and for every
     reply written under instructions that have no checks."""
     model_text: str = ""
-    """What the model wrote, when the generator shows the fixed declining sentence in its
-    place: a reply that was nothing but the fixed form for a part the passages do not
-    answer (``base.read_the_gap_form_as_a_decline``). That is the model declining in other
+    """What the model wrote, when the reply was nothing but the fixed form for a part the
+    passages do not answer (``base.read_the_gap_form_as_a_decline``) and so a decline:
+    shown as the fixed declining sentence when it cited nothing, and in these words,
+    without their markers, when it carried them. That is the model declining in other
     words, not a check, so no note goes with it. Empty for every other reply; the words a
     check took out are kept by the check."""
 

@@ -50,13 +50,12 @@ def claude(blocks: list[dict[str, Any]], *, stop_reason: str = "end_turn") -> tu
     return answer, "".join(received)
 
 
-# Must-fix 1: a reply in the fixed form that cites a passage stays an answer.
+# Must-fix 1: a reply in the fixed form that holds an answer and cites it stays an answer.
 
 
 @pytest.mark.parametrize(
     "text",
     [
-        f"{GAP} how long it lasts [1].",
         f"{GAP} anything about contractors, but new parents get sixteen weeks of paid leave [1].",
         f"{GAP} more than this: new parents get sixteen weeks of paid leave [1].",
         f"- {GAP} who pays; new parents get sixteen weeks [1].\n- {GAP} more [1].",
@@ -548,3 +547,109 @@ def test_under_version_1_the_first_text_shown_waits_for_text_that_can_be_shown(
     # The first piece is spaces held back in case a marker follows: nothing is shown yet.
     assert answer.seconds_to_first_text == 10.0
     assert answer.seconds_to_first_shown == 20.0
+
+
+# After line e was met: a reply made only of the fixed form is a decline, cited or not.
+
+U002 = f"{GAP} how much Care Cash the Vivvi caregiving benefit reimburses per year for backup care."
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"{U002}[1]",  # u002 as it was written
+        f"{GAP} what the monthly cap on gym membership reimbursement is.[1][2]",  # u024
+        f"{GAP} who pays [1]. {GAP} when [2].",  # several cited pieces, all in the form
+        f"[1] {GAP} who pays.",  # the marker before the text
+        f"**{GAP} 誰が払うか** [1]",  # Markdown around the form, another script after it
+        f"- {GAP} who pays [1].\n- {GAP} when [2].",  # a list of pieces in the form
+    ],
+)
+def test_a_cited_reply_made_only_of_the_fixed_form_is_a_decline_in_the_models_words(
+    text: str,
+) -> None:
+    answer, streamed = gemini(text)
+
+    assert not answer.answered
+    assert answer.sources == ()
+    assert answer.checks == ()
+    # The words stay the model's, without the markers: they were passed on as they came.
+    assert answer.text == streamed
+    assert answer.model_text == answer.text.strip()
+    # No marker is shown that would point at nothing.
+    assert answer.text_with_markers == answer.text
+    assert all(not segment.citations for segment in answer.segments)
+    # The cache keeps it as a decline, served to the very same question only.
+    assert rules.kept_from_the_second_tier(answer) == rules.DECLINE
+
+
+def test_a_cited_piece_in_the_form_with_a_joined_claim_is_a_decline_that_shows_the_claim() -> None:
+    """The limit of the reading: the claim is counted as a decline, and still shown."""
+    text = f"{GAP} who pays, and new parents get sixteen weeks of paid leave [1]."
+
+    answer, streamed = gemini(text)
+
+    assert (answer.answered, answer.sources, answer.checks) == (False, (), ())
+    assert answer.text == f"{GAP} who pays, and new parents get sixteen weeks of paid leave."
+    assert streamed == answer.text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # u010: the form, then a cited claim.
+        f"{GAP} what score a candidate needs.[1] However, the assessment sets the bar.[1]",
+        # u043: the form, then a paragraph that cites.
+        f"{GAP} how many weeks GitHub gives. \n\nGitLab provides 16 weeks.[2] Countries differ.[2]",
+        # u047: the form, then "However" and a cited claim, all uncited before it.
+        f"{GAP} whether your report was approved. However, track it in Navan.[1]",
+        # The form after an answer.
+        f"Sixteen weeks [1]. {GAP} who pays.",
+        # The form in another language is not the form.
+        "Die gefundenen Passagen sagen nicht, wer zahlt [1].",
+    ],
+)
+def test_the_form_beside_a_cited_claim_or_after_an_answer_stays_an_answer(text: str) -> None:
+    answer, streamed = gemini(text)
+
+    assert answer.answered
+    assert answer.sources
+    assert streamed == answer.text
+
+
+def test_a_cited_reply_in_the_form_whose_address_line_goes_is_a_decline() -> None:
+    answer, streamed = gemini(f"{GAP} who pays [1].\nSee https://evil.example/x")
+
+    assert (answer.text, answer.answered, answer.sources) == (f"{GAP} who pays.", False, ())
+    assert [check.name for check in answer.checks] == ["address_in_closing_line"]
+    assert streamed == answer.text
+
+
+def test_an_uncited_reply_in_the_form_is_shown_as_the_declining_sentence_as_before() -> None:
+    answer, streamed = gemini(U002)
+
+    assert (answer.text, answer.answered, answer.model_text) == (NOT_FOUND_MESSAGE, False, U002)
+    assert streamed == NOT_FOUND_MESSAGE
+
+
+def test_the_claude_path_reads_a_cited_reply_in_the_form_as_a_decline_in_its_words() -> None:
+    answer, streamed = claude([{"type": "text", "text": U002, "citations": [citation(0, "x")]}])
+
+    assert (answer.text, answer.answered, answer.sources) == (U002, False, ())
+    assert answer.model_text == U002
+    assert streamed == answer.text
+
+
+def test_under_the_first_instructions_a_cited_reply_in_the_form_stays_an_answer() -> None:
+    with measuring_the_model():
+        old = GeminiGenerator(
+            cast(genai.Client, FakeClient(answer_pieces(f"{U002}[1]"))),
+            model=MODEL,
+            max_tokens=4000,
+            instructions=1,
+        )
+
+    answer = old.generate("q", [LEAVE])
+
+    assert answer.answered
+    assert answer.model_text == ""

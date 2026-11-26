@@ -53,11 +53,12 @@ A check that changes a reply always says so: each check that fires is recorded o
 answer with a note in fixed words, which every surface shows with it. The words the model
 wrote and a check took out are kept for an evaluation to read, and never shown. One change
 is made before the checks and with no note: a reply read as the fixed form for a missing
-part alone (``base.read_the_gap_form_as_a_decline``) is shown as the fixed declining
-sentence, and its words are kept in the same way. A reply in that form that also asserts
-something without a citation, joined into the same sentence, is read the same way, which
-is a limit (``base.only_the_gap_form``). A decline lists no source, even when the model put
-a marker after it.
+part alone (``base.read_the_gap_form_as_a_decline``) is a decline, shown as the fixed
+declining sentence when it cites nothing and in its own words, without its markers, when
+it carried them; its words are kept in the same way. A reply in that form that also
+asserts something, joined into the same sentence, is read the same way, which is a limit
+(``base.only_the_gap_form``). A decline lists no source, even when the model put a marker
+after it.
 
 So that what was streamed is never taken back, the generator passes text on only once a
 citation follows it (:class:`HeldBack`): the text after the last citation, which is all a
@@ -70,7 +71,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from handbook_rag.generate.base import cites_the_decline, is_answered, plain_words
+from handbook_rag.generate.base import (
+    cites_the_decline,
+    is_answered,
+    only_the_gap_form,
+    plain_words,
+)
 from handbook_rag.generate.models import ReplyCheck, Segment
 from handbook_rag.generate.prompt import NOT_FOUND_MESSAGE
 from handbook_rag.ingest.models import Chunk
@@ -159,9 +165,13 @@ def check_reply(
     if not answered:
         return _not_an_answer(replied, ended=ended)
     checked = _an_answer(replied, chunks)
-    if checked.answered and not is_answered(checked.segments, refused=False):
+    left = "".join(segment.text for segment in checked.segments)
+    if checked.answered and (
+        not is_answered(checked.segments, refused=False) or only_the_gap_form(left)
+    ):
         # What the checks left says no more than that the handbook lacks the answer, as
-        # "[1] I could not find this in the handbook." does once a line after it is gone.
+        # "[1] I could not find this in the handbook." does once a line after it is gone,
+        # or as a cited sentence in the fixed form does once an address after it is gone.
         declined = _not_an_answer(checked.segments, ended=True)
         return CheckedReply(declined.segments, False, (*checked.checks, *declined.checks))
     return checked
@@ -193,17 +203,22 @@ def _not_an_answer(replied: tuple[Segment, ...], *, ended: bool) -> CheckedReply
     """A reply that is not an answer, with nothing in it beside what a decline says.
 
     After a normal end, a reply that is not an answer is the fixed declining sentence,
-    whatever its case and marks; or cites nothing; or cites only after the fixed sentence
-    (``base.is_answered``). The first is left as it is, with no source. The others, if they
-    hold other words, are shown as the fixed sentence: none of their text was passed on,
+    whatever its case and marks; or nothing but the fixed form for a missing part, with
+    citation markers (``base.read_the_gap_form_as_a_decline``); or cites nothing; or cites
+    only after the fixed sentence (``base.is_answered``). The first two are left as they
+    are, with no source. The others, if they hold other words, are shown as the fixed
+    sentence: none of their text was passed on,
     since :class:`HeldBack` holds back a citation that follows the fixed sentence. A reply
     that did not come to a proper end keeps what a citation follows, which may have been
     passed on, and loses the rest.
     """
     text = "".join(segment.text for segment in replied)
     if ended:
-        if not plain_words(text) or plain_words(text) == plain_words(NOT_FOUND_MESSAGE):
-            # The words are left as they are, and a marker after them names no source.
+        said = plain_words(text)
+        if not said or said == plain_words(NOT_FOUND_MESSAGE) or only_the_gap_form(text):
+            # The words are left as they are, and a marker after them names no source. The
+            # fixed form alone says what the declining sentence says, and its words may
+            # have been passed on (``base.read_the_gap_form_as_a_decline``).
             return CheckedReply(tuple(Segment(segment.text) for segment in replied), False, ())
         check = ReplyCheck(
             WORDS_BESIDE_A_DECLINE, DROPPED_WORDS, NOTES[WORDS_BESIDE_A_DECLINE], text.strip()
@@ -272,10 +287,11 @@ class HeldBack:
 
     A checked reply is changed only after its last citation; or as a whole when it cites
     nothing, or cites only after the fixed declining sentence (:func:`check_reply`,
-    ``base.read_the_gap_form_as_a_decline``). So text that a citation follows is never
-    changed, and is passed on as it comes, unless that citation follows the fixed
-    sentence; the rest waits until the checks have been made. What was passed on is then
-    always the start of the reply as it is kept.
+    ``base.read_the_gap_form_as_a_decline``). A reply that is nothing but the fixed form
+    for a missing part loses its citations and keeps its words. So text that a citation
+    follows is never changed, and is passed on as it comes, unless that citation follows
+    the fixed sentence; the rest waits until the checks have been made. What was passed on
+    is then always the start of the reply as it is kept.
     """
 
     def __init__(self, on_text: Callable[[str], None] | None) -> None:

@@ -46,6 +46,8 @@ LIMIT_QUESTIONS = len(load_limit_questions(ROOT / LIMIT_CASES))
 HELD_OUT_PENDING = "The results of the held-out cases are not in yet"
 LIMITS_PENDING = "limit questions under both sets of instructions are not measured yet"
 ANSWERS_PENDING = "The answer evaluation under version 2 is not run yet"
+CORRECTNESS_PENDING = "The correctness judge has not finished reading it"
+CONFIRMATION_PENDING = "The confirmation run is not made yet"
 
 # The rule for keeping the second variant, fixed before it was asked.
 KEEP_RULE = {"planted": 18, "out_of_scope": 16, "other_kinds": 4, "kept": 17}
@@ -432,3 +434,121 @@ def limit_pairs(read: bool = False) -> dict[str, list[str]]:
         "worse": sorted(c for c in before if before[c] == "good" and after[c] != "good"),
         "same": sorted(c for c in before if (before[c] == "good") == (after[c] == "good")),
     }
+
+
+# The blind reading of the 80 limit answers (the note of 14:22 on 26 November): one model
+# session, given the items mixed under neutral names, without the run or the verdict.
+
+LIMIT_READING = RUNS / "limits" / "reading"
+VERSION_OF_RUN = {"baseline": 1, "hardened": 2}
+
+
+def limit_reading_key() -> dict[str, tuple[int, str]]:
+    """Which version and question each item of the packet is, by the item's name."""
+    key = json.loads((LIMIT_READING / "key.json").read_text(encoding="utf-8"))
+    return {item: (VERSION_OF_RUN[e["run"]], e["case"]) for item, e in key["items"].items()}
+
+
+def limit_readings() -> dict[tuple[int, str], dict[str, Any]]:
+    """The reader's label of each answer, by version and question."""
+    lines = (LIMIT_READING / "readings.jsonl").read_text(encoding="utf-8").splitlines()
+    key = limit_reading_key()
+    return {key[row["item"]]: row for row in map(json.loads, lines[1:]) if row}
+
+
+def limit_reading_pairs(*, unsure_as_left_out: bool = False) -> dict[str, list[str]]:
+    """The questions whose answer keeps the limit by the reader under version 2 and not
+    under 1, the other way, and the same. With ``unsure_as_left_out``, a label of kept
+    that the reader marked unsure counts as not kept, under either version: the reading
+    less kind to version 2 here, since its one weaker wording is the one that moved."""
+    readings = limit_readings()
+
+    def kept(version: int, case: str) -> bool:
+        row = readings[(version, case)]
+        return row["label"] == "kept" and not (unsure_as_left_out and row["unsure"])
+
+    cases = sorted({case for _, case in readings})
+    return {
+        "better": [c for c in cases if kept(2, c) and not kept(1, c)],
+        "worse": [c for c in cases if kept(1, c) and not kept(2, c)],
+        "same": [c for c in cases if kept(1, c) == kept(2, c)],
+    }
+
+
+def reader_and_judge_differ() -> list[tuple[int, str]]:
+    """The answers on which the reader's "kept" and the judge's "no statement faulted"
+    differ."""
+    readings = limit_readings()
+    outcomes = {version: limit_outcomes(version) for version in (1, 2)}
+    return sorted(
+        (version, case)
+        for (version, case), row in readings.items()
+        if (row["label"] == "kept") != (outcomes[version][case] == "good")
+    )
+
+
+# The answer evaluation under version 2 (the note of 14:34 on 26 November).
+
+ANSWER_RUN_V2 = RUNS / "answers" / "hardened"
+CONFIRMATION = RUNS / "answers" / "hardened-unanswerable"
+LINE_C = ANSWER_RUN_V2 / "line-c"
+GOLDEN_SET = ROOT / "evals" / "golden" / "questions.jsonl"
+
+
+@functools.cache
+def golden_types() -> dict[str, str]:
+    lines = GOLDEN_SET.read_text(encoding="utf-8").splitlines()
+    return {row["id"]: row["type"] for row in map(json.loads, lines) if row}
+
+
+def answered_as_made(run_dir: Path) -> dict[str, bool]:
+    """Whether each question got an answer, as the code that made the run wrote it: the
+    saved reply's own ``answered``, the latest reply to a question winning, with no reading
+    of today's applied."""
+    answered: dict[str, bool] = {}
+    for line in (run_dir / "answers.jsonl").read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            row = json.loads(line)
+            answered[row["question_id"]] = bool(row["answered"])
+    return answered
+
+
+def answered_today(run_dir: Path) -> dict[str, bool]:
+    """Whether each question got an answer, as today's code reads the saved replies."""
+    return {case: r.answered for case, r in load_records(run_dir / "answers.jsonl").items()}
+
+
+def calls(answered: dict[str, bool]) -> dict[str, Any]:
+    """Answers to the questions the handbook answers, declines of those it does not, and
+    the right calls, with the questions behind each count."""
+    types = golden_types()
+    right = {q: answered[q] == (types[q] == "answerable") for q in answered}
+    return {
+        "answered": sum(answered[q] for q in answered if types[q] == "answerable"),
+        "answerable": sum(1 for q in answered if types[q] == "answerable"),
+        "declined": sum(not answered[q] for q in answered if types[q] != "answerable"),
+        "unanswerable": sum(1 for q in answered if types[q] != "answerable"),
+        "right": right,
+        "right_calls": sum(right.values()),
+    }
+
+
+def changed_calls(before: dict[str, bool], after: dict[str, bool]) -> dict[str, list[str]]:
+    """The questions whose call went wrong, and those whose call went right, between two
+    readings of the same questions."""
+    b, a = calls(before)["right"], calls(after)["right"]
+    return {
+        "worse": sorted(q for q in b if b[q] and not a[q]),
+        "better": sorted(q for q in b if a[q] and not b[q]),
+    }
+
+
+def line_c_lost() -> list[str]:
+    """The replies the line-c reader found the person lost the answer in."""
+    lines = (LINE_C / "readings.jsonl").read_text(encoding="utf-8").splitlines()
+    return sorted(row["question_id"] for row in map(json.loads, lines[1:]) if row and row["lost"])
+
+
+def judged_under_version_2() -> bool:
+    """Whether both judges have read the answer run under version 2."""
+    return all((ANSWER_RUN_V2 / name).is_file() for name in ("support.jsonl", "correct.jsonl"))

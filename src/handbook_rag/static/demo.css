@@ -588,7 +588,7 @@ button[aria-disabled="true"] {
   place-items: center;
   min-width: 1.45em;
   height: 1.45em;
-  margin: 0 0.16em 0 0.32em;
+  margin: 0 0.16em 0 0.36em;
   padding: 0.14em 0.22em 0;
   border: 0;
   border-radius: 50%;
@@ -606,8 +606,9 @@ button[aria-disabled="true"] {
   outline-offset: 2px;
 }
 
+/* A focused citation's ring sits close, so that the full stop before it stays clear. */
 .cite:focus-visible {
-  outline-offset: 1px;
+  outline-offset: 0;
 }
 
 .line-1 {
@@ -1414,8 +1415,8 @@ textarea:focus-visible {
     padding: 4px 16px 0;
   }
 
-  /* The dock keeps to a few lines: the two controls in one row, the box, then the status
-     beside the count, on as many lines as its words need. */
+  /* The dock keeps to a few lines: the two controls in one row, the box, the count, and
+     the status on a row of its own, the full width, on as many lines as its words need. */
   .on-narrow {
     display: inline;
   }
@@ -1439,8 +1440,15 @@ textarea:focus-visible {
   }
 
   .composer-meta {
-    grid-template-areas: "status count";
+    grid-template-areas:
+      "count"
+      "status";
+    grid-template-columns: minmax(0, 1fr);
     margin-top: var(--s1);
+  }
+
+  .count {
+    justify-self: end;
   }
 
   .status {

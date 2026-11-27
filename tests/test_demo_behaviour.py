@@ -85,7 +85,7 @@ FAILED = (
 # service sends it as a decline in those words, with no source (ADR 0025).
 FORM = "The passages found do not say how much the backup care benefit pays per year."
 # Steps recorded while an answer was still coming, when its turn had not ended.
-UNDER_WAY = ("waiting", "searched", "writing", "waiting first")
+UNDER_WAY = ("waiting", "searched", "writing", "waiting first", "searching")
 
 
 def script() -> str:
@@ -352,6 +352,7 @@ def route_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         ("withheld", "Withheld", "the model stopped: safety"),
         ("check cut", "Stopped early", "the model stopped: other"),
         ("cut at the limit", "Cut off", "the model stopped: max_tokens"),
+        ("refused by the provider", "Withheld", "the model stopped: refusal"),
     ):
         last = steps[name]["stops"][-1]
         if last["name"] != end or last["state"] != "end" or words not in last["detail"]:
@@ -865,6 +866,11 @@ def line_end_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
     ):
         if steps[name]["stops"][-1:] and steps[name]["stops"][-1]["detail"] != words:
             found.append(f"a line that broke off does not say what went wrong ({name})")
+    not_a_stream = steps["not a stream"]
+    if names(not_a_stream) != ["Asked", "Not answered"] or (
+        detail(not_a_stream, "Not answered") != "the answer could not be read"
+    ):
+        found.append("a reply that is not a stream is said to be a failed request")
     if detail(steps["no text"], "No answer in them") != "no text came":
         found.append("a reply that came with no text is said to have had first words")
     for name in ("declined", "no text"):
@@ -906,6 +912,21 @@ def fold_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
             )
     if steps["waiting first"]["searchFoldShown"] or not steps["stopped early"]["searchFoldShown"]:
         found.append("the fold of the page's own search shows before the line reaches the search")
+    refused = steps["refused first"]
+    if (
+        not refused["searchFoldShown"]
+        or refused["searchCount"] != "The page's own search found 1 passage."
+    ):
+        found.append(
+            "a request that failed before the search hides what the page's own search found"
+        )
+    searching = steps["searching"]
+    if (
+        not searching["searchFoldShown"]
+        or searching["searchCount"] != "The page's own search is running."
+        or "nothing-more" not in searching["searchFoldClasses"]
+    ):
+        found.append("the fold's control says nothing while the page's own search runs")
     if (
         "no-sources" not in steps["declined"]["sideClasses"]
         or "no-sources" in steps["cited"]["sideClasses"]
@@ -1597,6 +1618,10 @@ def fallback_faults(cited: dict[str, Any]) -> list[str]:
         found.append("the card of a source that could not be shown does not say which")
     elif cards[1]["path"] != "This source could not be shown.":
         found.append("the card of a source that could not be shown does not say so")
+    elif any(card["lines"] != line_of(card["number"]) for card in cards) or any(
+        lines != line_of(number) for number, lines in cited["chipLines"]
+    ):
+        found.append("the card of a source that could not be shown is not in its number's colour")
     press = cited["linking"]["pressChip"]
     if (
         press["scrolled"] != 1
@@ -1647,6 +1672,11 @@ def test_a_source_card_that_cannot_be_built_does_not_cost_the_answer(tmp_path: P
             "one found passage that cannot be shown costs the others",
             "unused.map(passageOrNotice)",
             "unused.map(passageItem)",
+        ),
+        (
+            "the card of a source that could not be shown is not in its number's colour",
+            "`source-card source-unreadable ${lineClass(source.number)}`",
+            "`source-card source-unreadable ${lineClass(source.number + 1)}`",
         ),
     ],
 )
@@ -2074,3 +2104,39 @@ def test_the_check_of_the_structure_as_built_finds_each_rule_planted(
     assert [
         problem for sel, d in rules for problem in cuts_the_address(sel, d, classes, tags, ids)
     ] != []
+
+
+# The faults the second review planted that got past every test, in the script: each with
+# the check that now finds it.
+PLANTED_IN_THE_THIRD_ROUND = [
+    (
+        "a line that ended short does not end where it ended (refused by the provider)",
+        '"refusal", "safety",',
+        '"safety",',
+    ),
+    (
+        "a reply that is not a stream is said to be a failed request",
+        'fail(turn, notAStream(contentType), "unreadable");',
+        "fail(turn, notAStream(contentType));",
+    ),
+    (
+        "a request that failed before the search hides what the page's own search found",
+        " || journey.answer !== null || journey.ended !== null;",
+        " || journey.answer !== null;",
+    ),
+    (
+        "the fold's control says nothing while the page's own search runs",
+        '  turn.searchCount.textContent = "The page\'s own search is running.";',
+        '  turn.searchCount.textContent = "";',
+    ),
+]
+
+
+@pytest.mark.parametrize(("fault", "old", "new"), PLANTED_IN_THE_THIRD_ROUND)
+def test_the_run_finds_each_fault_planted_in_the_third_round(
+    fault: str, old: str, new: str, tmp_path: Path
+) -> None:
+    source = script()
+    assert source.count(old) == 1, old
+
+    assert fault in faults(run(source.replace(old, new), tmp_path))

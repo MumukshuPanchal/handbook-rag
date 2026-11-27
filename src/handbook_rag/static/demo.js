@@ -371,6 +371,9 @@ function foundInWords(found) {
   if (found === "not run") {
     return "not counted: the service did not say what it searched for";
   }
+  if (found === "running") {
+    return "counting the passages found";
+  }
   return "";
 }
 

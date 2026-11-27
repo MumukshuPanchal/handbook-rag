@@ -195,6 +195,8 @@ const searchedFor = [];
 // cannot reach the service, or a status and words for one the service refuses. Any other
 // question finds nothing.
 const searchFor = new Map();
+// A search marked "held" answers only when the harness lets it, with nothing found.
+let releaseSearch = () => {};
 // What the page put on the clipboard, and whether the clipboard refuses.
 const clipboard = { copied: [], refuses: false };
 
@@ -203,6 +205,13 @@ async function fetchStub(url, options) {
   if (url === "/search") {
     searchedFor.push(body.query);
     const what = searchFor.get(body.query) ?? [];
+    if (what === "held") {
+      await new Promise((resolve) => {
+        releaseSearch = resolve;
+      });
+      const nothing = { results: [], mode: "hybrid", reranked: false, took_ms: 1, trace_id: null };
+      return new Response(JSON.stringify(nothing), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
     if (what === "network") {
       throw new TypeError("Failed to fetch");
     }
@@ -1040,6 +1049,12 @@ await step("new after failure", null, null);
   record("stopped early", "What is the notice period?");
 }
 
+// A first question refused before the service said what it searched for, while the
+// page's own search found a passage; and a reply that is not a stream at all.
+searchFor.set("Is there a bike scheme?", [passage(1)]);
+await step("refused first", "Is there a bike scheme?", refusal("The service is busy."));
+await step("not a stream", "Is there a gym?", [200, "{}", "application/json"]);
+
 // A failure after the search and before any text.
 await step(
   "failed after search",
@@ -1094,6 +1109,13 @@ await step(
   ]),
 );
 
+// A reply the provider held back, as both providers send it.
+await step(
+  "refused by the provider",
+  "Tell me a colleague's salary.",
+  declined("Tell me a colleague's salary.", { stop_reason: "refusal" }),
+);
+
 // An answer that cites six sources, one past the five line colours. The page's own search
 // finds the one passage of the first source, which the answer cites, so nothing is left.
 {
@@ -1116,6 +1138,25 @@ await step(
       sources,
     }),
   );
+}
+
+// A follow-up whose search on this page is still running when the line has reached it.
+{
+  const body = held();
+  replies.push([200, body, "text/event-stream; charset=utf-8"]);
+  const QUESTION = "How long is the notice period for a manager?";
+  searchFor.set(QUESTION, "held");
+  const asking = ask("and for a manager");
+  const found = searched("and for a manager", QUESTION, "rewritten");
+  body.send("searched", found);
+  await settle();
+  record("searching", "and for a manager");
+  releaseSearch();
+  body.send("text", { text: "One month." });
+  body.send("answer", answer(found, { segments: [{ text: "One month.", sources: [] }] }));
+  body.end();
+  await asking;
+  await settle();
 }
 
 // The address in brief and the piece of a passage, asked of the script's own functions.

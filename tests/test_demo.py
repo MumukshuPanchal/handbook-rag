@@ -380,6 +380,13 @@ def test_the_links_in_the_header_lead_to_sections_the_readme_has() -> None:
         assert link.removeprefix(f"{REPOSITORY}#") in headings, link
 
 
+def test_the_header_says_what_the_page_is_in_a_line_that_fits() -> None:
+    # The sentence beside the page's name: at 1280 pixels it fits on one line beside the
+    # name and the two links, which the longer one did not.
+    says = re.findall(r'<p class="band-says">(.*?)</p>', static("demo.html"))
+    assert says == ["Answers from the public GitLab handbook, with their sources."]
+
+
 def test_the_page_tells_the_reader_the_length_limit_before_they_reach_it() -> None:
     markup = page()
     (box,) = [attrs for tag, attrs in markup.elements if tag == "textarea"]
@@ -905,8 +912,12 @@ def subjects(selector: str) -> list[str]:
 # class and by id; and the elements, by name, that the line is, that it holds, or that hold
 # it. The script builds most of these, so test_demo_behaviour.py reads them from the page
 # the script really builds, in every state its run puts the page in, and fails when this
-# list misses one: a new wrapper cannot be forgotten here. A rule for any other class,
-# element or id cannot reach the line in that structure.
+# list misses one: a new wrapper cannot be forgotten here. A rule whose subject is only of
+# other classes or ids, or another element, cannot reach the line in that structure; what
+# stands inside :not() and its kin does not count as narrowing a subject. This check reads
+# selectors and does not compute the cascade: what holds every rule that could hide text,
+# whatever its selector, is the list of rules further down
+# (test_what_carries_meaning_is_set_only_in_the_listed_rules).
 ADDRESS = {"source-address", "address-brief", "passage-address"}
 AROUND = {
     # Built by the script, for each turn.
@@ -930,7 +941,12 @@ def reach(
     """Whether a rule for this compound styles the line ("line"), an element around it
     ("around"), something that may be either ("either"), or nothing that holds it (None).
     What stands around the line can be given, as the structure the script builds."""
+    # What stands inside :not(), :is(), :has() or :where() does not narrow the element a
+    # rule styles to those classes: p:not(.lede) styles every other paragraph. Such a
+    # compound is read without them, so it reaches the line unless something else in it
+    # does not.
     bare = re.sub(r"\[[^\]]*\]", "", compound)
+    bare = re.sub(r":[\w-]+\((?:[^()]|\([^()]*\))*\)", "", bare)
     classes = set(re.findall(r"\.([\w-]+)", bare))
     named = set(re.findall(r"#([\w-]+)", bare))
     if named:
@@ -941,7 +957,7 @@ def reach(
         return None  # the hidden attribute's own rule, which hides what is meant to be
     if "::" in compound:
         return None  # a box the style sheet adds before or after an element, not the element
-    tag = re.match(r"[a-z][a-z0-9]*|\*", compound)
+    tag = re.match(r"[a-z][a-z0-9]*|\*", bare)
     return "either" if tag is None or tag.group(0) in holders else None
 
 
@@ -1065,6 +1081,13 @@ def test_no_rule_of_the_stylesheet_can_cut_the_address_under_a_source() -> None:
         ".line-3 { overflow: clip; }",
         ".nothing-more { display: none; }",
         "span { display: none; }",
+        # The ones the second review found: what stands inside :not() does not narrow the
+        # rule.
+        "p:not(.lede) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
+        "*:not(.sign) { white-space: nowrap; }",
+        ":not(.band-says) { overflow: hidden; max-height: 1px; }",
+        "p:is(:not(.lede)) { white-space: nowrap; }",
+        "body:has(.turn) p:not(.lede) { overflow: hidden; height: 1px; }",
     ],
 )
 def test_the_check_of_the_stylesheet_finds_each_rule_that_could_cut_the_address(rule: str) -> None:
@@ -1205,10 +1228,13 @@ def font_problems(sheet: str) -> list[str]:
     found = []
     sheet = unescaped(sheet)
     low = sheet.lower()
-    addresses = re.findall(r"url\(\s*([\"']?)([^)\"']*)\1\s*\)", low)
-    if [address for _, address in addresses] != [FONT_ADDRESS]:
+    addresses = [
+        next(part for part in parts if part) if any(parts) else ""
+        for parts in re.findall(r"url\(\s*(?:\"([^\"]*)\"|'([^']*)'|([^)\"'\s]*))\s*\)", low)
+    ]
+    if addresses != [FONT_ADDRESS] or low.count("url(") != 1:
         found.append(f"the sheet names a file or an address but the font: {addresses}")
-    loads = r"@import\b|@namespace\b|(?<![\w-])(?:src|local|image-set|image|cross-fade|element)\("
+    loads = r"@import\b|@namespace\b|(?<!\w)(?:src|local|image-set|image|cross-fade|element)\("
     if re.search(loads, low):
         found.append("the sheet imports, names a local font, or makes an image")
     faces = re.findall(r"@font-face\s*\{([^}]*)\}", low)
@@ -1255,6 +1281,10 @@ def test_the_style_sheet_names_no_file_or_address_but_the_one_font() -> None:
         ".band { background: \\75 rl(https://evil.example/x.png); }",
         '.band { font: 700 17px "Comic Sans MS", serif; }',
         '.band { font-family: "Comic Sans MS" }',
+        # The ones the second review found: a quoted address that holds a bracket, and a
+        # function under a vendor's prefix.
+        '.band { background: url("https://evil.example/x).png"); }',
+        '.band { background: -webkit-image-set("https://e.example/x.png" 1x); }',
         # And the newer function that takes an address, and a second stack.
         '.band { background: src("https://evil.example/x.png"); }',
         ':root { --font: "Comic Sans MS", serif; }',
@@ -1540,3 +1570,969 @@ def test_the_style_rules_that_carry_meaning_hold() -> None:
 )
 def test_the_check_of_the_style_rules_that_carry_meaning_finds_each_rule_planted(rule: str) -> None:
     assert meaning_problems(f"{static('demo.css')}\n{rule}\n") != []
+
+
+# The style rules that carry meaning, written out. Looking a rule up by its selector lets a
+# rule the test did not think of get past, and the tests do not compute the cascade. So it
+# is turned round: a property that carries meaning may be set only in a rule listed below,
+# as written, with a word on why; any other rule that sets it fails, whatever its selector
+# and wherever it stands. What carries meaning:
+# - what can hide, cut or move text out of view (HIDING, and display: none, a font size
+#   under 8 pixels or one this test cannot tell, a text colour that is not a token or reads
+#   under 4.5:1 on the page or the strip, a negative offset, margin or spacing), since the
+#   address line under a source must always be seen;
+# - the focus (outline) and the edges (border), since a sign's edge in the dark theme and
+#   the question box's frame stand in for what a reader must see;
+# - motion (animation, transition), allowed only under reduced-motion no-preference;
+# - every rule that draws a box before or after an element, since the stops, their rings,
+#   the dashes of a decline, the bar where a line ends, the next stop and each source's
+#   stroke are drawn that way;
+# - every ground (background), since text on a ground of its own colour is gone;
+# - a colour on anything that could be a citation or a source's bullet: a rule whose
+#   subject has no class but theirs, or none.
+# Custom properties are set only in :root, once in the light theme and once in the one dark
+# block, and --c and --on-c only by the six line classes. A media query of a condition the
+# test does not know fails, as do any other at-rule, a rule inside a rule, and !important
+# outside the listed rules.
+
+KNOWN_CONDITIONS = {"", DARK, "(min-width: 64rem)", NARROW, "(max-width: 30rem)", REDUCED}
+KEYFRAMES = {"approach": "50% { transform: scale(0.7); }"}
+HIDING = {
+    "overflow", "overflow-x", "overflow-y", "overflow-block", "overflow-inline",
+    "overflow-clip-margin", "text-overflow", "white-space", "white-space-collapse",
+    "text-wrap", "text-wrap-mode", "max-height", "max-block-size", "height", "block-size",
+    "max-width", "max-inline-size", "line-clamp", "-webkit-line-clamp", "-webkit-box-orient",
+    "visibility", "opacity", "clip", "clip-path", "mask", "mask-image", "-webkit-mask",
+    "-webkit-mask-image", "contain", "content-visibility", "text-indent", "transform",
+    "scale", "zoom", "filter", "position", "content", "-webkit-text-fill-color",
+    "mix-blend-mode",
+}  # fmt: skip
+OFFSETS = {"left", "right", "top", "bottom", "inset", "translate", "letter-spacing", "word-spacing"}
+COLOURS = {
+    "background", "background-color", "background-image", "color", "border-color",
+    "outline-color", "fill", "stroke", "-webkit-text-fill-color", "text-decoration-color",
+}  # fmt: skip
+SOURCE_CLASSES = {"cite", "source-number", "source-card", "linked", "marked", *LINES}
+PSEUDO = re.compile(r"::|:(?:before|after|first-line|first-letter)\b", re.IGNORECASE)
+
+Declarations = list[tuple[str, str]]
+
+
+def declarations(block: str) -> Declarations:
+    """The declarations of a rule as written, in order, each value in lower case with its
+    spaces collapsed, `!important` kept at its end."""
+    found = []
+    for declaration in block.split(";"):
+        name, colon, value = declaration.partition(":")
+        if colon and value.strip():
+            value = " ".join(value.lower().split())
+            value = re.sub(r"\s*!\s*important$", " !important", value)
+            found.append((name.strip().lower(), value))
+    return found
+
+
+def sheet_rules(sheet: str) -> tuple[list[tuple[str, str, Declarations]], list[str]]:
+    """Every rule of a style sheet with the condition of the media query it sits in, or ""
+    for none, and its declarations as written; and what the sheet holds that the tests do
+    not know: a media query of another condition or inside another, an at-rule other than
+    `@font-face` and the one `@keyframes`, and a rule inside a rule."""
+    rules: list[tuple[str, str, Declarations]] = []
+    problems: list[str] = []
+
+    def read(text: str, condition: str) -> None:
+        at = 0
+        while (opening := re.compile(r"([^{}]*)\{").search(text, at)) is not None:
+            prelude = " ".join(opening.group(1).split())
+            depth, end = 1, opening.end()
+            while depth and end < len(text):
+                depth += {"{": 1, "}": -1}.get(text[end], 0)
+                end += 1
+            body = text[opening.end() : end - 1]
+            at = end
+            if prelude.lower().startswith("@media"):
+                inner = " ".join(prelude[6:].split()).lower()
+                if condition or inner not in KNOWN_CONDITIONS:
+                    problems.append(f"a media query the tests do not know: {prelude}")
+                read(body, inner)
+            elif prelude.lower().startswith("@keyframes"):
+                name = prelude[10:].strip()
+                if condition or KEYFRAMES.get(name) != " ".join(body.split()):
+                    problems.append(f"an animation the tests do not know: {prelude}")
+            elif prelude.startswith("@") and prelude.lower() != "@font-face":
+                problems.append(f"an at-rule the tests do not know: {prelude}")
+            elif "{" in body:
+                problems.append(f"a rule inside a rule: {prelude}")
+            else:
+                rules.append((condition, prelude, declarations(body)))
+        if text[at:].strip():
+            problems.append(f"text the tests cannot read as a rule: {text[at:].strip()[:60]}")
+
+    read(unescaped(sheet), "")
+    return rules, problems
+
+
+def may_be_a_source_mark(selector: str) -> bool:
+    """Whether a rule may style a citation, a source's bullet or a source's line: its
+    subject has no class but theirs, or none. A selector with a function in it, such as
+    :not() or :is(), is taken to reach them."""
+    if "(" in selector:
+        return True
+    for compound in subjects(selector):
+        positive = set(re.findall(r"\.([\w-]+)", re.sub(r"\[[^\]]*\]", "", compound)))
+        if not positive or positive <= SOURCE_CLASSES:
+            return True
+    return False
+
+
+def unreadable_colour(value: str, themes: dict[str, dict[str, str]]) -> bool:
+    """Whether a colour of text may not read on the page: none, one that is not a token, or
+    one that reads under 4.5:1 on the page or the strip in either theme. It is then right
+    only on another ground, which a listed rule says."""
+    if value in ("inherit", "currentcolor"):
+        return False
+    for tokens in themes.values():
+        colour = resolved(value, tokens)
+        if colour is None:
+            return True
+        for ground in (resolved("var(--page)", tokens), resolved("var(--ground)", tokens)):
+            if ground is None or contrast(colour, ground) < 4.5:
+                return True
+    return False
+
+
+def negative(value: str) -> bool:
+    return bool(re.search(r"(?:^|\s)-\d|(?:^|\s)-\.\d", value))
+
+
+def slight(value: str) -> bool:
+    """Whether a negative letter spacing only tightens a heading: a hundredth of its size."""
+    spacing = re.fullmatch(r"-(\d*\.?\d+)em", value)
+    return spacing is not None and float(spacing.group(1)) <= 0.01
+
+
+def too_small(value: str, themes: dict[str, dict[str, str]]) -> bool:
+    """Whether a font size may be too small to read: under 8 pixels, taking an em as 16, or
+    a size this test cannot tell, such as one in units of the window or worked out."""
+    if value == "inherit":
+        return False
+    for tokens in themes.values():
+        named = re.fullmatch(r"var\((--[\w-]+)\)", value)
+        size = re.fullmatch(
+            r"(\d*\.?\d+)(px|em|rem|%)?", tokens.get(named.group(1), "") if named else value
+        )
+        if size is None:
+            return True
+        scale = {"em": 16, "rem": 16, "%": 0.16}.get(size.group(2) or "px", 1)
+        if float(size.group(1)) * scale < 8:
+            return True
+    return False
+
+
+def carries_meaning(
+    selector: str, name: str, value: str, themes: dict[str, dict[str, str]]
+) -> str | None:
+    """Which kind of meaning a declaration carries, or None."""
+    if name.startswith("--"):
+        return None  # held where it may be set, below
+    if PSEUDO.search(selector):
+        return "drawn before or after an element"
+    hides = (
+        name in HIDING
+        or (name == "display" and value.split()[0] == "none")
+        or (name == "font-size" and too_small(value, themes))
+        or (
+            (name in OFFSETS or name.startswith("margin"))
+            and negative(value)
+            and not (name == "letter-spacing" and slight(value))
+        )
+        or (name in ("color", "-webkit-text-fill-color") and unreadable_colour(value, themes))
+    )
+    if hides:
+        return "can hide text"
+    if name.startswith("outline"):
+        return "the focus"
+    if name.startswith(("animation", "transition")):
+        return "motion"
+    if name.startswith("border") and name != "border-radius":
+        return "an edge"
+    if name.startswith("background"):
+        return "a ground"
+    if name in COLOURS and may_be_a_source_mark(selector):
+        return "a colour on what may be a source's mark"
+    return None
+
+
+def listed_rules() -> dict[tuple[str, str], Declarations]:
+    """The rules of LISTED, by condition and selector, each with its declarations; each must
+    come with a word on why it may set what it sets."""
+    found: dict[tuple[str, str], Declarations] = {}
+    entry = re.compile(
+        r"/\*\s*(.*?)\s*\*/\s*(?:@media\s*(\(.*?\))\s+)?([^{}/]+?)\s*\{([^{}]*)\}", re.DOTALL
+    )
+    for why, condition, selector, block in entry.findall(LISTED):
+        assert why.strip(), f"a listed rule with no word on why: {selector}"
+        key = (" ".join((condition or "").split()).lower(), " ".join(selector.split()))
+        assert key not in found, f"a rule listed twice: {key}"
+        found[key] = declarations(block)
+    return found
+
+
+def meaning_rules_problems(sheet: str) -> list[str]:
+    """Every way the sheet sets what carries meaning outside the listed rules, or differs from
+    them, and every place a custom property is set but the two of the root and the line
+    classes."""
+    rules, found = sheet_rules(sheet)
+    themes = theme_tokens(sheet)
+    real: dict[tuple[str, str], Declarations] = {}
+    for condition, selector, declared in rules:
+        if selector.lower() == "@font-face":
+            continue  # the font test reads it
+        for name, value in declared:
+            if carries_meaning(selector, name, value, themes) is not None:
+                real.setdefault((condition, selector), []).append((name, value))
+            elif value.endswith("!important"):
+                found.append(f"!important on {name} in {selector}")
+            if name.startswith("--"):
+                line = selector in {f".{each}" for each in LINES} and condition == ""
+                root = selector == ":root" and condition in ("", DARK)
+                if not (root or (line and name in ("--c", "--on-c"))):
+                    found.append(
+                        f"a custom property set outside the root and the line classes: {name}"
+                        f" in {condition} {selector}"
+                    )
+    roots = sorted((condition, selector) for condition, selector, _ in rules if selector == ":root")
+    if roots != [("", ":root"), (DARK, ":root")]:
+        found.append(f"the custom properties are not set in one root and one dark block: {roots}")
+    for condition, selector, declared in rules:
+        names = [name for name, _ in declared if name.startswith("--")]
+        if len(names) != len(set(names)):
+            found.append(f"a custom property set twice in {condition} {selector}")
+    listed = listed_rules()
+    for key in sorted(real.keys() | listed.keys()):
+        if key not in listed:
+            found.append(
+                f"a rule the test does not list sets what carries meaning: {key}: {real[key]}"
+            )
+        elif key not in real:
+            found.append(f"a listed rule is not in the sheet as written: {key}")
+        elif real[key] != listed[key]:
+            found.append(f"{key} differs from its listing: {real[key]} against {listed[key]}")
+    return found
+
+
+def test_what_carries_meaning_is_set_only_in_the_listed_rules() -> None:
+    assert meaning_rules_problems(static("demo.css")) == []
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        # The second review's probes.
+        "p:not(.lede) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
+        ".cite.line-3 { --c: var(--l1); }",
+        ".source-card.line-2 { --c: var(--l1); }",
+        ".turn .line-4 { --on-c: #ffffff; }",
+        "@media (prefers-color-scheme: dark) and (min-width: 1px) { :root { --l2: #d8261c; } }",
+        "html { --l2: #d8261c; }",
+        ":root:root { --l2: #d8261c; }",
+        ".where-to { overflow: hidden; max-height: 2px; }",
+        ".thread { overflow: hidden; white-space: nowrap; }",
+        ".route .station-next::after { background: var(--ring-fill); }",
+        "a:focus-visible { outline-color: transparent; }",
+        ".search-fold > summary::after { margin-left: 0; }",
+        "@media (max-width: 30rem) {"
+        " .status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } }",
+        # Attempts to get past the list, of the kinds it names and of others.
+        ".cite.line-3 { background: var(--l1); }",
+        "#turns button { background: var(--l1); }",
+        "@supports (display: grid) { .source-body { overflow: hidden; } }",
+        ".turn { & .source-address { visibility: hidden; } }",
+        ".source-address { color: var(--page); }",
+        ".source-address { position: absolute; left: -9999px; }",
+        ".source-address:first-line { color: transparent; }",
+        ".source-body { content-visibility: hidden; }",
+        ".source-address { font-size: 0.3em; }",
+        ".source-address { text-indent: -9999px; }",
+        ".source-address { letter-spacing: -1em; }",
+        ".source-body { background: var(--text); }",
+        ".source-address { transform: scale(0); }",
+        ".source-address { filter: opacity(0); }",
+        ".source-address { margin-top: -999px; }",
+        "@layer base { .source-body { overflow: hidden; } }",
+        "@media screen { .source-body { overflow: hidden; } }",
+        ".station-ahead { animation: approach 1s infinite; }",
+        ".source-address { display: none !important; }",
+        ".answer-text { --c: var(--l1); }",
+        ".question-sign { border-color: var(--page); }",
+        ".source-card::after { content: ; position: absolute; inset: 0; background: var(--page); }",
+        ":root { --l2: #d8261c; --l2: #0a57c2; }",
+        "@keyframes approach { 50% { transform: scale(0); } }",
+        # Four that got past the list's first form, and closed: a named colour, a font size
+        # in units of the window, one through a token, and a token changed in its place
+        # (held by the test of the colours above).
+        ".source-address { color: white; }",
+        ".source-address { font-size: 0.4vw; }",
+        ".source-address { font-size: var(--s1); }",
+    ],
+)
+def test_the_check_of_the_listed_rules_finds_each_rule_planted(rule: str) -> None:
+    assert meaning_rules_problems(f"{static('demo.css')}\n{rule}\n") != []
+
+
+# The pairs of tokens the page puts text or a mark on, in both themes: text at 4.5:1 at
+# least, a mark at 3:1. The listed rules hold where each colour may be used; this holds the
+# colours themselves, so that a token changed in its place cannot make a text unreadable.
+TEXT_PAIRS = [
+    ("--text", "--page"), ("--text", "--ground"), ("--grey", "--page"), ("--grey", "--ground"),
+    ("--sign-text", "--sign"), ("--band-says", "--sign"), ("--notice-text", "--notice"),
+    ("--page", "--text"),
+]  # fmt: skip
+MARK_PAIRS = [
+    ("--rule-line", "--ground"), ("--rule-line", "--page"), ("--off", "--ground"),
+    ("--off", "--page"), ("--faint", "--ground"), ("--focus", "--page"),
+    ("--sign-rule", "--page"),
+]  # fmt: skip
+
+
+def token_contrast_problems(sheet: str) -> list[str]:
+    found = []
+    for theme, tokens in theme_tokens(sheet).items():
+        for pairs, least in ((TEXT_PAIRS, 4.5), (MARK_PAIRS, 3.0)):
+            for one, other in pairs:
+                front, back = resolved(f"var({one})", tokens), resolved(f"var({other})", tokens)
+                if front is None or back is None or contrast(front, back) < least:
+                    found.append(f"{one} on {other} reads under {least}:1 in the {theme} theme")
+    return found
+
+
+def test_the_colours_the_page_puts_text_and_marks_on_read() -> None:
+    assert token_contrast_problems(static("demo.css")) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("  --text: #000000;", "  --text: #ffffff;"),
+        ("  --grey: #5f6368;", "  --grey: #a3a3a0;"),
+        ("    --page: #1d1d1b;", "    --page: #f2f2ee;"),
+        ("  --notice-text: #000000;", "  --notice-text: #ffffff;"),
+        ("    --off: #93938c;", "    --off: #3a3a36;"),
+        ("  --band-says: #cfcfcf;", "  --band-says: #333333;"),
+    ],
+)
+def test_the_check_of_the_colours_finds_each_token_changed_in_its_place(old: str, new: str) -> None:
+    sheet = static("demo.css")
+    assert sheet.count(old) == 1, old
+
+    assert token_contrast_problems(sheet.replace(old, new)) != []
+
+
+# The rules that may set what carries meaning, as the sheet writes them, each after a word
+# on why. A change to one of them is a change to this list, to be reviewed.
+LISTED = """
+/* ---- The base of the page ---- */
+
+/* The hidden attribute's own rule: it hides what the script or the markup means to hide, and
+   the script never sets it on an address line (the node run checks the line is shown). */
+[hidden] { display: none !important; }
+
+/* Every box measured with its border; the ::before and ::after here draw nothing. */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* The page's own ground and text, the colours every other rule stands on. */
+body { background: var(--page); color: var(--text); }
+
+/* A link takes the colour of the text around it; no citation is a link. */
+a { color: inherit; }
+
+/* A button takes the colour of the text around it; a citation sets its own numeral colour on
+   its line, by its class. */
+button { color: inherit; }
+
+/* A control that cannot be used now is dimmed; only buttons take aria-disabled, and an address
+   line is no button. */
+button[aria-disabled="true"] { opacity: 0.45; }
+
+/* The focus, for every control: a heavy outline in the focus colour. */
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+/* The screen reader's copy of a text, kept off the screen on purpose; inside the address line
+   it holds the whole address, beside the brief one that is shown. */
+.visually-hidden {
+  position: absolute;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- The band at the top ---- */
+
+/* White type on the black band, which holds no address line. */
+.band { background: var(--sign); color: var(--sign-text); }
+
+/* The band's measure; it narrows, it cuts nothing, and the band holds no address line. */
+.band-inner { max-width: var(--page-width); }
+
+/* The band's sentence, light grey on the black band, which holds no address. */
+.band-says { color: var(--band-says); }
+
+/* The band's two links, underlined in white on black. */
+.band-nav a { border-bottom: 2px solid var(--sign-text); color: var(--sign-text); }
+
+/* The focus on the black band, in white. */
+.band :focus-visible { outline-color: var(--sign-text); }
+
+/* ---- The page's column ---- */
+
+/* The page's measure, around every turn; it narrows, it cuts nothing, and no overflow is
+   hidden on it. */
+.app { max-width: var(--page-width); }
+
+/* The note for a browser without script, in a black frame. */
+.noscript { border: 4px solid var(--text); }
+
+/* ---- The signs ---- */
+
+/* A sign: white on black with its edge, which in the dark theme stands out from the page, the
+   type tightened by a hundredth; its text wraps, and it holds the question, not an address. */
+.sign, .question-sign {
+  position: relative;
+  border: 2px solid var(--sign-edge);
+  background: var(--sign);
+  color: var(--sign-text);
+  white-space: pre-wrap;
+}
+
+/* The rule above a sign, as a station sign has. */
+.sign::before, .question-sign::before {
+  content: "";
+  position: absolute;
+  top: -12px;
+  right: 0;
+  left: 0;
+  height: 3px;
+  background: var(--sign-rule);
+}
+
+/* ---- The welcome ---- */
+
+/* The welcome's measure for reading; it narrows, it cuts nothing. */
+.lede { max-width: 60ch; }
+
+/* The board of destinations, under a heavy rule. */
+.examples { border-top: 4px solid var(--rule-line); }
+
+/* A destination: a button on no ground of its own, with a rule under it and its ring placed
+   beside it. */
+.example {
+  position: relative;
+  border: 0;
+  border-bottom: 2px solid var(--ground);
+  background: transparent;
+}
+
+/* A destination's ring. */
+.example::before {
+  content: "";
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: 5px solid var(--rule-line);
+  border-radius: 50%;
+  background: var(--page);
+}
+
+/* A destination pointed at, on the strip's ground. */
+.example:hover { background: var(--ground); }
+
+/* The note on plain text, at a measure for reading; it narrows, it cuts nothing. */
+.plain-text-note { max-width: 60ch; }
+
+/* A stop of "What happens when you ask", in grey, placed for its ring. */
+.steps li { position: relative; color: var(--grey); }
+
+/* The line between the stops of "What happens when you ask". */
+.steps li::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: -6px;
+  left: 7px;
+  width: 6px;
+  background: var(--rule-line);
+}
+
+/* No line after the last of those stops. */
+.steps li:last-child::before { content: none; }
+
+/* The ring of each of those stops. */
+.steps li::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  border: 5px solid var(--rule-line);
+  border-radius: 50%;
+  background: var(--page);
+}
+
+/* The name of each of those stops, in the text's colour. */
+.steps strong { color: var(--text); }
+
+/* The folded copy of those stops, shown on a phone only; it holds no address line. */
+.how-fold { display: none; }
+
+/* The strip of stops, on the strip's ground; it holds the stops' names, not an address. */
+.route { background: var(--ground); }
+
+/* ---- The line of stops ---- */
+
+/* A stop, placed for its ring and its stroke. */
+.station { position: relative; }
+
+/* The stroke from a stop to the next. */
+.station::before {
+  content: "";
+  position: absolute;
+  top: 7px;
+  right: 0;
+  left: 0;
+  height: 6px;
+  background: var(--rule-line);
+}
+
+/* No stroke after the last stop. */
+.seg-none::before { content: none; }
+
+/* A faint stroke to a stop not reached yet. */
+.seg-faint::before { top: 9px; height: 2px; background: var(--faint); }
+
+/* The dashes to a stop the line does not serve: a decline. */
+.seg-dashed::before {
+  background: repeating-linear-gradient(90deg, var(--off) 0 10px, transparent 10px 18px);
+}
+
+/* A stop's ring. */
+.station::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  border: 5px solid var(--rule-line);
+  border-radius: 50%;
+  background: var(--ring-fill);
+}
+
+/* The next stop, filled. */
+.station-next::after { background: var(--rule-line); }
+
+/* A stop not reached yet: a thin, faint ring. */
+.station-ahead::after { border-width: 3px; border-color: var(--faint); }
+
+/* A stop the line does not serve: a grey ring. */
+.station-off::after { border-color: var(--off); }
+
+/* The bar across the line where it ended short. */
+.station-end::after {
+  top: -4px;
+  width: 6px;
+  height: 28px;
+  border: 0;
+  border-radius: 0;
+  background: var(--rule-line);
+}
+
+/* ---- The reply ---- */
+
+/* The reply's text at a measure for reading, its line breaks kept; it wraps, and it holds no
+   address line. */
+.answer-text, .stream { max-width: 60ch; white-space: pre-wrap; }
+
+/* The caret at the end of the text while it is written. */
+.stream.streaming::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 0.1em;
+  background: var(--text);
+  vertical-align: -0.12em;
+}
+
+/* Text that broke off, marked by a dashed edge. */
+.stream.unfinished { border-left: 6px dashed var(--off); }
+
+/* The bars that stand for the text until it comes, at a measure; they hold no address. */
+.pending { max-width: 60ch; }
+
+/* One bar that stands for text until it comes, on the strip's ground, its height its whole
+   drawing; it holds no text. */
+.skeleton-line { height: 12px; background: var(--ground); }
+
+/* A citation: its number on its line's colour, in a round bullet of a fixed height that holds
+   only the number. */
+.cite { height: 1.45em; border: 0; background: var(--c); color: var(--on-c); }
+
+/* A citation pointed at, or marked with its source: an outline round it. */
+.cite:hover, .cite.linked { outline: 3px solid var(--text); outline-offset: 2px; }
+
+/* A focused citation: its ring close, so that the full stop before it stays clear. */
+.cite:focus-visible { outline-offset: 0; }
+
+/* The line that says a follow-up was searched for as typed, at a measure, with an edge; it
+   holds no address. */
+.searched { max-width: 60ch; border-left: 6px solid var(--rule-line); }
+
+/* The box of a stored answer, at a measure, with an edge; it holds no address. */
+.cached { max-width: 60ch; border-left: 6px solid var(--rule-line); }
+
+/* A notice or a failure card, placed for its sign. */
+.notice, .error-card { position: relative; }
+
+/* Why a reply is not an answer, at a measure; it holds no address. */
+.notice-why { max-width: 60ch; }
+
+/* The ring of the sign for "no service". */
+.notice-decline::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 0;
+  width: 34px;
+  height: 34px;
+  border: 5px solid var(--rule-line);
+  border-radius: 50%;
+}
+
+/* The bar across the ring of that sign. */
+.notice-decline::after {
+  content: "";
+  position: absolute;
+  top: 16px;
+  left: -4px;
+  width: 42px;
+  height: 6px;
+  background: var(--rule-line);
+  transform: rotate(-45deg);
+}
+
+/* The upright of the sign where a line ended. */
+.notice-unfinished::before, .error-card::before, .turn-note::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 14px;
+  width: 6px;
+  height: 22px;
+  background: var(--rule-line);
+}
+
+/* The foot of that sign. */
+.notice-unfinished::after, .error-card::after, .turn-note::after {
+  content: "";
+  position: absolute;
+  top: 22px;
+  left: 0;
+  width: 34px;
+  height: 6px;
+  background: var(--rule-line);
+}
+
+/* What failed, at a measure; it holds no address. */
+.error-text { max-width: 60ch; }
+
+/* "Ask again", in a black frame, on no ground of its own. */
+.again { border: 3px solid var(--text); background: transparent; }
+
+/* "Ask again" pointed at: the page's colour on the black it fills with. */
+.again:hover { background: var(--text); color: var(--page); }
+
+/* The note of a stop by the reader, placed for its sign. */
+.turn-note { position: relative; }
+
+/* A check's notes, black on the yellow of a notice, at a measure; they hold no address. */
+.check-notes { max-width: 56ch; background: var(--notice); color: var(--notice-text); }
+
+/* The timetable under "All details", at a measure, under a rule; it holds no address. */
+.facts { max-width: 60ch; border-top: 4px solid var(--rule-line); }
+
+/* A label of the timetable, in grey. */
+.facts dt { color: var(--grey); }
+
+/* The button that copies the trace id, in a frame, on no ground of its own. */
+.copy { border: 2px solid var(--text); background: transparent; }
+
+/* A count with nothing in it takes no room; the count is not an address. */
+.side-count:empty { display: none; }
+
+/* ---- The sources ---- */
+
+/* A source's line, placed for its stroke. */
+.source-card { position: relative; }
+
+/* A source's stroke, in its line's colour, down its entry. */
+.source-card::before {
+  content: "";
+  position: absolute;
+  top: 34px;
+  bottom: 0;
+  left: 14px;
+  width: 6px;
+  background: var(--c);
+}
+
+/* The last source's stroke stops short of the end. */
+.source-card:last-child::before { bottom: 20px; }
+
+/* A source's bullet: its number on its line's colour, of a fixed height that holds only the
+   number. */
+.source-number { height: 34px; background: var(--c); color: var(--on-c); }
+
+/* A source's bullet when its citation is pointed at or pressed: an outline round it. */
+.source-card.linked .source-number, .source-card.marked .source-number {
+  outline: 3px solid var(--text);
+  outline-offset: 2px;
+}
+
+/* A source brought into view by its citation: the strip's ground, and a wide outline of the
+   same, round the text, cutting nothing. */
+.source-card.marked .source-body {
+  background: var(--ground);
+  outline: 8px solid var(--ground);
+}
+
+/* A source's title, in the text's colour. */
+.source-path a { color: var(--text); }
+
+/* The mark between two headings above a passage, read as a space. */
+.crumb + .crumb::before { content: " \u203a "; content: " \u203a " / " "; white-space: pre; }
+
+/* A piece of the passage, cut to three lines on purpose: the address is its own line after it,
+   in the same source's body, and the whole passage is folded away below. */
+.source-snippet {
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+/* The whole passage, on the strip's ground, its line breaks kept; it wraps. */
+.passage-text { background: var(--ground); white-space: pre-wrap; }
+
+/* A source's place before it comes: its stroke and bullet in the strip's colour. */
+.source-card.placeholder::before, .source-card.placeholder .source-number {
+  background: var(--ground);
+}
+
+/* ---- The fold of the page's own search ---- */
+
+/* The words the fold's control adds when it holds passages, apart from its own words. */
+.search-fold > summary::after {
+  content: "Show them";
+  content: "Show them" / "";
+  margin-left: 0.4em;
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+/* The same, when the fold is open. */
+.search-fold[open] > summary::after { content: "Hide them"; content: "Hide them" / ""; }
+
+/* The words the control adds when the fold holds no passage: what the search is. */
+.search-fold.nothing-more > summary::after {
+  content: "About this search";
+  content: "About this search" / "";
+}
+
+/* The same, when the fold is open. */
+.search-fold.nothing-more[open] > summary::after { content: "Hide"; content: "Hide" / ""; }
+
+/* The state of the search with nothing to say takes no room; it is not an address. */
+.search-state:empty { display: none; }
+
+/* A passage found, placed for its grey ring. */
+.passage-item { position: relative; }
+
+/* The grey ring of a passage found and not cited: a stop the line does not serve. */
+.passage-item::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: -38px;
+  width: 18px;
+  height: 18px;
+  border: 4px solid var(--off);
+  border-radius: 50%;
+  background: var(--page);
+}
+
+/* A passage's title, in the text's colour. */
+.passage-title a { color: var(--text); }
+
+/* ---- The question box ---- */
+
+/* The dock of the question box, on the page's ground, under the conversation; it holds no
+   address. */
+.composer { position: sticky; background: var(--page); }
+
+/* The row above the box, at the box's width; it holds no address. */
+.context-bar { max-width: 800px; }
+
+/* "Start a new conversation" on one line; it is a button, not an address. */
+#new-conversation { white-space: nowrap; }
+
+/* The list of what is sent, on the page's ground: it scrolls within a height, so that its
+   control stays on the screen; it holds questions, not addresses. */
+.context-body {
+  max-height: min(40vh, 18rem);
+  overflow-y: auto;
+  border: 3px solid var(--text);
+  background: var(--page);
+}
+
+/* A plain button, in a frame, on no ground of its own. */
+.ghost { border: 3px solid var(--text); background: transparent; }
+
+/* A plain button pointed at: the page's colour on the black it fills with. */
+.ghost:hover { background: var(--text); color: var(--page); }
+
+/* The question box: one heavy frame on the page's ground, at its width; it holds the question,
+   not an address. */
+.field { max-width: 800px; border: 4px solid var(--text); background: var(--page); }
+
+/* The focus of the question box, drawn round its frame. */
+.field:focus-within { outline: 3px solid var(--focus); outline-offset: 3px; }
+
+/* The question, growing to a height and then scrolling; no frame of its own, on the box's
+   ground. */
+textarea { max-height: 12rem; border: 0; background: transparent; color: var(--text); }
+
+/* The placeholder of the question, in grey. */
+textarea::placeholder { color: var(--grey); opacity: 1; }
+
+/* The question's own outline gives way to the frame's, drawn by the rule above. */
+textarea:focus-visible { outline: none; }
+
+/* Ask and Stop, with no frame of their own. */
+.send, .stop { border: 0; }
+
+/* Ask: the page's colour on black. */
+.send { background: var(--text); color: var(--page); }
+
+/* Stop, on the page's ground, set off from the question by a heavy rule. */
+.stop { border-left: 4px solid var(--text); background: var(--page); }
+
+/* The row under the box, at the box's width; it holds no address. */
+.composer-meta { max-width: 800px; }
+
+/* The shorter words for a phone, not shown on a larger screen; they are a button's, not an
+   address. */
+.on-narrow { display: none; }
+
+/* The footer's measure; it narrows, it cuts nothing. */
+.site-footer { max-width: var(--page-width); }
+
+/* ---- On a narrow screen: the stops run down the page ---- */
+
+/* The steps beside the welcome give way to their folded copy. */
+@media (max-width: 40rem) .how { display: none; }
+
+/* The stroke from a stop to the next, downwards. */
+@media (max-width: 40rem) .station::before {
+  top: 0;
+  right: auto;
+  bottom: 0;
+  left: 7px;
+  width: 6px;
+  height: auto;
+}
+
+/* The faint stroke, downwards. */
+@media (max-width: 40rem) .seg-faint::before { left: 9px; width: 2px; }
+
+/* The dashes of a decline, downwards. */
+@media (max-width: 40rem) .seg-dashed::before {
+  background: repeating-linear-gradient(180deg, var(--off) 0 10px, transparent 10px 18px);
+}
+
+/* The bar where the line ended, across the downward line. */
+@media (max-width: 40rem) .station-end::after {
+  top: 7px;
+  left: -4px;
+  width: 28px;
+  height: 6px;
+}
+
+/* ---- On a phone ---- */
+
+/* The words a phone does not show, kept for a screen reader; they are a control's words, not
+   an address. */
+@media (max-width: 30rem) .on-wide {
+  position: absolute;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The hint under the box, kept for a screen reader; it is not an address. */
+@media (max-width: 30rem) #question-hint {
+  position: absolute;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- The one motion ---- */
+
+/* The next stop's ring shrinks and grows, only for a reader who has not asked for less motion. */
+@media (prefers-reduced-motion: no-preference) .station-next::after {
+  animation: approach 1.2s ease-in-out infinite;
+}
+"""
+
+
+# The layout the reviews asked for, where it is not a matter of meaning: the fold of the
+# page's own search set in under source lines and not when there are none, its grey stops
+# keeping their room, and on a phone the status line on a row of its own, the full width.
+
+
+def layout_problems(sheet: str) -> list[str]:
+    found = []
+    rules = merged(sheet)
+    if rules.get(("", ".search-fold"), {}).get("margin") != "4px 0 0 46px":
+        found.append("the fold is not set in under the source lines")
+    if rules.get(("", ".no-sources .search-fold"), {}).get("margin-left") != "0":
+        found.append("the fold is set in where there are no source lines")
+    if rules.get(("", ".no-sources .passages"), {}).get("padding-left") != "46px":
+        found.append("the grey stops have no room where there are no source lines")
+    phone = rules.get(("(max-width: 30rem)", ".composer-meta"), {})
+    areas = phone.get("grid-template-areas", "").replace('"', "").split()
+    if areas != ["count", "status"] or phone.get("grid-template-columns") != "minmax(0, 1fr)":
+        found.append("on a phone the status line does not have a row of its own, the full width")
+    return found
+
+
+def test_the_layout_the_reviews_asked_for_holds() -> None:
+    assert layout_problems(static("demo.css")) == []
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        ".no-sources .search-fold { margin-left: 46px; }",
+        ".no-sources .passages { padding-left: 0; }",
+        '@media (max-width: 30rem) { .composer-meta { grid-template-areas: "status count"; } }',
+        ".search-fold { margin: 4px 0 0; }",
+    ],
+)
+def test_the_check_of_the_layout_finds_each_rule_planted(rule: str) -> None:
+    assert layout_problems(f"{static('demo.css')}\n{rule}\n") != []

@@ -1,0 +1,167 @@
+{
+  "description": "Answers by gemini-3.5-flash-lite from 5 passages under the answering instructions of version 2.",
+  "config": {
+    "handbook_commit": "e645aac6dc6fbb0b759b92ed32f016aaed5ef4b8",
+    "chunking": "v1-max320-min60-overlap40",
+    "collection": "handbook-e645aac6-baai-bge-small-en-v1-5-qdrant-bm25-v1-max320-min60-overlap40",
+    "retrieval_mode": "hybrid",
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "sparse_model": "Qdrant/bm25",
+    "fusion_candidates": 30,
+    "rrf_k": 60,
+    "rerank": false,
+    "answer_model": "gemini-3.5-flash-lite",
+    "answer_max_tokens": 4000,
+    "answer_context_chunks": 5,
+    "citations": "numbered markers",
+    "instructions": "880b0c9f82f4d566",
+    "instructions_version": 2,
+    "questions": "unanswerable"
+  },
+  "labels_fingerprint": "2fbc0e29e252aa8a",
+  "questions_scored": 33,
+  "questions_failed": 0,
+  "questions_not_asked": 0,
+  "attempts": 33,
+  "metrics": {
+    "right_call": {
+      "mean": 0.9090909090909091,
+      "low": 0.8181818181818182,
+      "high": 1.0,
+      "count": 33
+    },
+    "declined": {
+      "mean": 0.9090909090909091,
+      "low": 0.8181818181818182,
+      "high": 1.0,
+      "count": 33
+    },
+    "fully_cited": {
+      "mean": 1.0,
+      "low": 1.0,
+      "high": 1.0,
+      "count": 3
+    }
+  },
+  "by_group": {
+    "origin": {
+      "model-drafted": {
+        "right_call": {
+          "mean": 0.9090909090909091,
+          "low": 0.8181818181818182,
+          "high": 1.0,
+          "count": 33
+        },
+        "declined": {
+          "mean": 0.9090909090909091,
+          "low": 0.8181818181818182,
+          "high": 1.0,
+          "count": 33
+        },
+        "fully_cited": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0,
+          "count": 3
+        }
+      }
+    },
+    "unanswerable_kind": {
+      "false-premise": {
+        "right_call": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0,
+          "count": 3
+        },
+        "declined": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0,
+          "count": 3
+        }
+      },
+      "near-miss": {
+        "right_call": {
+          "mean": 0.8947368421052632,
+          "low": 0.7368421052631579,
+          "high": 1.0,
+          "count": 19
+        },
+        "declined": {
+          "mean": 0.8947368421052632,
+          "low": 0.7368421052631579,
+          "high": 1.0,
+          "count": 19
+        },
+        "fully_cited": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0,
+          "count": 2
+        }
+      },
+      "out-of-scope": {
+        "right_call": {
+          "mean": 0.9090909090909091,
+          "low": 0.7272727272727273,
+          "high": 1.0,
+          "count": 11
+        },
+        "declined": {
+          "mean": 0.9090909090909091,
+          "low": 0.7272727272727273,
+          "high": 1.0,
+          "count": 11
+        },
+        "fully_cited": {
+          "mean": 1.0,
+          "low": 1.0,
+          "high": 1.0,
+          "count": 1
+        }
+      }
+    },
+    "evidence": {}
+  },
+  "timing": {
+    "median_seconds": 1.0543700000271201,
+    "p95_seconds": 1.5729094999842346,
+    "median_seconds_to_first_text": 1.0519200419075787,
+    "median_seconds_to_first_shown": 1.0544214588589966,
+    "p95_seconds_to_first_shown": 1.5731359170749784
+  },
+  "tokens": {
+    "input_total": 82126.0,
+    "output_total": 685.0,
+    "input_mean": 2488.6666666666665,
+    "output_mean": 20.757575757575758
+  },
+  "declined_in_the_gap_form": {
+    "unanswerable": [
+      "u007",
+      "u008",
+      "u010",
+      "u011",
+      "u012",
+      "u013",
+      "u014",
+      "u016",
+      "u018",
+      "u020",
+      "u024",
+      "u039",
+      "u042",
+      "u046",
+      "u048",
+      "u049"
+    ]
+  },
+  "declined_in_the_gap_form_with_markers": {
+    "unanswerable": [
+      "u010",
+      "u020",
+      "u024"
+    ]
+  }
+}

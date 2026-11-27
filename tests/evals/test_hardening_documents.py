@@ -6,11 +6,10 @@ figures are worked out once, in ``hardening_runs``, and compared here with the d
 record, the guide, the adversarial card, the changelog and the roadmap; the README is held
 by ``tests/test_readme_results.py``.
 
-Two measurements are not wholly in yet: the correctness judge's reading of the answer
-evaluation under version 2, and the confirmation run of the 33 questions the handbook does
-not answer. While one is absent the documents say so in one fixed sentence, and the tests at
-the end of this file wait, saying why. Once it is there, they fail until the sentence is
-gone and the documents give its figures.
+Every measurement of the hardening is in: the answer evaluation under version 2 with both
+judges, and the confirmation run of the 33 questions the handbook does not answer. The
+tests at the end of this file once waited for them; they now hold the documents to them,
+and each would wait again, saying why, if its run were taken away.
 """
 
 import hashlib
@@ -26,7 +25,7 @@ from typer.testing import CliRunner
 
 from handbook_rag.cli import app
 from handbook_rag.evals import adversarial
-from handbook_rag.evals.answers import load_records
+from handbook_rag.evals.answers import load_records, shown_in_the_models_words
 from handbook_rag.evals.compare import compare_runs
 from handbook_rag.evals.dataset import load_golden_set
 from handbook_rag.evals.metrics import share_with_interval
@@ -966,7 +965,10 @@ def test_the_documents_give_the_answer_evaluation_under_version_2() -> None:
     for case in ("u010", "u043", "u047"):
         assert f"> `{case}`: {plain(records[case].text_with_markers)}" in text, case
         assert records[case].answered, case
-    for figures in ("| 127 | 126 | 121 or fewer | no |", "| 31 | 27 | 28 or fewer | **yes** |"):
+    for figures in (
+        "| 127 | 126 | 121 or fewer | no |",
+        "| 31 | 27 as the run was made | 28 or fewer | **yes** |",
+    ):
         assert figures in text, figures
     assert "**29 of 33 declined**" in text
     assert "**That is not a result under line e**" in text
@@ -1082,10 +1084,30 @@ def test_the_tables_of_the_answer_run_under_version_2_are_the_runs() -> None:
             f"{round(supported['mean'] * supported['count'])} of {supported['count']}",
         ],
     ]
+    correct = json.loads(read(runs.ANSWER_RUN_V2 / "summary.json"))["metrics"]["correct"]
+    first_correct = json.loads(read(ANSWER_BASELINE / "summary.json"))["metrics"]["correct"]
+    gets = json.loads(read(runs.ANSWER_RUN_V2 / "summary.json"))["metrics"]["answered_correctly"]
+    first_gets = json.loads(read(ANSWER_BASELINE / "summary.json"))["metrics"]["answered_correctly"]
+    correct_row = [
+        f"{round(first_correct['mean'] * first_correct['count'])} of {first_correct['count']}",
+        f"{round(correct['mean'] * correct['count'])} of {correct['count']}",
+        f"{round(correct['mean'] * correct['count'])} of {correct['count']}",
+    ]
+    gets_row = [
+        str(round(first_gets["mean"] * first_gets["count"])),
+        str(round(gets["mean"] * gets["count"])),
+        str(round(gets["mean"] * gets["count"])),
+    ]
     readme = table(read(README), "| | Version 1 (`baseline`) | Version 2, as the run was made |")
     guide = table(read(GUIDE), "| | Version 1 (`baseline`) | Version 2, as the run was made |")
-    assert [row[1:] for row in readme] == expected
-    assert [row[1:] for row in guide] == [expected[0], expected[2], expected[1], expected[3]]
+    assert [row[1:] for row in readme] == [*expected, correct_row, gets_row]
+    assert [row[1:] for row in guide] == [
+        expected[0],
+        expected[2],
+        expected[1],
+        expected[3],
+        correct_row,
+    ]
 
 
 def test_the_documents_name_the_decline_that_is_not_shown_as_the_fixed_sentence() -> None:
@@ -1145,8 +1167,9 @@ def test_the_documents_carry_the_label_of_the_reading_after_the_run_and_no_unsav
     for path in (README, GUIDE):
         assert header in read(path), path.name
         assert "15 of the correctness" not in read(path), path.name
-    for path in (ADR, GUIDE):
-        assert "its verdicts are not in the repository yet" in read(path), path.name
+    for path in (ADR, GUIDE, README, ROADMAP, CHANGELOG):
+        assert "its verdicts are not in the repository yet" not in read(path), path.name
+        assert "not in the repository yet" not in read(path), path.name
     assert "27 verdicts" not in read(ROADMAP)
     assert "last 27" not in read(ROADMAP)
 
@@ -1215,3 +1238,88 @@ def test_the_documents_describe_the_reading_as_the_code_does_it() -> None:
     told = "the reader was told more than the note of 14:22 holds"
     for path in (README, LIMIT_CARD, CHANGELOG, ROADMAP):
         assert told in read(path), path.name
+
+
+def test_the_confirmation_run_and_the_three_figures_for_line_e() -> None:
+    """27 by the code as it was, 29 read again, 30 on fresh replies with the change, of
+    which 3 rest on it: worked out from the runs, and never blurred in the documents."""
+    records = load_records(runs.CONFIRMATION / "answers.jsonl")
+    summary = json.loads(read(runs.CONFIRMATION / "summary.json"))
+    run = json.loads(read(runs.CONFIRMATION / "run.json"))
+    declined = [case for case, record in records.items() if not record.answered]
+    with_markers = sorted(c for c, r in records.items() if shown_in_the_models_words(r))
+    answered = sorted(case for case, record in records.items() if record.answered)
+
+    assert (len(records), run["attempts"], run["config"]["questions"]) == (33, 33, "unanswerable")
+    assert summary["questions_failed"] == 0
+    assert len(declined) == 30
+    assert with_markers == ["u010", "u020", "u024"]
+    # The code before the change counted a reply in the form with markers as an answer.
+    assert len(declined) - len(with_markers) == 27
+    assert answered == ["u004", "u006", "u043"]
+    assert len([r for r in records.values() if r.model_text]) == 16
+    text = read(ADR)
+    for case in answered:
+        words = " ".join(records[case].text_with_markers.split())
+        assert f"> `{case}`: {words}" in text, case
+    for phrase in (
+        "**27 of 33**, by the code as it was when the run was made: line e met.",
+        "**29 of 33**, the same replies read again after the one change: not a result under line e",
+        "**30 of 33**, fresh replies with the change: line e not met. 3 of the 30",
+        "| e, on the confirmation | | 30, with the one change; 3 of them rest on it, and by the "
+        "code before it 27 | 28 or fewer | no |",
+        "By that note, the hardening may then be merged.",
+    ):
+        assert phrase in text, phrase
+    timing, tokens = summary["timing"], summary["tokens"]
+    assert f"{timing['median_seconds']:.1f} s at the median" in text
+    assert f"read {tokens['input_mean']:,.0f} tokens and wrote {tokens['output_mean']:.0f}" in text
+    for path in (README, GUIDE, CHANGELOG, ROADMAP):
+        body = read(path)
+        assert "30" in body, path.name
+        assert "rests on the change" in body or "rest on the change" in body, path.name
+    for path in (ADR, README, GUIDE, ROADMAP):
+        assert "issues/88" in read(path), path.name
+
+
+def test_the_correctness_judge_and_line_d_are_the_files() -> None:
+    rows = [json.loads(line) for line in read(runs.ANSWER_RUN_V2 / "correct.jsonl").splitlines()]
+    verdicts = {row["case"]: row["verdicts"][0]["verdict"] for row in rows}
+    checked = {
+        json.loads(line)["fingerprint"]
+        for line in read(ROOT / "evals/runs/judge-correct/baseline/judgements.jsonl").splitlines()
+        if line
+    }
+    state = json.loads(read(runs.ANSWER_RUN_V2 / "correct.json"))
+    grades = {
+        run: {
+            row["prompt_id"]: row["grade"]
+            for row in map(json.loads, read(runs.RUNS / run / "results.jsonl").splitlines())
+        }
+        for run in ("answers/baseline", "answers/hardened")
+    }
+    before, after = grades["answers/baseline"], grades["answers/hardened"]
+    both = [q for q in before if "correct" in before[q] and "correct" in after[q]]
+
+    assert len(rows) == 126
+    assert Counter(verdicts.values()) == {"correct": 123, "partial": 1, "incorrect": 2}
+    assert sorted(q for q, v in verdicts.items() if v == "incorrect") == ["b28", "q117"]
+    assert [q for q, v in verdicts.items() if v == "partial"] == ["q124"]
+    assert sum(row["fingerprint"] in checked for row in rows) == 15
+    assert state["attempts"] == 120
+    assert len(both) == 126
+    assert [q for q in both if after[q]["correct"] > before[q]["correct"]] == ["q062"]
+    assert sorted(q for q in both if after[q]["correct"] < before[q]["correct"]) == ["b28", "q117"]
+    assert f"{runs.sign_test(1, 2):.3f}" == "1.000"
+    text = read(ADR)
+    golden = {q.id: q for q in load_golden_set(GOLDEN)}
+    records = load_records(runs.ANSWER_RUN_V2 / "answers.jsonl")
+    for case in ("q117", "b28"):
+        assert f"> `{case}`, the reference: {golden[case].reference_answer}" in text, case
+        answer = " ".join(records[case].text_with_markers.replace("\n- ", " ").split())
+        assert answer in " ".join(text.split()), case
+    assert (
+        "| d. Correct by the reference | 125 of 127 | 123 of 126; on the 126 judged in both, "
+        "1 better (`q062`), 2 worse (`q117`, `b28`), p = 1.000 | lower, and p below 0.05 | no |"
+        in text
+    )

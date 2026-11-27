@@ -115,6 +115,11 @@ PINNED = {
     # A cut of the reply at each citation marker was made after that, and taken out again:
     # it could make a decline of an answer and take back text already passed on. The code
     # is the code these hashes were pinned for before it, and the judgement above stands.
+    #
+    # From version 1.1.0 on, version 2 of the instructions is released: its collections
+    # exist wherever that version has run. The judgements above that lean on its not being
+    # released held when they were made. A change after 1.1.0 that makes a stored answer
+    # wrong must raise the version.
     "generate/base.py": "0ee531a76b7e64ab",
     "generate/checks.py": "c707db1c3e33db67",
     "generate/claude.py": "0a4a690b15c721b1",

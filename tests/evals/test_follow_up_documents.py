@@ -1524,7 +1524,7 @@ WRONG = {
 
 def test_the_changelog_and_the_roadmap_give_the_figures_of_the_run() -> None:
     k = figures()
-    changelog = read(CHANGELOG).split("## [Unreleased]")[1].split("\n## [")[0]
+    changelog = read(CHANGELOG).split("## [1.1.0] - 2026-11-27")[1].split("\n## [")[0]
     step = line_starting(changelog, "- The rewriting step, `handbook_rag.rewrite`")
     measurement = line_starting(
         changelog, "- `handbook-rag eval-follow-ups` and `make eval-follow-ups`"

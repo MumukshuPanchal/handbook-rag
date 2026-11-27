@@ -1,6 +1,6 @@
 [project]
 name = "handbook-rag"
-version = "1.0.0"
+version = "1.1.0"
 description = "A knowledge assistant that answers questions from a company handbook with cited, evaluated answers."
 readme = "README.md"
 authors = [{ name = "Mumukshu Panchal" }]

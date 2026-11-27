@@ -42,6 +42,8 @@ PULLS |= {49, 50, 54, 55, 56, 57, 62, 63, 64, 65, 67, 68}
 ISSUES |= {78, 79, 80}
 # Opened since: scoring a reply that says the passages do not say and adds a related fact.
 ISSUES |= {88}
+# Opened since: measuring the replies the reading of the fixed form gets wrong.
+ISSUES |= {89}
 
 # A number as the README prints it: 132, 1,654, 0.962. A digit that is part of a name is
 # not one (Recall@5, v2, a commit hash), and neither is a percentage, which here only

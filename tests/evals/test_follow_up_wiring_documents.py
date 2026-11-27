@@ -224,14 +224,14 @@ def test_every_link_of_the_record_leads_somewhere() -> None:
 def test_the_changelogs_lines_of_the_wiring_give_the_same_figures() -> None:
     k, h = documents.figures(), held_out_figures()
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    unreleased = changelog.split("## [Unreleased]")[1].split("\n## [")[0]
+    released = changelog.split("## [1.1.0] - 2026-11-27")[1].split("\n## [")[0]
     wiring = "0024"
 
-    assert numbers(line_starting(unreleased, "- Follow-up questions in the service.")) == [
+    assert numbers(line_starting(released, "- Follow-up questions in the service.")) == [
         documents.FOLLOW_UPS,
         wiring,
     ]
-    assert numbers(line_starting(unreleased, "- Held-out follow-up cases")) == [
+    assert numbers(line_starting(released, "- Held-out follow-up cases")) == [
         str(h["cases"]),
         str(h["follow_right"]),
         str(h["follow_of"]),
@@ -242,8 +242,8 @@ def test_the_changelogs_lines_of_the_wiring_give_the_same_figures() -> None:
         documents.FOLLOW_UPS,
         wiring,
     ]
-    rule = line_starting(unreleased, "- The rewriting step's rule for a rewrite without")
+    rule = line_starting(released, "- The rewriting step's rule for a rewrite without")
     assert numbers(rule) == [str(k["cases"]), documents.RECORD, wiring]
-    body = line_starting(unreleased, "- `POST /ask` reads a body of up to")
+    body = line_starting(released, "- `POST /ask` reads a body of up to")
     assert numbers(body) == [str(MAX_BODY_BYTES // 1024), "8", wiring]
     assert "\n[ADR 0024]: docs/adr/0024-follow-up-questions-in-the-service.md\n" in changelog

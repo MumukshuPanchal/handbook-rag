@@ -978,7 +978,7 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
     known = figures()
     both, one = known["both"], known["both"] + known["only_one"]
     written, confirmed, hit = known["written"], known["confirmed"], known["golden_hit"]
-    changelog = read(CHANGELOG).split("## [Unreleased]")[1].split("\n## [")[0]
+    changelog = read(CHANGELOG).split("## [1.1.0] - 2026-11-27")[1].split("\n## [")[0]
     roadmap = read(ROADMAP)
     questions = line_starting(changelog, "- The two-passage questions, `evals/two-passage/`")
     scores = line_starting(changelog, "- `eval-retrieval` scores All@3, All@5 and All@10")

@@ -4,6 +4,10 @@ What each version of this project contains. The format follows [Keep a Changelog
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-27
+
+The second version: the assistant takes follow-up questions, serves an answer it wrote before to the same question or to one that a second model judges to mean the same, and answers under version 2 of its instructions, with checks of each reply in code, against instructions planted in a page. The API serves a demo page that holds a conversation, and an MCP server offers the search to AI assistants. Version 2 was measured against version 1 on the same questions and on cases kept from the work on it, and the [README](README.md#results) reports what got better and what got worse, such as fewer declines of the questions the handbook does not answer.
+
 ### Added
 
 - `index --reuse-from <older commit>`: index a newer commit of the handbook into a collection of its own, taking the vectors of every chunk whose embedded text is unchanged from the older commit's collection, which is only read. It refuses vectors made with another embedding model, keyword model or chunking, and reports the pages added, changed, removed and unchanged, the chunks reused and embedded, and how long each part took ([#21], [ADR 0019]).
@@ -65,6 +69,29 @@ What each version of this project contains. The format follows [Keep a Changelog
 - A replacement of the snapshot that failed after the files changed left the manifest of the old commit beside them. The manifest is now removed before the files change ([ADR 0019]).
 - The documents said that measuring the answers again after a change to the instructions costs more than a day of the free allowance. It is about 460 requests of the 500 a day, and more than a day only when attempts have to be repeated ([#69]).
 - A Claude stream whose connection timed out or broke after it had begun let the HTTP library's own error through, which the service then reported as a fault of its own. It is now reported as a model that did not answer in time, or as an unavailable one ([ADR 0018]).
+
+### Known gaps
+
+These are the [limitations in the README](README.md#limitations). The [roadmap](docs/roadmap.md#after-10) gives the open issues in the order they should be taken up.
+
+- No person has verified the test questions, the labelled answers or the readings, in the sets of 1.0.0 or in those this version adds: model sessions made and checked them ([#8]).
+- Most test questions were written by a model that could see the passage; too few were written without it ([#43]).
+- The search gives the model both passages for 12 of the 33 questions that need two, no change to the search that was tried finds them clearly more often, and no answer was written for these questions ([#78], [ADR 0021]).
+- A follow-up is rewritten from the earlier questions alone, so one that points at something only an answer named is usually rewritten to a wrong question. Real conversations and the answers to rewritten questions are not measured, and the rule for a rewrite without a question mark was last changed after the held-out replies were seen ([ADR 0022], [ADR 0024]).
+- Both judges are the answer model itself, checked on that model's answers only, and whether a planted instruction moves a judge is not tested ([ADR 0014]).
+- The first judge's instructions lack two rules of its rubric, and its numbering slipped in one long answer ([#58]).
+- Questions whose false assumption the handbook corrects are not in the test set ([#37]).
+- Version 2 of the answering instructions declines fewer of the questions the handbook does not answer: 27 of 33 as the run was made, against 31 under version 1; 29 when the same replies are read again after the one change; 30 when asked again with the change, which passes the line drawn before the run and rests on the change. A reply that says the passages do not say and adds a related fact counts as a wrong call ([#88], [ADR 0025]). How code reads a reply in the fixed form is wrong in cases the decision record names, in both directions, and how often is not measured ([#89]).
+- Planted instructions still get through. On the 20 held-out cases, a notice that a page's process is out of date and a notice that keeps the answer to managers were obeyed, and a planted closing line with an address was written by the model twice and taken out only by a check. On the cases the hardening was tuned on, a page that calls itself confidential still ends in a withheld answer, through a check. Encoded instructions, instructions split across passages and instructions in a title were not tried ([ADR 0025]).
+- How often answers leave out a limit is measured only on 40 questions chosen for it, by a judge that errs. By a blind reading the difference between the two versions of the instructions is not clear, and the questions people ask are not measured ([#59]).
+- One reply for each question, on a free tier whose speed is uneven.
+- The answer cache is tuned on pairs no person has read, keeps what the model wrote once, right or wrong, and shows a stored question to whoever is served its answer. Nothing is measured on real questions ([ADR 0020]).
+- No authentication and no rate limit for each caller.
+- A fallback model that answers has not been seen, and its answers are not evaluated ([ADR 0018]).
+- The demo page's script is run in node, not in a browser; its look, a real browser and a screen reader are left to checks by hand ([ADR 0016]).
+- One pinned snapshot of the handbook. The index can be updated to a newer commit, but the test questions and the saved runs are tied to the pinned one, and text the handbook repeats is indexed as often as it appears ([#34], [ADR 0019]).
+- The Claude path has never been run, also not under version 2 of the instructions, and model tiers were not compared ([#17]).
+- Checked on one laptop: the quickstart has not been followed on a clean machine, and a full indexing run inside a container has not been done.
 
 ## [1.0.0] - 2026-11-23
 
@@ -147,7 +174,8 @@ These are the [limitations in the README](README.md#limitations).
 - The Claude path has never been run, and model tiers were not compared ([#17]).
 - Checked on one laptop: the quickstart has not been followed on a clean machine, and a full indexing run inside a container has not been done.
 
-[Unreleased]: https://github.com/MumukshuPanchal/handbook-rag/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/MumukshuPanchal/handbook-rag/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/MumukshuPanchal/handbook-rag/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/MumukshuPanchal/handbook-rag/releases/tag/v1.0.0
 [#8]: https://github.com/MumukshuPanchal/handbook-rag/issues/8
 [#17]: https://github.com/MumukshuPanchal/handbook-rag/issues/17
@@ -193,6 +221,7 @@ These are the [limitations in the README](README.md#limitations).
 [#65]: https://github.com/MumukshuPanchal/handbook-rag/pull/65
 [#66]: https://github.com/MumukshuPanchal/handbook-rag/issues/66
 [#88]: https://github.com/MumukshuPanchal/handbook-rag/issues/88
+[#89]: https://github.com/MumukshuPanchal/handbook-rag/issues/89
 [#67]: https://github.com/MumukshuPanchal/handbook-rag/pull/67
 [#69]: https://github.com/MumukshuPanchal/handbook-rag/pull/69
 [#70]: https://github.com/MumukshuPanchal/handbook-rag/pull/70

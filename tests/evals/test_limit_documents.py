@@ -1129,7 +1129,7 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
         str(round(by_first.mean * by_first.count)),
     ]
     known = the_set()
-    changelog = read(CHANGELOG).split("## [Unreleased]")[1].split("\n## [")[0]
+    changelog = read(CHANGELOG).split("## [1.1.0] - 2026-11-27")[1].split("\n## [")[0]
     roadmap = read(ROADMAP)
     labelled = line_starting(changelog, "- Labelled answers for one fault, `evals/judge/limits/`")
     judge = line_starting(changelog, "- Version 2 of the support judge, `--judge-version 2`")

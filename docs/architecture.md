@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the system as it is at version 1.0.0 and how its parts fit together. The reasons behind each major choice are in the [decision records](adr/). The goals and success metrics are in the [project charter](charter.md).
+This document describes the system as it is at version 1.1.0 and how its parts fit together. The reasons behind each major choice are in the [decision records](adr/). The goals and success metrics are in the [project charter](charter.md).
 
 ## Overview
 
@@ -15,7 +15,7 @@ Two further parts keep the system honest: an **evaluation harness** that measure
 
 1. **Measure first.** A change to any stage must show up in the evaluation. A baseline is measured before anything is optimised.
 2. **Replaceable stages.** Each stage sits behind a small interface, so one can change without the others noticing.
-3. **One code path.** The answer evaluation and the API call the same pipeline function. We never measure a copy of the system. The evaluation calls it without the answer cache, which only the command line and the API pass: an answer that was stored says nothing about the model. While a command that measures runs, no cache can be built.
+3. **One code path.** The answer evaluation and the API call the same pipeline function. We never measure a copy of the system. The evaluation calls it without the answer cache and without the rewriting step, which only the command line and the API pass: an answer that was stored says nothing about the model, and a rewrite would put another request and another question in front of the answer. While a command that measures runs, no cache can be built and the rewriting step is refused.
 4. **Reproducible.** The handbook is pinned to a commit, chunk IDs are deterministic, dependencies are locked.
 5. **Observable.** With tracing switched on, every request produces a trace. It is off by default and on in Docker Compose. Debugging starts from data.
 
@@ -39,37 +39,44 @@ flowchart LR
 ```mermaid
 flowchart LR
     U["Client"] --> API["API<br/>POST /ask"]
-    API --> R1["Dense search"]
-    API --> R2["Sparse search<br/>(BM25)"]
+    API -. "with earlier questions" .-> RW["Rewrite a follow-up<br/>to stand alone,<br/>one request to the model"]
+    RW -.-> AC
+    API --> AC["Answer cache<br/>the same question, or one that means the same"]
+    AC -- "stored answer" --> API
+    AC -- "nothing stored" --> R1["Dense search"]
+    AC -- "nothing stored" --> R2["Sparse search<br/>(BM25)"]
     R1 --> F["Fuse<br/>reciprocal rank fusion"]
     R2 --> F
     F -. "when switched on" .-> RR["Rerank<br/>cross-encoder"]
     F --> G["Generate<br/>Gemini or Claude, with citations"]
     RR -.-> G
-    G --> API
-    API <--> AC["Answer cache<br/>the same question, or one that means the same"]
+    G --> CH["Check the reply<br/>in code"]
+    CH --> API
     R1 <--> Q[("Qdrant")]
     R2 <--> Q
     AC <--> Q
     API -. "spans" .-> T["Trace backend<br/>(OTLP)"]
 ```
 
-1. **Validate** the question (non-empty, within a length limit).
-2. **Retrieve candidates** twice: by meaning (dense) and by exact terms (sparse).
-3. **Fuse** the two ranked lists into one with reciprocal rank fusion.
-4. **Rerank**, when reranking is switched on; it is off by default. A cross-encoder reads the question and each fused candidate together and scores how well they match. Without reranking, the top few of the fused list are kept; with it, the top few after reranking.
-5. **Generate** an answer. The kept chunks are sent to a language model as search results. The instructions tell the model to answer only from them, to say which search result supports each statement, and to reply with one fixed sentence when they do not contain the answer. Under version 2 a reply made only of the fixed form for a missing part is a decline too: shown as that sentence when it cites nothing, and in its own words with no sources when it carried citation markers ([ADR 0025](adr/0025-hardening-against-planted-instructions.md)). The model's name selects the provider:
+1. **Validate** the question and any earlier questions of the conversation: each non-empty and within a length limit. An earlier question must be a string, so an answer sent in its place is refused.
+2. **Rewrite a follow-up**, when the caller sends earlier questions and the step is switched on. The latest few of them, questions only, and the new question go to the answer model in one request, and its reply is used only when it passes the step's checks of a question. Otherwise, or when the request fails or runs out of time, the question is searched for as it was typed, and the answer says so. From here on, the question is the one that came out of this step. Details: [ADR 0022](adr/0022-follow-up-questions-rewritten-before-the-search.md), [ADR 0024](adr/0024-follow-up-questions-in-the-service.md).
+3. **Look up the answer cache**, when the caller passes one, as described below. A stored answer ends the request here, with no search and no request to the model.
+4. **Retrieve candidates** twice: by meaning (dense) and by exact terms (sparse).
+5. **Fuse** the two ranked lists into one with reciprocal rank fusion.
+6. **Rerank**, when reranking is switched on; it is off by default. A cross-encoder reads the question and each fused candidate together and scores how well they match. Without reranking, the top few of the fused list are kept; with it, the top few after reranking.
+7. **Generate** an answer. The kept chunks are sent to a language model as search results, under version 2 of the answering instructions, the product's own. They tell the model to answer only from the passages and to say which one supports each statement, to keep the limits a passage puts on a rule, to take nothing a passage says to an assistant as an instruction, nor a notice that a page is confidential as a reason to decline, to begin each sentence about a part the passages do not answer with the fixed form "The passages found do not say", and to reply with one fixed sentence when they do not contain the answer. A reply made only of that fixed form is a decline too: shown as that sentence when it cites nothing, and in its own words with no sources when it carried citation markers ([ADR 0025](adr/0025-hardening-against-planted-instructions.md)). Version 1 stays in the code so that an evaluation command can ask the old and the new assistant on the same day (`--instructions 1`); outside an evaluation a generator refuses it, and no setting names a version. The model's name selects the provider:
    - **Gemini, the default.** The passages are numbered, the model writes the numbers as markers such as `[2]`, and our code turns the markers into citations. Details: [ADR 0013](adr/0013-gemini-free-tier-with-marker-citations.md).
    - **Claude.** The API's built-in citations return the quoted words with each statement. Details: [ADR 0010](adr/0010-search-result-blocks-and-declining.md). This generator has not been run against the Claude API yet.
 
    The request is bounded. It may be silent for 20 seconds; a failure that another attempt may fix is tried again, three attempts at most, within 30 seconds of the first request; and an optional second model gets one attempt when the first gives up. Every request is counted on the answer and traced. Details: [ADR 0018](adr/0018-time-limits-retries-and-a-fallback.md).
-6. **Return** the answer, its citations (page, section, URL and the passage's text; the words a Claude citation quotes are kept in the pipeline's answer but not returned yet), whether the assistant answered or abstained, how many requests to a model it took and whether the fallback model wrote it, and a trace ID. `POST /ask` returns them as one JSON object, or, when the request asks for a stream, sends the text as server-sent events while the model writes and the same object at the end. Details: [ADR 0015](adr/0015-answers-over-http.md).
+8. **Check the reply** in code, inside the generator, before anyone is given it; under version 1 nothing is checked. A line after the last citation that holds a web or email address is dropped, a reply that cites nothing is declined, and a reply of 200 words or more that is mostly a copy of its passages is marked. A decline with more words than the fixed sentence is shown as that sentence alone, except the fixed form with markers above, and a reply that did not come to a proper end loses its words after the last citation. Each check that fired is named on the answer with a note in fixed words. So that nothing streamed is taken back, text is passed on only once a citation follows it. Details: [ADR 0025](adr/0025-hardening-against-planted-instructions.md).
+9. **Return** the answer, its citations (page, section, URL and the passage's text; the words a Claude citation quotes are kept in the pipeline's answer but not returned yet), whether the assistant answered or abstained, how many requests to a model it took and whether the fallback model wrote it, the checks that fired (`checks`), where a stored answer came from (`cached`, null for an answer written for this request), the question searched for and how step 2 came to it (`searched_for`), and a trace ID. `POST /ask` returns them as one JSON object, or, when the request asks for a stream, sends `searched_for` first, then the text as server-sent events while the model writes, and the same object at the end. Details: [ADR 0015](adr/0015-answers-over-http.md).
 
-Steps 2 to 6 are one function, `answer_question` in `pipeline.py`, which the command line, the API and the answer evaluation all call. Given the earlier questions of a conversation, the command line and the API also hand it the rewriting step, which turns a follow-up into a question that stands alone before anything else; the question that comes out is the one looked up in the cache, searched for and answered ([ADR 0024](adr/0024-follow-up-questions-in-the-service.md)). The service keeps no conversation: the caller sends the earlier questions, never their answers. It also opens the spans of the answer, so every caller leaves the same trace. The wrapper that repeats requests opens the span of each request itself, and the pipeline opens the one span of a generator that is not wrapped, such as the evaluation's. The API runs it in a worker thread for each answer, because the generators block while the model writes, and a setting caps how many run at once.
+Steps 2 to 9 are one function, `answer_question` in `pipeline.py`, which the command line, the API and the answer evaluation all call. The command line and the API hand it the answer cache, and the rewriting step with the earlier questions of a conversation; the answer evaluation gets neither. The service keeps no conversation: the caller sends the earlier questions, never their answers ([ADR 0024](adr/0024-follow-up-questions-in-the-service.md)). The function also opens the spans of the answer, so every caller leaves the same trace. The wrapper that repeats requests opens the span of each request itself, and the pipeline opens the one span of a generator that is not wrapped, such as the evaluation's. The API runs it in a worker thread for each answer, because the generators block while the model writes, and a setting caps how many run at once.
 
-**The answer cache comes before step 2.** When the command line or the API asks, `answer_question` first looks the question up among the answers stored earlier: by a key, for the very same question, and then, in the default mode, among the stored questions nearest to it, each read together with the new one by a second model. A stored answer is returned without a search and without a request to the model. It says that it is one, and names the question it was written for. Otherwise the answer is written as described above, and kept if it is a whole answer of the answer model. A lookup waits 2 seconds at most, and then the answer is written as if there were no cache. The answers are kept in Qdrant, in a collection of its own beside the index, which the service makes when it starts. Its name changes with every setting that decides an answer, and a version number in the code stands for what no setting shows. A question that only looks like a stored one will sometimes be served its answer, which is why a cached answer names its question. Details, with the measured risk: [ADR 0020](adr/0020-an-answer-cache-that-matches-by-meaning.md).
+**The answer cache is step 3.** When the command line or the API asks, `answer_question` looks the question that came out of step 2 up among the answers stored earlier: by a key, for the very same question, and then, in the default mode, among the stored questions nearest to it, each read together with the new one by a second model. A stored answer is returned without a search and without a request to the model. It says that it is one, and names the question it was written for. Otherwise the answer is written as described above, and kept if it is a whole answer of the answer model that no check changed or marked. A lookup waits 2 seconds at most, and then the answer is written as if there were no cache. The answers are kept in Qdrant, in a collection of its own beside the index, which the service makes when it starts. Its name changes with every setting that decides an answer, and a version number in the code stands for what no setting shows. A question that only looks like a stored one will sometimes be served its answer, which is why a cached answer names its question. Details, with the measured risk: [ADR 0020](adr/0020-an-answer-cache-that-matches-by-meaning.md).
 
-The first working version (the baseline) used dense search only and skipped steps 3 and 4. Hybrid search is now the default, and reranking is available but switched off. Both decisions, with the measurements and the judgement behind them, are in [ADR 0011](adr/0011-hybrid-retrieval-by-default.md).
+The first working version (the baseline) used dense search only and skipped steps 5 and 6. Hybrid search is now the default, and reranking is available but switched off. Both decisions, with the measurements and the judgement behind them, are in [ADR 0011](adr/0011-hybrid-retrieval-by-default.md).
 
 ## Components
 
@@ -81,9 +88,11 @@ The first working version (the baseline) used dense search only and skipped step
 | Vector store | Store and search vectors with metadata | Qdrant | [ADR 0004](adr/0004-qdrant-as-vector-store.md) |
 | Fusion | Merge dense and sparse rankings | Our own code (reciprocal rank fusion) | [ADR 0003](adr/0003-own-pipeline-code-instead-of-a-framework.md) |
 | Reranker | Re-score candidates against the question | sentence-transformers cross-encoder | [ADR 0005](adr/0005-local-embedding-and-reranking-models.md) |
+| Rewriting step | Turn a follow-up into a question that stands alone, from the earlier questions only, before the cache and the search; fall back to the question as typed | Our own code, and one request to the answer model | [ADR 0022](adr/0022-follow-up-questions-rewritten-before-the-search.md), [ADR 0024](adr/0024-follow-up-questions-in-the-service.md) |
 | Answer cache | Serve a stored answer again, to the same question or to one that means the same, and say so | Our own code, a Qdrant collection of its own, and a cross-encoder trained for natural language inference as the second check | [ADR 0020](adr/0020-an-answer-cache-that-matches-by-meaning.md) |
-| Generator | Write a grounded, cited answer, within time limits, with an optional fallback model | Gemini through Google's API by default, or Claude through the Anthropic API | [ADR 0013](adr/0013-gemini-free-tier-with-marker-citations.md), [ADR 0006](adr/0006-claude-with-native-citations-for-generation.md), [ADR 0010](adr/0010-search-result-blocks-and-declining.md), [ADR 0018](adr/0018-time-limits-retries-and-a-fallback.md) |
-| API | HTTP interface: `POST /ask` (JSON or server-sent events), `POST /search` and `GET /health` | FastAPI | [ADR 0015](adr/0015-answers-over-http.md) |
+| Generator | Write a grounded, cited answer under version 2 of the answering instructions, within time limits, with an optional fallback model | Gemini through Google's API by default, or Claude through the Anthropic API | [ADR 0013](adr/0013-gemini-free-tier-with-marker-citations.md), [ADR 0006](adr/0006-claude-with-native-citations-for-generation.md), [ADR 0010](adr/0010-search-result-blocks-and-declining.md), [ADR 0018](adr/0018-time-limits-retries-and-a-fallback.md), [ADR 0025](adr/0025-hardening-against-planted-instructions.md) |
+| Reply checks | Check each reply before anyone is given it: drop a closing line with an address, decline a reply that cites nothing, mark a long copy, and say so with the answer | Our own code (`generate/checks.py`), run by each generator under version 2 | [ADR 0025](adr/0025-hardening-against-planted-instructions.md) |
+| API | HTTP interface: `POST /ask` (JSON or server-sent events, with the earlier questions of a conversation), `POST /search` and `GET /health` | FastAPI | [ADR 0015](adr/0015-answers-over-http.md), [ADR 0024](adr/0024-follow-up-questions-in-the-service.md) |
 | MCP server | Handbook search as one read-only tool for AI assistants, over standard input and output. Added after version 1.0.0 | The official MCP SDK for Python, its low-level server | [ADR 0017](adr/0017-an-mcp-server-for-search.md) |
 | Demo page | A page at `/` that asks `POST /ask`, shows the answer as it arrives with its sources, and what `POST /search` found beside it | Three hand-written files served by the API: HTML, JavaScript and CSS, with no framework and no build step; and one font file, Overpass, with its licence | [ADR 0016](adr/0016-a-demo-page-without-a-build-step.md) |
 | Evaluation | Measure retrieval and answer quality | Our own harness | [ADR 0007](adr/0007-evaluation-strategy.md) |
@@ -118,7 +127,7 @@ Deterministic IDs make indexing idempotent, together with a comparison of what i
 ```mermaid
 flowchart LR
     GS["Golden set<br/>questions, references, evidence"] --> RUN["Evaluation runner"]
-    RUN --> PIPE["The search alone, or the whole pipeline<br/>(the same code as the API)"]
+    RUN --> PIPE["The search alone, the whole pipeline<br/>(the same code as the API),<br/>or one part of it"]
     PIPE --> RES["Per-question results<br/>and traces"]
     RES --> M1["Retrieval metrics<br/>(computed in code)"]
     RES --> M2["Answer metrics<br/>(model judge)"]
@@ -132,13 +141,18 @@ flowchart LR
 - **Answer metrics.** Code decides what it can from each saved reply: whether the assistant was right to answer or to decline, whether the evidence was among its passages, and whether every statement cites one. Two judges decide what code cannot: whether each statement is supported by the passage it cites, and whether the answer agrees with the reference answer. Both are the answer model under other instructions. Each was checked against labelled answers before its score was used, and those labels were made by model sessions of another model family, not by a person ([ADR 0014](adr/0014-answer-evaluation-in-stages.md)). The first judge has a second version, written for the limit an answer leaves out. It keeps its verdicts apart, and no score in the results tables or in a run's summary is read from them ([ADR 0023](adr/0023-a-second-version-of-the-support-judge-for-dropped-limits.md)).
 - **System metrics.** Latency per stage and the tokens of each answer, taken from API responses and traces. Cost in money is worked out only for Claude models, from a price table; the Gemini free tier charges nothing, so the runs so far record tokens and no cost.
 - **Bookkeeping.** Every run stores per-question results and traces. Harness failures such as timeouts are recorded separately from wrong answers.
+- **Adversarial cases.** 36 cases plant an instruction in a passage the model is given, or ask a question outside the handbook, and 20 more planted cases are held out, kept from the work on version 2 of the instructions. A planted case gives its passages to the generator directly; a question outside the handbook goes through the whole pipeline. Code decides what it can, and sets the rest aside for a reader ([the guide](evaluation.md#adversarial-tests), [ADR 0025](adr/0025-hardening-against-planted-instructions.md)).
+- **Limit questions.** The question of each of the 40 passages of the limit set, asked of the generator with that passage and no search, and each answer judged by the second version of the first judge (`eval-limits`, [the guide](evaluation.md#the-limit-questions-asked-of-the-assistant)).
+- **Follow-up measurement.** The rewriting step by itself, on labelled conversations and on a held-out set, one request for each; code decides what it can, and a reader the rest. No answer is written for the rewritten questions (`eval-follow-ups`, [ADR 0022](adr/0022-follow-up-questions-rewritten-before-the-search.md)).
+- **Cache measurement.** A simulated cache that holds the golden questions is asked labelled rewordings and near-misses, with no request to a model API; each threshold is chosen on one half of the pairs and reported on the other. One run fills the cache with the replies of a saved answer run, and lets the cache's own rules decide which may be served by meaning (`eval-cache`, [ADR 0020](adr/0020-an-answer-cache-that-matches-by-meaning.md)).
+- **The reply checks on saved replies.** `eval-reply-checks` makes the checks of version 2 on the replies of a saved run, with no request, so that what they would do can be seen before a request is spent ([ADR 0025](adr/0025-hardening-against-planted-instructions.md)). The answer, adversarial and limit runs can ask version 1 of the instructions (`--instructions 1`), so that the old and the new assistant are compared on the same day.
 - **Regression gate.** CI indexes a fixed slice of the handbook with the real models, scores the default retriever on it, and fails if a score is below its recorded minimum ([ADR 0012](adr/0012-retrieval-gate-on-a-slice.md)).
 
 Details and reasoning: [ADR 0007](adr/0007-evaluation-strategy.md).
 
 ## Observability
 
-With tracing switched on, each request produces one trace with a span per stage: the answer cache's lookup, dense search, sparse search, fusion, rerank when it is on, and one span for each request to the language model. Tracing is off by default (`HANDBOOK_RAG_TRACING`) and on in Docker Compose. Spans record what is needed to explain an answer: which chunks were retrieved with which scores, which model was called, how many tokens were used, and whether the assistant abstained.
+With tracing switched on, each request produces one trace with a span per stage: the rewriting step when a question has earlier questions (`rewrite`, with the span of its own request to the model), the answer cache's lookup, dense search, sparse search, fusion, rerank when it is on, and one span for each request to the language model. Tracing is off by default (`HANDBOOK_RAG_TRACING`) and on in Docker Compose. Spans record what is needed to explain an answer: which chunks were retrieved with which scores, which model was called, how many tokens were used, whether the assistant abstained, how the rewriting step came to the question searched for (`handbook_rag.rewrite.outcome`), and which checks of the reply fired (`handbook_rag.reply_checks`, on the `answer` span).
 
 Spans are exported over OTLP to a local trace backend, and to any other OTLP-compatible backend by changing configuration.
 
@@ -162,13 +176,16 @@ src/handbook_rag/
     index/              embedding, vector store, reuse of an older commit's vectors, comparing two indexes
     retrieve/           dense, sparse, fusion, rerank, and a rule that spreads results over pages,
                         which only an evaluation run can turn on
-    generate/           prompt assembly, one generator per provider, citation mapping,
+    generate/           prompt assembly for each version of the instructions, one generator
+                        per provider, citation mapping, the checks of the reply,
                         and the wrapper that asks again and falls back
     cache/              the answer cache: its two tiers, where it keeps answers,
                         and the second check on a stored question
     rewrite/            the step that rewrites a follow-up into a question that stands alone,
                         which the entry point runs when a question has earlier questions
     pipeline.py         the single entry point: question in, answer out
+    measuring.py        the switch an evaluation turns on: no answer cache, no rewriting step,
+                        and the only time instructions other than the current ones are allowed
     api.py              the FastAPI application
     demo.py             serves the demo page and its files, with their security headers
     static/             the demo page: HTML, JavaScript and CSS, written by hand, and its font
@@ -177,11 +194,12 @@ src/handbook_rag/
     tracing.py          tracing setup, and what each span records
     wiring.py           builds the parts from the settings
     cli.py              the handbook-rag command
-    evals/              metrics, runs, the two judges, adversarial tests, the cache measurement,
+    evals/              metrics, runs, the two judges, adversarial tests, the limit questions,
+                        the cache measurement, the reply checks tried on saved replies,
                         the checks of the two-passage questions and the follow-up measurement
-evals/                  golden set, the two-passage questions, labelled answers, adversarial cases,
-                        follow-up conversations, saved runs and the question pairs of the cache
-                        measurement
+evals/                  golden set, the two-passage questions, labelled answers, adversarial cases
+                        and the held-out ones, follow-up conversations, saved runs and the
+                        question pairs of the cache measurement
 tests/                  unit and integration tests
 docs/                   charter, architecture, roadmap, decision records, guides
 compose.yaml            API, Qdrant and trace backend
@@ -203,7 +221,7 @@ compose.yaml            API, Qdrant and trace backend
 
 ## Deliberately left out
 
-- Multi-turn conversation: each question is answered independently.
+- A conversation held by the service. A caller may send the earlier questions of a conversation, and a follow-up is then rewritten into a question that stands alone before the search ([ADR 0024](adr/0024-follow-up-questions-in-the-service.md)). The service stores no conversation, and the answers of earlier turns are never sent to the rewriting step, so the step cannot resolve a follow-up that points at something only an answer named. The MCP tool takes no earlier questions.
 - Fine-tuning of any model.
 - Live sync with the handbook: we index a pinned snapshot. The index can be updated to a newer commit by a command ([ADR 0019](adr/0019-updating-the-index-by-reusing-vectors.md)), but nothing follows the handbook by itself.
 - Languages other than English.

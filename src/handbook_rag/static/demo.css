@@ -1,106 +1,88 @@
-/* The demo page's style. The system's own fonts, nothing loaded from elsewhere, no
-   image: the few icons are shapes drawn here or in the page's markup. Colours follow the
-   reader's light or dark setting, and motion stops for a reader who asks for less. */
+/* The demo page's style: the signage of a transit system. Black signs with white type,
+   one line colour for each source an answer cites, and how the answer was made drawn as
+   the stops of a line. One typeface, Overpass, from one file this server sends; nothing is
+   loaded from elsewhere. Colour means source, and nothing else on the page is coloured,
+   except the yellow of a notice that a check changed a reply. */
+
+/* Overpass, an open interpretation of the lettering of road signs: the Latin subset of
+   the variable font, weights 100 to 900, under the SIL Open Font License 1.1 (OFL.txt
+   beside it). Other scripts fall back to the system's fonts. A test pins the file's hash
+   and fails if this sheet names any other file or address. */
+@font-face {
+  font-family: "Overpass";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/static/overpass-latin-wght-normal.woff2") format("woff2");
+}
 
 /* ---- Tokens ------------------------------------------------------------------------ */
 
 :root {
   color-scheme: light dark;
 
-  /* Colour. Each pair of text and background below meets WCAG AA for its size, and the
-     question box's edge stands out from what is around it by 3:1 at least. */
-  --bg: #f5f6f8;
-  --surface: #ffffff;
-  --surface-2: #f0f2f5;
-  --border: #e0e3e8;
-  --border-strong: #c3c9d2;
-  --field-border: #858c97;
-  --text: #1a1d23;
-  --muted: #555d6b;
-  --accent: #4f46e5;
-  --accent-strong: #4338ca;
-  --accent-text: #ffffff;
-  --accent-soft: #eef0fe;
-  --accent-border: #c5c9f6;
-  --ring: rgb(79 70 229 / 35%);
-  --bubble: #e7e9fd;
-  --mark: #fff6d6;
-  --cache: #0b6b5d;
-  --cache-soft: #e6f6f2;
-  --cache-border: #b3e0d5;
-  --notice-ink: #334155;
-  --notice-soft: #f3f5f8;
-  --notice-border: #d3d9e1;
-  --danger: #b0202f;
-  --danger-soft: #fdf1f2;
-  --danger-border: #f0c0c6;
-  --warn: #874600;
-  --warn-soft: #fff5e1;
-  --warn-border: #efd19b;
-  --shimmer: #e4e7ec;
-  --shadow-sm: 0 1px 2px rgb(15 23 42 / 6%), 0 1px 3px rgb(15 23 42 / 5%);
-  --shadow-md: 0 10px 28px -8px rgb(15 23 42 / 16%), 0 2px 6px rgb(15 23 42 / 6%);
+  /* The sign and the page. */
+  --sign: #000000;
+  --sign-text: #ffffff;
+  --sign-rule: #000000;
+  --sign-edge: #000000;
+  --page: #ffffff;
+  --text: #000000;
+  --grey: #5f6368;
+  --band-says: #cfcfcf;
 
-  /* Type: a scale of steps around a 16-pixel base. */
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --fs-xs: 0.75rem;
-  --fs-sm: 0.8125rem;
-  --fs-md: 0.875rem;
-  --fs-lg: 1.0625rem;
-  --fs-xl: 1.25rem;
-  --fs-2xl: clamp(1.5rem, 1.1rem + 1.6vw, 2.125rem);
+  /* The strip of stops, and the line that runs through it. */
+  --ground: #efefec;
+  --rule-line: #000000;
+  --ring-fill: #ffffff;
+  --faint: #888883;
+  --off: #76766f;
 
-  /* Space: one rhythm of quarter steps. */
+  /* One line colour for each source, by its number; a source past the fifth, in the
+     colour of the signs. The numeral stands in every bullet. The green is a shade deeper
+     than the transit green #0b8a4a, so that a white numeral on it reads at 4.5:1. */
+  --l1: #d8261c;
+  --l2: #0a57c2;
+  --l3: #0b8849;
+  --l4: #f08c00;
+  --l5: #8b3fc7;
+  --on-line: #ffffff;
+  --on-l4: #000000;
+  --other: #000000;
+  --on-other: #ffffff;
+
+  /* The yellow of a notice of a change to the service: a check's note, and nothing else. */
+  --notice: #ffd500;
+  --notice-text: #000000;
+
+  --focus: #000000;
+
+  --font: "Overpass", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   --s1: 0.25rem;
   --s2: 0.5rem;
   --s3: 0.75rem;
   --s4: 1rem;
-  --s5: 1.5rem;
-  --s6: 2rem;
-  --s7: 3rem;
-
-  --radius-sm: 0.5rem;
-  --radius: 0.875rem;
-  --pill: 999px;
-  --page: 72rem;
-  --side: 21rem;
-  --gap: 2rem;
+  --page-width: 1120px;
 }
 
+/* On a dark ground the signs stay black: the page takes the grey of a road at night, and
+   a sign is edged in white, with its white rule above it, as a lit station sign is; the
+   line and its stops are drawn in white. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0e1015;
-    --surface: #161920;
-    --surface-2: #1e222a;
-    --border: #2a2f39;
-    --border-strong: #3d4450;
-    --field-border: #6b7381;
-    --text: #e8eaef;
-    --muted: #a0a8b5;
-    --accent: #a5b0fb;
-    --accent-strong: #c3cafd;
-    --accent-text: #12142b;
-    --accent-soft: #1f2347;
-    --accent-border: #3d4489;
-    --ring: rgb(165 176 251 / 38%);
-    --bubble: #262b4d;
-    --mark: #362f12;
-    --cache: #72d9c4;
-    --cache-soft: #102b27;
-    --cache-border: #1f4e46;
-    --notice-ink: #d2d8e2;
-    --notice-soft: #1a1e26;
-    --notice-border: #313846;
-    --danger: #ff9ca8;
-    --danger-soft: #2b1519;
-    --danger-border: #5c2631;
-    --warn: #f3bd6e;
-    --warn-soft: #2a2011;
-    --warn-border: #5b4421;
-    --shimmer: #282d37;
-    --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
-    --shadow-md: 0 12px 30px -10px rgb(0 0 0 / 60%), 0 2px 6px rgb(0 0 0 / 35%);
+    --sign-rule: #f2f2ee;
+    --sign-edge: #f2f2ee;
+    --page: #1d1d1b;
+    --text: #f2f2ee;
+    --grey: #a9abae;
+    --ground: #2c2c29;
+    --rule-line: #f2f2ee;
+    --ring-fill: #2c2c29;
+    --faint: #7a7a73;
+    --off: #93938c;
+    --other: #f2f2ee;
+    --on-other: #1d1d1b;
+    --focus: #ffffff;
   }
 }
 
@@ -123,13 +105,12 @@ body {
   min-height: 100vh;
   min-height: 100dvh;
   margin: 0;
-  background: var(--bg);
+  background: var(--page);
   color: var(--text);
   font-family: var(--font);
-  font-size: 1rem;
-  line-height: 1.55;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+  font-size: 17px;
+  line-height: 1.5;
+  font-kerning: normal;
 }
 
 h1,
@@ -141,17 +122,14 @@ p {
 }
 
 a {
-  color: var(--accent);
-  text-underline-offset: 0.18em;
-}
-
-a:hover {
-  color: var(--accent-strong);
+  color: inherit;
+  text-underline-offset: 0.16em;
 }
 
 code {
-  font-family: var(--mono);
-  font-size: 0.9em;
+  font: inherit;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 button {
@@ -167,14 +145,13 @@ button[aria-disabled="true"] {
 
 /* A focus that can always be seen, for keyboard users. */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
-  border-radius: 0.25rem;
 }
 
 .hint {
-  color: var(--muted);
-  font-size: var(--fs-xs);
+  color: var(--grey);
+  font-size: 14.5px;
 }
 
 /* Read by a screen reader, not shown. */
@@ -187,316 +164,266 @@ button[aria-disabled="true"] {
   white-space: nowrap;
 }
 
-/* ---- Header ------------------------------------------------------------------------ */
+/* ---- The band at the top ----------------------------------------------------------- */
 
-.site-header {
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+.band {
+  background: var(--sign);
+  color: var(--sign-text);
 }
 
-.site-header-inner {
+.band-inner {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--s3) var(--s5);
-  max-width: var(--page);
+  gap: 8px 26px;
+  max-width: var(--page-width);
+  min-height: 74px;
   margin: 0 auto;
-  padding: var(--s3) var(--s4);
+  padding: 12px 40px;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-  min-width: 0;
+.band-name {
+  font-size: 25px;
+  font-weight: 800;
+  letter-spacing: -0.005em;
+  line-height: 1.2;
 }
 
-.brand-mark {
-  flex: none;
-  width: 2.25rem;
-  height: 2.25rem;
+.band-says {
+  flex: 1 1 18rem;
+  color: var(--band-says);
+  font-size: 16px;
 }
 
-.brand-tile {
-  fill: var(--accent);
-}
-
-.brand-page {
-  fill: var(--accent-text);
-}
-
-h1 {
-  font-size: var(--fs-lg);
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  line-height: 1.25;
-}
-
-.tagline {
-  color: var(--muted);
-  font-size: var(--fs-sm);
-  line-height: 1.4;
-}
-
-.site-nav {
+.band-nav {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--s2);
+  gap: 8px 24px;
+  font-weight: 600;
 }
 
-.site-nav a {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3em;
-  padding: 0.35rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--pill);
-  color: var(--text);
-  font-size: var(--fs-sm);
-  font-weight: 500;
+.band-nav a {
+  padding-bottom: 1px;
+  border-bottom: 2px solid var(--sign-text);
+  color: var(--sign-text);
   text-decoration: none;
 }
 
-/* An arrow that says the link leaves the page. Not read out: the link says it in words. */
-.site-nav a::after {
-  content: "\2197";
-  content: "\2197" / "";
-  color: var(--muted);
-  font-size: 0.9em;
+.band :focus-visible {
+  outline-color: var(--sign-text);
 }
 
-.site-nav a:hover {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--text);
-}
-
-/* ---- Layout ------------------------------------------------------------------------ */
+/* ---- The page ---------------------------------------------------------------------- */
 
 .app {
   display: flex;
   flex: 1;
   flex-direction: column;
   width: 100%;
-  max-width: var(--page);
+  max-width: var(--page-width);
   margin: 0 auto;
-  padding: var(--s5) var(--s4) 0;
+  padding: 0 40px;
 }
 
 .noscript {
-  padding: var(--s3) var(--s4);
-  border: 1px solid var(--danger-border);
-  border-radius: var(--radius-sm);
-  background: var(--danger-soft);
-  color: var(--danger);
-  font-weight: 600;
+  margin-top: 30px;
+  padding: 12px 16px;
+  border: 4px solid var(--text);
+  font-weight: 700;
 }
 
-/* ---- Welcome ----------------------------------------------------------------------- */
+/* A sign: white type on black, heavy, with a rule above it as a station sign has. */
+.sign,
+.question-sign {
+  position: relative;
+  margin-top: 12px;
+  padding: 20px 26px 17px;
+  border: 2px solid var(--sign-edge);
+  background: var(--sign);
+  color: var(--sign-text);
+  font-size: 31px;
+  font-weight: 800;
+  letter-spacing: -0.008em;
+  line-height: 1.16;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sign::before,
+.question-sign::before {
+  content: "";
+  position: absolute;
+  top: -12px;
+  right: 0;
+  left: 0;
+  height: 3px;
+  background: var(--sign-rule);
+}
+
+/* ---- The welcome: the destinations, and what happens when you ask ------------------- */
 
 .welcome {
   display: grid;
-  gap: var(--s5) var(--gap);
-  padding-bottom: var(--s5);
+  gap: 32px 54px;
+  padding: 26px 0 24px;
 }
 
-.eyebrow {
-  color: var(--accent);
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.welcome h2 {
-  max-width: 34ch;
-  margin: var(--s2) 0 var(--s3);
-  font-size: var(--fs-2xl);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.15;
-  text-wrap: balance;
+.sign-big {
+  padding: 22px 28px 18px;
+  font-size: 40px;
+  line-height: 1.08;
 }
 
 .lede {
-  max-width: 40rem;
-  color: var(--muted);
-  font-size: var(--fs-lg);
+  max-width: 60ch;
+  margin-top: 16px;
+  font-size: 18px;
+  line-height: 1.5;
 }
 
-.label {
-  margin: var(--s5) 0 var(--s2);
-  color: var(--muted);
-  font-size: var(--fs-xs);
+.destinations-title {
+  margin-top: 20px;
+  font-size: 17px;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
+/* The example questions as the destinations of a board: each a stop to go to. */
 .examples {
-  display: grid;
-  gap: var(--s2);
-  margin: 0;
+  margin: 10px 0 0;
   padding: 0;
+  border-top: 4px solid var(--rule-line);
   list-style: none;
 }
 
-@media (min-width: 40rem) {
-  .examples {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 .example {
+  position: relative;
   display: flex;
-  align-items: flex-start;
-  gap: var(--s3);
+  align-items: center;
+  gap: 16px;
   width: 100%;
-  height: 100%;
-  padding: var(--s3) var(--s4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-  font-size: var(--fs-md);
-  line-height: 1.45;
+  padding: 10px 6px 8px;
+  border: 0;
+  border-bottom: 2px solid var(--ground);
+  background: transparent;
+  color: var(--text);
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.3;
   text-align: left;
 }
 
-/* A dot before each example; a ring before the one the handbook does not answer. */
 .example::before {
   content: "";
   flex: none;
-  width: 0.5rem;
-  height: 0.5rem;
-  margin-top: 0.4em;
+  width: 20px;
+  height: 20px;
+  border: 5px solid var(--rule-line);
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--page);
 }
 
-.example-decline::before {
-  border: 2px solid var(--muted);
-  background: transparent;
+/* The question the handbook does not answer: the sign of a line that does not run there. */
+.example-decline::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 28px;
+  height: 4px;
+  background: var(--rule-line);
+  transform: translateY(-50%) rotate(-45deg);
 }
 
 .example:hover {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
+  background: var(--ground);
 }
 
 .example-note {
-  margin-top: var(--s2);
+  margin-top: 8px;
 }
 
 .plain-text-note {
-  max-width: 40rem;
-  margin-top: var(--s4);
-  padding-left: var(--s3);
-  border-left: 2px solid var(--border-strong);
-  color: var(--muted);
-  font-size: var(--fs-sm);
+  max-width: 60ch;
+  margin-top: 18px;
+  color: var(--grey);
+  font-size: 15px;
 }
 
-.how {
-  padding: var(--s4) var(--s5) var(--s5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-}
-
-.how h3 {
-  margin-bottom: var(--s4);
-  font-size: var(--fs-md);
+/* What happens when you ask, as a line with its stops. */
+.how h3,
+.how-fold > summary {
+  margin-bottom: 16px;
+  font-size: 17px;
   font-weight: 700;
 }
 
 .steps {
-  display: grid;
-  gap: var(--s3);
   margin: 0;
   padding: 0;
   list-style: none;
-  counter-reset: step;
 }
 
 .steps li {
-  display: grid;
-  grid-template-columns: 1.5rem minmax(0, 1fr);
-  gap: var(--s3);
-  color: var(--muted);
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-  counter-increment: step;
+  position: relative;
+  padding: 0 0 18px 36px;
+  color: var(--grey);
+  font-size: 15.5px;
+  line-height: 1.45;
 }
 
-/* The list is numbered already for a screen reader, so the drawn number is not read. */
 .steps li::before {
-  content: counter(step);
-  content: counter(step) / "";
-  display: grid;
-  place-items: center;
-  width: 1.5rem;
-  height: 1.5rem;
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: -6px;
+  left: 7px;
+  width: 6px;
+  background: var(--rule-line);
+}
+
+.steps li:last-child::before {
+  content: none;
+}
+
+.steps li::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  border: 5px solid var(--rule-line);
   border-radius: 50%;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: var(--fs-xs);
-  font-weight: 700;
+  background: var(--page);
 }
 
 .steps strong {
   color: var(--text);
-  font-weight: 600;
+  font-weight: 700;
 }
 
-/* The same steps, folded away: shown on a phone only, in place of the card. */
+/* The same stops, folded away: shown on a phone only, in place of the line beside. */
 .how-fold {
   display: none;
-  padding: var(--s3) var(--s4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
 }
 
 .how-fold > summary {
-  font-size: var(--fs-md);
-  font-weight: 600;
   cursor: pointer;
 }
 
-.how-fold > .steps {
-  margin-top: var(--s3);
-}
-
-/* Words for a larger screen and their shorter form for a phone. The longer stays in what
-   a screen reader reads; the shorter is only shown. */
-.on-narrow {
-  display: none;
-}
-
-/* ---- The conversation -------------------------------------------------------------- */
+/* ---- The turns ---------------------------------------------------------------------- */
 
 .turns {
   display: flex;
   flex-direction: column;
-  gap: var(--s6);
+  gap: 44px;
   margin: 0;
-  padding: 0;
+  padding: 26px 0 0;
   list-style: none;
 }
 
 .turn {
-  display: grid;
-  grid-template-areas:
-    "asked"
-    "answer"
-    "sources";
-  grid-template-columns: minmax(0, 1fr);
-  align-content: start;
-  gap: var(--s3);
-  scroll-margin-top: var(--s4);
+  scroll-margin-top: 16px;
 }
 
 /* The latest turn takes the height of the window above the question box at least, so
@@ -506,148 +433,153 @@ h1 {
   min-height: calc(100dvh - 16rem);
 }
 
-.turn-asked {
-  display: flex;
-  grid-area: asked;
-  justify-content: flex-end;
+/* How the answer was made, as the stops of a line. It is a sequence, so it is drawn as
+   one: a stop reached is a ring on a solid line, the next one a filled ring, one not
+   reached yet a faint ring on a faint line, one the line does not serve a grey ring on a
+   dashed line, and where the line ended short a bar across it. */
+.route {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  margin: 0;
+  padding: 22px 26px 18px;
+  background: var(--ground);
+  list-style: none;
 }
 
-.bubble {
-  max-width: min(36rem, 88%);
-  padding: var(--s2) var(--s4);
-  border-radius: 1.125rem 1.125rem 0.375rem;
-  background: var(--bubble);
-  font-size: var(--fs-lg);
-  line-height: 1.5;
-  white-space: pre-wrap;
+.station {
+  position: relative;
+  padding: 28px 18px 0 0;
+  color: var(--grey);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.station-name {
+  display: block;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.station-detail {
+  display: block;
   overflow-wrap: anywhere;
 }
 
-/* The answer card. */
-.answer-card {
-  grid-area: answer;
-  min-width: 0;
-  padding: var(--s4) var(--s5) var(--s5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-}
-
-.card-head {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  margin-bottom: var(--s3);
-}
-
-/* The assistant's mark: a small tile in the accent colour with three lines of text drawn
-   on it, the last one short. */
-.card-mark {
-  position: relative;
-  flex: none;
-  width: 1.25rem;
-  height: 1.25rem;
-  border-radius: 0.375rem;
-  background: var(--accent);
-}
-
-.card-mark::before,
-.card-mark::after {
+.station::before {
   content: "";
   position: absolute;
-  left: 0.3rem;
-  height: 0.125rem;
-  border-radius: 0.0625rem;
-  background: var(--accent-text);
+  top: 7px;
+  right: 0;
+  left: 0;
+  height: 6px;
+  background: var(--rule-line);
 }
 
-.card-mark::before {
-  top: 0.34rem;
-  right: 0.3rem;
-  box-shadow: 0 0.22rem 0 var(--accent-text);
+.seg-none::before {
+  content: none;
 }
 
-.card-mark::after {
-  top: 0.78rem;
-  width: 0.38rem;
+.seg-faint::before {
+  top: 9px;
+  height: 2px;
+  background: var(--faint);
 }
 
-.ended-declined .card-mark,
-.ended-reply .card-mark {
-  background: var(--notice-ink);
+.seg-dashed::before {
+  background: repeating-linear-gradient(90deg, var(--off) 0 10px, transparent 10px 18px);
 }
 
-.ended-failed .card-mark {
-  background: var(--danger);
-}
-
-.ended-stopped .card-mark {
-  background: var(--muted);
-}
-
-.card-title {
-  color: var(--muted);
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.card-progress {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s2);
-  margin-left: auto;
-  color: var(--muted);
-  font-size: var(--fs-sm);
-}
-
-.card-progress::before {
+.station::after {
   content: "";
-  width: 0.5rem;
-  height: 0.5rem;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  border: 5px solid var(--rule-line);
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--ring-fill);
+}
+
+.station-next::after {
+  background: var(--rule-line);
+}
+
+.station-ahead::after {
+  border-width: 3px;
+  border-color: var(--faint);
+}
+
+.station-ahead .station-name,
+.station-off .station-name {
+  color: var(--grey);
+}
+
+.station-off::after {
+  border-color: var(--off);
+}
+
+.station-end::after {
+  top: -4px;
+  width: 6px;
+  height: 28px;
+  border: 0;
+  border-radius: 0;
+  background: var(--rule-line);
+}
+
+/* The reply, and the lines of its sources beside it. */
+.cols {
+  display: grid;
+  gap: 30px 54px;
+  align-items: start;
+  padding: 28px 26px 0;
+}
+
+.answer-card {
+  min-width: 0;
 }
 
 .answer-text,
 .stream {
-  font-size: var(--fs-lg);
-  line-height: 1.7;
+  max-width: 60ch;
+  font-size: 21px;
+  line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-/* A caret at the end of the text while it is being written. */
+/* A caret at the end of the text while it is written. It stands still: the line of stops
+   is what moves. */
 .stream.streaming::after {
   content: "";
   display: inline-block;
-  width: 0.55em;
-  height: 1.1em;
+  width: 0.5em;
+  height: 1em;
   margin-left: 0.1em;
-  border-radius: 1px;
-  background: var(--accent);
-  vertical-align: -0.15em;
+  background: var(--text);
+  vertical-align: -0.12em;
 }
 
 .stream.unfinished {
-  padding-left: var(--s3);
-  border-left: 3px dashed var(--border-strong);
+  padding-left: 14px;
+  border-left: 6px dashed var(--off);
 }
 
-/* Placeholders where the text and the sources will be. */
+/* Bars where the text will be, until it comes. */
 .pending {
   display: grid;
-  gap: 0.6rem;
-  padding: var(--s1) 0 var(--s2);
+  gap: 12px;
+  max-width: 60ch;
+  padding-top: 6px;
 }
 
 .skeleton-line {
   display: block;
-  height: 0.7rem;
-  border-radius: var(--pill);
-  background: var(--shimmer);
+  height: 12px;
+  background: var(--ground);
 }
 
 .pending .skeleton-line:nth-child(1) {
@@ -662,335 +594,257 @@ h1 {
   width: 55%;
 }
 
-/* The numbers in an answer, which lead to its sources. */
+/* A citation is the bullet of its source's line: its number on its line's colour. */
 .cite {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.5rem;
-  height: 1.5rem;
-  margin: 0 0.1rem 0 0.2rem;
-  padding: 0 0.4rem;
-  border: 1px solid var(--accent-border);
-  border-radius: var(--pill);
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: var(--fs-xs);
-  font-weight: 700;
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.45em;
+  height: 1.45em;
+  margin: 0 0.1em 0 0.22em;
+  padding: 0.14em 0.22em 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--c);
+  color: var(--on-c);
+  font-size: 0.78em;
+  font-weight: 800;
   line-height: 1;
-  vertical-align: 0.12em;
+  vertical-align: 0.08em;
 }
 
 .cite:hover,
 .cite.linked {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-text);
+  outline: 3px solid var(--text);
+  outline-offset: 2px;
 }
 
-/* The question searched for, when it is not the one typed. */
-.searched {
-  display: flex;
-  gap: var(--s2);
-  margin-bottom: var(--s3);
-  padding: var(--s2) var(--s3);
-  border: 1px solid var(--accent-border);
-  border-radius: var(--radius-sm);
-  background: var(--accent-soft);
-  font-size: var(--fs-md);
-  overflow-wrap: anywhere;
+.line-1 {
+  --c: var(--l1);
+  --on-c: var(--on-line);
 }
 
-.searched::before {
-  content: "\21B3";
-  content: "\21B3" / "";
-  flex: none;
-  color: var(--accent);
-  font-weight: 700;
+.line-2 {
+  --c: var(--l2);
+  --on-c: var(--on-line);
+}
+
+.line-3 {
+  --c: var(--l3);
+  --on-c: var(--on-line);
+}
+
+.line-4 {
+  --c: var(--l4);
+  --on-c: var(--on-l4);
+}
+
+.line-5 {
+  --c: var(--l5);
+  --on-c: var(--on-line);
+}
+
+.line-other {
+  --c: var(--other);
+  --on-c: var(--on-other);
 }
 
 /* A follow-up searched for as typed: the reader should know it may find little. */
-.searched.searched-as-typed {
-  border-color: var(--warn-border);
-  background: var(--warn-soft);
-}
-
-.searched.searched-as-typed::before {
-  content: "!";
-  content: "!" / "";
-  color: var(--warn);
-}
-
-/* What a check of the reply in code changed in it, or marked: under an answer's text, or
-   in the notice of a reply that is not an answer. In the warning tone, with a mark of its
-   own: something was changed here, and it is not a failure. */
-.check-notes {
-  display: grid;
-  grid-template-columns: 1.25rem minmax(0, 1fr);
-  column-gap: var(--s2);
-  margin-top: var(--s3);
-  padding: var(--s2) var(--s3);
-  border: 1px solid var(--warn-border);
-  border-left-width: 3px;
-  border-radius: var(--radius-sm);
-  background: var(--warn-soft);
-  font-size: var(--fs-md);
+.searched {
+  max-width: 60ch;
+  margin-bottom: 18px;
+  padding-left: 14px;
+  border-left: 6px solid var(--rule-line);
+  font-size: 16px;
   overflow-wrap: anywhere;
 }
 
-.check-notes > * {
-  grid-column: 2;
-}
-
-/* A pair of scissors would need an image or an icon set; a cut line drawn here says the same. */
-.check-notes::before {
-  content: "";
-  grid-row: 1 / span 9;
-  grid-column: 1;
-  width: 0.75rem;
-  height: 1rem;
-  margin-top: 0.2rem;
-  border-top: 2px dashed var(--warn);
-  border-bottom: 2px dashed var(--warn);
-}
-
-.check-label {
-  color: var(--warn);
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.check-note {
-  margin-top: var(--s1);
-  color: var(--text);
-}
-
-.notice .check-notes {
-  margin-bottom: var(--s1);
-}
-
-/* An answer that came from the cache says so above its text. */
+/* An answer that came from the store says so above its text, with the question it was
+   written for. */
 .cached {
-  margin-bottom: var(--s3);
-  padding: var(--s2) var(--s3);
-  border: 1px solid var(--cache-border);
-  border-radius: var(--radius-sm);
-  background: var(--cache-soft);
-  font-size: var(--fs-md);
+  max-width: 60ch;
+  margin-bottom: 18px;
+  padding-left: 14px;
+  border-left: 6px solid var(--rule-line);
+  font-size: 16px;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
-.cached p {
+.cached p + p {
   margin-top: var(--s1);
 }
 
 .cached .cached-label {
-  margin: 0;
-  color: var(--cache);
-  font-weight: 700;
+  font-weight: 800;
 }
 
 /* A reply that is not an answer: a calm notice, not a failure. */
-.notice {
-  display: grid;
-  grid-template-columns: 1.5rem minmax(0, 1fr);
-  column-gap: var(--s3);
-  padding: var(--s3) var(--s4);
-  border: 1px solid var(--notice-border);
-  border-radius: var(--radius-sm);
-  background: var(--notice-soft);
-  color: var(--notice-ink);
-}
-
-.notice > * {
-  grid-column: 2;
-}
-
-.notice::before,
-.error-card::before {
-  content: "i";
-  content: "i" / "";
-  display: grid;
-  grid-row: 1 / span 3;
-  grid-column: 1;
-  place-items: center;
-  width: 1.5rem;
-  height: 1.5rem;
-  border-radius: 50%;
-  background: var(--notice-ink);
-  color: var(--notice-soft);
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: var(--fs-md);
-  font-style: italic;
-  font-weight: 700;
-}
-
-.notice-title,
-.error-title {
-  font-weight: 700;
-}
-
-.notice .answer-text {
-  margin: var(--s1) 0;
-  color: var(--text);
-}
-
-.notice-why {
-  font-size: var(--fs-sm);
-}
-
-/* A failure: what happened, and what to do. */
+.notice,
 .error-card {
+  position: relative;
   display: grid;
-  grid-template-columns: 1.5rem minmax(0, 1fr);
-  column-gap: var(--s3);
-  row-gap: var(--s1);
-  margin-top: var(--s3);
-  padding: var(--s3) var(--s4);
-  border: 1px solid var(--danger-border);
-  border-radius: var(--radius-sm);
-  background: var(--danger-soft);
+  grid-template-columns: 46px minmax(0, 1fr);
 }
 
+.notice > *,
 .error-card > * {
   grid-column: 2;
 }
 
-.error-card::before {
-  content: "!";
-  content: "!" / "";
-  background: var(--danger);
-  color: var(--danger-soft);
-  font-family: var(--font);
-  font-style: normal;
+.notice-title,
+.error-title {
+  font-size: 21px;
+  font-weight: 800;
 }
 
-.error-title {
-  color: var(--danger);
+.notice .answer-text {
+  margin-top: 2px;
+}
+
+.notice-why {
+  max-width: 60ch;
+  margin-top: 10px;
+  color: var(--grey);
+  font-size: 15.5px;
+}
+
+/* The sign of a line that does not run there: a ring struck through. */
+.notice-decline::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 0;
+  width: 34px;
+  height: 34px;
+  border: 5px solid var(--rule-line);
+  border-radius: 50%;
+}
+
+.notice-decline::after {
+  content: "";
+  position: absolute;
+  top: 16px;
+  left: -4px;
+  width: 42px;
+  height: 6px;
+  background: var(--rule-line);
+  transform: rotate(-45deg);
+}
+
+/* The end of a line: its last stretch, and the bar across it. */
+.notice-unfinished::before,
+.error-card::before,
+.turn-note::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 14px;
+  width: 6px;
+  height: 22px;
+  background: var(--rule-line);
+}
+
+.notice-unfinished::after,
+.error-card::after,
+.turn-note::after {
+  content: "";
+  position: absolute;
+  top: 22px;
+  left: 0;
+  width: 34px;
+  height: 6px;
+  background: var(--rule-line);
 }
 
 .error-text {
+  max-width: 60ch;
+  margin-top: 2px;
+  font-size: 17px;
   overflow-wrap: anywhere;
 }
 
 .again {
   justify-self: start;
-  margin-top: var(--s2);
-  padding: 0.3rem 0.85rem;
-  border: 1px solid var(--danger-border);
-  border-radius: var(--pill);
-  background: var(--surface);
-  font-size: var(--fs-sm);
-  font-weight: 600;
+  margin-top: 14px;
+  padding: 7px 18px 4px;
+  border: 3px solid var(--text);
+  background: transparent;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 800;
 }
 
 .again:hover {
-  border-color: var(--danger);
+  background: var(--text);
+  color: var(--page);
 }
 
 .turn-note {
-  margin-top: var(--s3);
-  color: var(--muted);
-  font-size: var(--fs-sm);
-  font-style: italic;
-}
-
-/* How the answer was made: badges, and the details on request. */
-.made {
-  margin-top: var(--s4);
-  padding-top: var(--s3);
-  border-top: 1px solid var(--border);
-}
-
-.made-title {
-  margin-bottom: var(--s2);
-  color: var(--muted);
-  font-size: var(--fs-xs);
+  position: relative;
+  min-height: 30px;
+  margin-top: 18px;
+  padding-left: 46px;
+  font-size: 17px;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
-.badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.375rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.badge {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.35em;
-  max-width: 100%;
-  padding: 0.2rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: var(--pill);
-  background: var(--surface-2);
-  font-size: var(--fs-sm);
-  line-height: 1.4;
-}
-
-.badge-label {
-  color: var(--muted);
-}
-
-.badge-value {
+/* A check's note: black on the yellow of a notice of a change to the service. */
+.check-notes {
+  max-width: 56ch;
+  margin-top: 22px;
+  padding: 11px 16px 9px;
+  background: var(--notice);
+  color: var(--notice-text);
+  font-size: 16.5px;
   font-weight: 600;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
-.badge-cache {
-  border-color: var(--cache-border);
-  background: var(--cache-soft);
+.check-label {
+  font-weight: 800;
 }
 
-.badge-cache .badge-label,
-.badge-cache .badge-value {
-  color: var(--cache);
+.check-note {
+  margin-top: var(--s1);
 }
 
-.badge-warn {
-  border-color: var(--warn-border);
-  background: var(--warn-soft);
+.notice .check-notes {
+  margin-top: 16px;
 }
 
-.badge-warn .badge-label,
-.badge-warn .badge-value {
-  color: var(--warn);
-}
-
-.facts-fold,
-.search-fold,
-.passage {
-  font-size: var(--fs-sm);
+/* All details: the timetable of the request. */
+.made {
+  margin-top: 26px;
 }
 
 .facts-fold > summary,
 .passage > summary {
   width: fit-content;
-  margin-top: var(--s2);
-  color: var(--accent);
-  font-weight: 600;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
   cursor: pointer;
+}
+
+.facts-fold > summary {
+  font-size: 16px;
 }
 
 .facts {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--s1) var(--s4);
-  margin: var(--s2) 0 0;
-  padding: var(--s3);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  gap: 6px 28px;
+  max-width: 60ch;
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 4px solid var(--rule-line);
+  font-size: 15.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .facts dt {
-  color: var(--muted);
+  color: var(--grey);
 }
 
 .facts dd {
@@ -999,146 +853,118 @@ h1 {
 }
 
 .copy {
-  margin-left: var(--s1);
-  padding: 0 0.5rem;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--pill);
-  background: var(--surface);
-  font-size: var(--fs-xs);
+  margin-left: 8px;
+  padding: 2px 8px 0;
+  border: 2px solid var(--text);
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
 }
 
-/* ---- Sources ----------------------------------------------------------------------- */
+/* ---- The sources: a list of lines --------------------------------------------------- */
 
 .turn-sources {
-  display: flex;
-  flex-direction: column;
-  grid-area: sources;
-  gap: var(--s4);
   min-width: 0;
-}
-
-.side-title,
-.search-fold > summary {
-  color: var(--muted);
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.side-title {
-  margin-bottom: var(--s2);
-}
-
-.side-count {
-  margin-left: var(--s2);
-  padding: 0 0.45rem;
-  border-radius: var(--pill);
-  background: var(--surface-2);
-  color: var(--muted);
-  letter-spacing: 0;
-  text-transform: none;
 }
 
 .side-count:empty {
   display: none;
 }
 
-.source-cards,
-.passages {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
+.source-cards {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* Each source is a line: its bullet, and a stroke of its colour down to the next. */
 .source-card {
-  padding: var(--s3) var(--s4) var(--s3) var(--s3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  position: relative;
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  padding-bottom: 20px;
 }
 
-.source-card.linked {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--ring);
+.source-card::before {
+  content: "";
+  position: absolute;
+  top: 34px;
+  bottom: 0;
+  left: 14px;
+  width: 6px;
+  background: var(--c);
 }
 
-.source-card.marked {
-  border-color: var(--accent);
-  background: var(--mark);
-}
-
-.source-head {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--s3);
+.source-card:last-child::before {
+  bottom: 20px;
 }
 
 .source-number {
   display: grid;
-  flex: none;
   place-items: center;
-  min-width: 1.5rem;
-  height: 1.5rem;
-  border-radius: 0.375rem;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: var(--fs-xs);
-  font-weight: 700;
+  width: 34px;
+  height: 34px;
+  padding-top: 3px;
+  border-radius: 50%;
+  background: var(--c);
+  color: var(--on-c);
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .source-card.linked .source-number,
 .source-card.marked .source-number {
-  background: var(--accent);
-  color: var(--accent-text);
+  outline: 3px solid var(--text);
+  outline-offset: 2px;
+}
+
+.source-card.marked .source-body {
+  background: var(--ground);
+  outline: 8px solid var(--ground);
+}
+
+.source-body {
+  min-width: 0;
 }
 
 .source-path {
-  min-width: 0;
-  font-size: var(--fs-md);
-  line-height: 1.45;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.28;
   overflow-wrap: anywhere;
 }
 
 .source-path a {
   color: var(--text);
-  font-weight: 600;
-  text-decoration-color: var(--border-strong);
+  text-decoration: none;
 }
 
-.source-path a:hover {
-  color: var(--accent);
-  text-decoration-color: currentcolor;
+.source-path a:hover,
+.source-path a:focus-visible {
+  text-decoration: underline;
 }
 
-/* The headings above the passage, after the page's title, as a breadcrumb. */
-.crumb {
-  color: var(--muted);
+.source-where {
+  color: var(--grey);
+  font-size: 15.5px;
+  overflow-wrap: anywhere;
 }
 
-.crumb::before {
+/* The headings above the passage, as a breadcrumb. */
+.crumb + .crumb::before {
   content: " \203A  ";
   content: " \203A  " / " ";
   white-space: pre;
 }
 
-.source-snippet,
-.source-card .source-address,
-.source-card .passage {
-  margin-left: 2.25rem;
-}
-
 .source-snippet {
   display: -webkit-box;
-  margin-top: var(--s2);
+  margin-top: 7px;
   overflow: hidden;
-  color: var(--muted);
-  font-size: var(--fs-sm);
-  line-height: 1.5;
+  font-size: 15.5px;
+  line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   line-clamp: 3;
@@ -1152,91 +978,143 @@ h1 {
    style sheet can hide text is in it. The whole address is the link's title and is
    written out in the fold with the passage. */
 .source-address {
-  margin-top: var(--s1);
-  color: var(--muted);
-  font-size: var(--fs-xs);
+  margin-top: 7px;
+  color: var(--grey);
+  font-size: 14px;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
-.passage-address {
-  margin-top: var(--s2);
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 0.6875rem;
-  overflow-wrap: anywhere;
-}
-
 .address {
-  color: var(--muted);
+  color: var(--grey);
   font-weight: 400;
 }
 
+.passage > summary {
+  margin-top: 6px;
+  font-size: 15px;
+}
+
+.passage-address {
+  margin-top: 8px;
+  color: var(--grey);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .passage-text {
-  margin-top: var(--s2);
-  padding: var(--s3);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  font-size: var(--fs-sm);
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: var(--ground);
+  font-size: 15px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .sources-none {
-  color: var(--muted);
-  font-size: var(--fs-sm);
+  color: var(--grey);
+  font-size: 15.5px;
 }
 
-.source-card.placeholder {
+.source-card.placeholder::before,
+.source-card.placeholder .source-number {
+  background: var(--ground);
+}
+
+.source-card.placeholder .source-body {
   display: grid;
-  gap: var(--s2);
-  box-shadow: none;
-}
-
-.source-card.placeholder .skeleton-line:nth-child(1) {
-  width: 70%;
+  gap: 10px;
+  padding-top: 6px;
 }
 
 .source-card.placeholder .skeleton-line:nth-child(2) {
-  width: 90%;
-  height: 0.55rem;
+  width: 70%;
 }
 
-/* What the search found, folded away under the sources. */
+/* The passages found and not cited: stops the line does not serve, in grey. */
 .search-fold {
-  padding: var(--s3) var(--s4);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-sm);
+  margin: 4px 0 0 46px;
+  color: var(--grey);
+  font-size: 15px;
 }
 
 .search-fold > summary {
   cursor: pointer;
 }
 
+.search-fold > summary::after {
+  content: " Show them";
+  content: " Show them" / "";
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+.search-fold[open] > summary::after {
+  content: " Hide them";
+  content: " Hide them" / "";
+}
+
+.search-fold.nothing-more > summary::after {
+  content: " About this search";
+  content: " About this search" / "";
+}
+
+.search-fold.nothing-more[open] > summary::after {
+  content: " Hide";
+  content: " Hide" / "";
+}
+
 .search-fold > .hint {
-  margin: var(--s2) 0;
+  margin: 8px 0;
 }
 
 .search-state:empty {
   display: none;
 }
 
+.passages {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
 .passage-item {
-  padding-top: var(--s2);
-  border-top: 1px solid var(--border);
+  position: relative;
+  padding-bottom: 14px;
+}
+
+.passage-item::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: -38px;
+  width: 18px;
+  height: 18px;
+  border: 4px solid var(--off);
+  border-radius: 50%;
+  background: var(--page);
 }
 
 .passage-title {
-  font-weight: 600;
+  color: var(--text);
+  font-size: 15.5px;
+  font-weight: 700;
   overflow-wrap: anywhere;
 }
 
+.passage-title a {
+  color: var(--text);
+}
+
 .passage-rank {
-  color: var(--muted);
+  color: var(--grey);
+  font-weight: 400;
 }
 
 .passage-headings {
-  color: var(--muted);
+  font-size: 14px;
 }
 
 /* ---- The question box -------------------------------------------------------------- */
@@ -1246,8 +1124,8 @@ h1 {
   bottom: 0;
   z-index: 2;
   margin-top: auto;
-  padding: var(--s5) 0 calc(var(--s3) + env(safe-area-inset-bottom));
-  background: linear-gradient(to bottom, transparent, var(--bg) var(--s5));
+  padding: 22px 0 calc(14px + env(safe-area-inset-bottom));
+  background: var(--page);
 }
 
 /* The fold of what is sent and the button that starts again, in one row, and under them
@@ -1259,11 +1137,12 @@ h1 {
     "notice notice";
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
-  gap: var(--s1) var(--s2);
+  gap: var(--s1) var(--s4);
+  max-width: 800px;
 }
 
 .context-bar:has(> :not([hidden])) {
-  margin-bottom: var(--s2);
+  margin-bottom: var(--s3);
 }
 
 /* The wrapper only shows or hides its two parts, which take their places in the grid. */
@@ -1274,14 +1153,13 @@ h1 {
 .context-fold {
   grid-area: fold;
   min-width: 0;
-  font-size: var(--fs-sm);
+  font-size: 15px;
 }
 
 .context-notice {
   grid-area: notice;
-  padding: 0 var(--s1);
-  color: var(--muted);
-  font-size: var(--fs-xs);
+  color: var(--grey);
+  font-size: 14.5px;
 }
 
 #new-conversation {
@@ -1291,11 +1169,7 @@ h1 {
 
 .context-fold > summary {
   width: fit-content;
-  padding: 0.3rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--pill);
-  background: var(--surface);
-  color: var(--muted);
+  font-weight: 700;
   cursor: pointer;
 }
 
@@ -1303,68 +1177,63 @@ h1 {
   max-height: min(40vh, 18rem);
   margin-top: var(--s2);
   overflow-y: auto;
-  padding: var(--s3) var(--s4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  padding: 12px 16px;
+  border: 3px solid var(--text);
+  background: var(--page);
 }
 
 .context-list {
-  margin: var(--s2) 0 0;
-  padding-left: var(--s5);
+  margin: 8px 0 0;
+  padding-left: 22px;
   overflow-wrap: anywhere;
 }
 
 .ghost {
-  padding: 0.3rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--pill);
-  background: var(--surface);
+  padding: 4px 12px 2px;
+  border: 3px solid var(--text);
+  background: transparent;
   color: var(--text);
-  font-size: var(--fs-sm);
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 800;
 }
 
 .ghost:hover {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
+  background: var(--text);
+  color: var(--page);
 }
 
+/* As the mockup has it: one heavy black frame, the question, and the black button. */
 .field {
   display: flex;
-  align-items: flex-end;
-  gap: var(--s2);
-  padding: var(--s2) var(--s2) var(--s2) var(--s4);
-  border: 1px solid var(--field-border);
-  border-radius: 1rem;
-  background: var(--surface);
-  box-shadow: var(--shadow-md);
+  align-items: stretch;
+  max-width: 800px;
+  border: 4px solid var(--text);
+  background: var(--page);
 }
 
-/* The box draws its own focus ring, around the field and its buttons. */
 .field:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--ring), var(--shadow-md);
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
 }
 
 textarea {
   flex: 1;
   min-width: 0;
-  min-height: 3.2rem;
+  min-height: 58px;
   max-height: 12rem;
-  padding: var(--s2) 0;
+  padding: 15px 18px 12px;
   border: 0;
   background: transparent;
   color: var(--text);
   font: inherit;
-  line-height: 1.5;
+  font-size: 20px;
+  line-height: 1.4;
   resize: none;
   field-sizing: content;
 }
 
 textarea::placeholder {
-  color: var(--muted);
+  color: var(--grey);
   opacity: 1;
 }
 
@@ -1372,81 +1241,25 @@ textarea:focus-visible {
   outline: none;
 }
 
-.field-actions {
-  display: flex;
-  flex: none;
-  gap: var(--s2);
-}
-
 .send,
 .stop {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  height: 2.5rem;
-  padding: 0 var(--s4);
-  border-radius: 0.75rem;
-  font-size: var(--fs-md);
-  font-weight: 600;
+  flex: none;
+  padding: 4px 22px 0;
+  border: 0;
+  font-size: 20px;
+  font-weight: 800;
 }
 
 .send {
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: var(--accent-text);
-}
-
-.send:not([aria-disabled="true"]):hover {
-  border-color: var(--accent-strong);
-  background: var(--accent-strong);
+  min-width: 118px;
+  background: var(--text);
+  color: var(--page);
 }
 
 .stop {
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
+  border-left: 4px solid var(--text);
+  background: var(--page);
   color: var(--text);
-}
-
-.icon {
-  width: 1rem;
-  height: 1rem;
-  flex: none;
-}
-
-.send .icon {
-  fill: none;
-  stroke: currentcolor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.8;
-}
-
-.stop .icon {
-  fill: currentcolor;
-}
-
-/* While an answer is being written, the stop button shows beside Ask, and Ask shows a
-   ring in place of its arrow. */
-.stop {
-  border-color: var(--danger-border);
-  color: var(--danger);
-}
-
-.busy .send[aria-disabled="true"] {
-  opacity: 0.75;
-}
-
-.busy .send .icon {
-  display: none;
-}
-
-.busy .send::after {
-  content: "";
-  width: 0.85rem;
-  height: 0.85rem;
-  border: 2px solid currentcolor;
-  border-right-color: transparent;
-  border-radius: 50%;
 }
 
 .composer-meta {
@@ -1456,8 +1269,8 @@ textarea:focus-visible {
     "status status";
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0 var(--s4);
-  margin-top: var(--s2);
-  padding: 0 var(--s1);
+  max-width: 800px;
+  margin-top: 10px;
 }
 
 #question-hint {
@@ -1466,9 +1279,6 @@ textarea:focus-visible {
 
 .count {
   grid-area: count;
-}
-
-.count {
   font-variant-numeric: tabular-nums;
 }
 
@@ -1476,95 +1286,132 @@ textarea:focus-visible {
   grid-area: status;
   min-height: 1.4em;
   margin-top: var(--s1);
-  color: var(--text);
-  font-size: var(--fs-sm);
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 600;
 }
 
-/* ---- Footer ------------------------------------------------------------------------ */
+/* Words for a larger screen and their shorter form for a phone. The longer stays in what
+   a screen reader reads; the shorter is only shown. */
+.on-narrow {
+  display: none;
+}
+
+/* ---- The foot of the page ----------------------------------------------------------- */
 
 .site-footer {
   width: 100%;
-  max-width: var(--page);
+  max-width: var(--page-width);
   margin: 0 auto;
-  padding: var(--s3) var(--s4) var(--s5);
-  color: var(--muted);
-  font-size: var(--fs-xs);
+  padding: 12px 40px 28px;
+  color: var(--grey);
+  font-size: 14px;
 }
 
-/* ---- Wide screens: the sources beside the conversation ----------------------------- */
+/* ---- Wide screens: the sources beside the reply ------------------------------------ */
 
 @media (min-width: 64rem) {
   .welcome {
-    grid-template-columns: minmax(0, 1fr) var(--side);
+    grid-template-columns: minmax(0, 1fr) 340px;
     align-items: start;
   }
 
-  .turn {
-    grid-template-areas:
-      "asked ."
-      "answer sources";
-    grid-template-columns: minmax(0, 1fr) var(--side);
-    column-gap: var(--gap);
-    align-items: start;
-  }
-
-  /* The question box, and the fade above it, cover the conversation's column only: the
-     sources beside it scroll free. */
-  .composer,
-  .site-footer p {
-    margin-right: calc(var(--side) + var(--gap));
+  .cols {
+    grid-template-columns: minmax(0, 1fr) 380px;
   }
 }
 
-/* ---- Narrow screens ---------------------------------------------------------------- */
+/* ---- Narrow screens: one column, and the stops run down the page --------------------- */
+
+@media (max-width: 40rem) {
+  .band-inner,
+  .app,
+  .site-footer {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .band-name {
+    font-size: 22px;
+  }
+
+  .sign,
+  .question-sign {
+    padding: 16px 18px 13px;
+    font-size: 23px;
+  }
+
+  .sign-big {
+    font-size: 30px;
+  }
+
+  .welcome {
+    padding-top: 26px;
+  }
+
+  .how {
+    display: none;
+  }
+
+  .how-fold {
+    display: block;
+  }
+
+  .route {
+    grid-auto-columns: auto;
+    grid-auto-flow: row;
+    padding: 18px 16px 4px;
+  }
+
+  .station {
+    padding: 0 0 18px 34px;
+  }
+
+  .station::before {
+    top: 0;
+    right: auto;
+    bottom: 0;
+    left: 7px;
+    width: 6px;
+    height: auto;
+  }
+
+  .seg-faint::before {
+    left: 9px;
+    width: 2px;
+  }
+
+  .seg-dashed::before {
+    background: repeating-linear-gradient(180deg, var(--off) 0 10px, transparent 10px 18px);
+  }
+
+  .station-end::after {
+    top: 7px;
+    left: -4px;
+    width: 28px;
+    height: 6px;
+  }
+
+  .cols {
+    padding: 22px 0 0;
+  }
+
+  .answer-text,
+  .stream {
+    font-size: 18px;
+  }
+}
 
 @media (max-width: 30rem) {
-  .answer-card {
-    padding: var(--s3) var(--s4) var(--s4);
+  .band-says {
+    font-size: 14.5px;
   }
 
-  .bubble {
-    max-width: 92%;
-  }
-
-  .site-nav {
-    width: 100%;
-  }
-
-  /* The question box keeps to a few lines: the buttons show their icons, and their names
-     are read out; the keys that ask are still the box's description, read out, but a
-     phone has no Ctrl key to show them for. */
-  .send,
-  .stop {
-    justify-content: center;
-    width: 2.5rem;
-    padding: 0;
-  }
-
-  .button-label,
-  #question-hint {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
+  .send {
+    min-width: 0;
   }
 
   /* The dock keeps to a few lines: the two controls in one row, the box, then the status
-     and the count in one line, the status cut short if it runs long. */
-  .composer {
-    padding-top: var(--s3);
-    background: linear-gradient(to bottom, transparent, var(--bg) var(--s3));
-  }
-
-  .context-fold > summary,
-  .ghost {
-    padding: 0.2rem 0.65rem;
-    font-size: var(--fs-xs);
-  }
-
+     and the count in one line, the status cut short on screen and read out whole. */
   .on-narrow {
     display: inline;
   }
@@ -1578,10 +1425,13 @@ textarea:focus-visible {
     white-space: nowrap;
   }
 
-  .new::before {
-    content: "+ ";
-    content: "+ " / "";
-    font-weight: 700;
+  #question-hint {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .composer-meta {
@@ -1592,117 +1442,26 @@ textarea:focus-visible {
   .status {
     margin-top: 0;
     overflow: hidden;
-    font-size: var(--fs-xs);
+    font-size: 13.5px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .site-header-inner {
-    padding: var(--s2) var(--s4);
-  }
-
-  .site-nav a {
-    padding: 0.2rem 0.6rem;
-    font-size: var(--fs-xs);
+  textarea {
+    font-size: 18px;
   }
 }
 
-@media (max-width: 40rem) {
-  .how {
-    display: none;
-  }
-
-  .how-fold {
-    display: block;
-  }
-}
-
-/* ---- Motion, for readers who have not asked for less ------------------------------- */
+/* ---- The one motion: the next stop, while an answer is being written --------------- */
 
 @media (prefers-reduced-motion: no-preference) {
-  html {
-    scroll-behavior: smooth;
-  }
-
-  .turn {
-    animation: rise 220ms ease-out;
-  }
-
-  .stream.streaming::after {
-    animation: blink 1s steps(2, start) infinite;
-  }
-
-  .skeleton-line {
-    background: linear-gradient(90deg, var(--shimmer) 25%, var(--surface-2) 50%, var(--shimmer) 75%);
-    background-size: 200% 100%;
-    animation: shimmer 1.4s ease-in-out infinite;
-  }
-
-  .card-progress::before {
-    animation: pulse 1.2s ease-in-out infinite;
-  }
-
-  .busy .send::after {
-    animation: turn 0.8s linear infinite;
-  }
-
-  .example,
-  .cite,
-  .source-card,
-  .badge,
-  .site-nav a,
-  .ghost,
-  .send,
-  .field {
-    transition:
-      background-color 150ms ease,
-      border-color 150ms ease,
-      box-shadow 150ms ease,
-      color 150ms ease,
-      transform 150ms ease;
-  }
-
-  .example:hover {
-    transform: translateY(-1px);
+  .station-next::after {
+    animation: approach 1.2s ease-in-out infinite;
   }
 }
 
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@keyframes blink {
-  to {
-    visibility: hidden;
-  }
-}
-
-@keyframes shimmer {
-  from {
-    background-position: 100% 0;
-  }
-
-  to {
-    background-position: -100% 0;
-  }
-}
-
-@keyframes pulse {
+@keyframes approach {
   50% {
-    opacity: 0.3;
-  }
-}
-
-@keyframes turn {
-  to {
-    transform: rotate(1turn);
+    transform: scale(0.7);
   }
 }

@@ -6,12 +6,12 @@ stubbed ``fetch`` that answers ``/ask`` as the service does, as a stream with th
 searched for first. The project has no JavaScript toolchain (ADR 0016), and none is added:
 node runs the script as it is. Without node the tests are skipped, and say why.
 
-The harness reads back what a reader would see in each turn: the question's bubble, the
+The harness reads back what a reader would see in each turn: the question's sign, the
 answer or the notice or the failure card, the placeholders and the caret while the answer
-comes, the badges under it, its source cards and found passages, and what pointing at,
-focusing and pressing a number in the answer does to them; and around the turns, the
-buttons and their states, the focus, the status line and the alert, the examples, "Ask
-again", the copy of a trace id, and the count of what is sent.
+comes, the line of stops that says how it was made, its source cards and found passages,
+and what pointing at, focusing and pressing a number in the answer does to them; and
+around the turns, the buttons and their states, the focus, the status line and the alert,
+the examples, "Ask again", the copy of a trace id, and the count of what is sent.
 
 A second test plants faults in the script and asks that the first one would have seen
 each, so that a check which saw nothing would not pass unnoticed.
@@ -74,7 +74,7 @@ FAILED = (
 # service sends it as a decline in those words, with no source (ADR 0025).
 FORM = "The passages found do not say how much the backup care benefit pays per year."
 # Steps recorded while an answer was still coming, when its turn had not ended.
-UNDER_WAY = ("waiting", "writing")
+UNDER_WAY = ("waiting", "searched", "writing")
 
 
 def script() -> str:
@@ -98,7 +98,7 @@ def run(source: str, tmp_path: Path) -> dict[str, dict[str, Any]]:
     # A step with no turn on the page, such as one a fault kept from being asked, has none
     # of a turn's fields: it is given them empty, so that the checks say what is missing
     # instead of failing on a missing field.
-    template: dict[str, Any] = next((step for step in steps if "bubble" in step), {})
+    template: dict[str, Any] = next((step for step in steps if "sign" in step), {})
     for step in steps:
         for key, value in template.items():
             step.setdefault(key, None if value is None else type(value)())
@@ -115,7 +115,10 @@ def conversation_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         found.append("the earlier questions sent are not the conversation")
     if rewritten["searches"] != [REWRITTEN] or first["searches"] != [FIRST]:
         found.append("the side search is not run on the question searched for")
-    if rewritten["searchedLine"] != f"Searched for: {REWRITTEN}" or rewritten["searchedHidden"]:
+    # The question a follow-up was rewritten to stands at its stop of the line; the line
+    # above the reply, which says why a follow-up was searched for as typed, stays hidden.
+    rewrite = next((stop for stop in rewritten["stops"] if stop["name"] == "Rewritten"), None)
+    if rewrite is None or rewrite["detail"] != REWRITTEN or not rewritten["searchedHidden"]:
         found.append("a rewritten follow-up does not say what was searched for")
     for name, words, fault in (
         ("failed rewrite", "the request to rewrite it failed", "failed"),
@@ -164,8 +167,8 @@ def turn_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
     for name, step in steps.items():
         if step["welcomeHidden"] != (step["turnCount"] > 0):
             found.append(f"the welcome is shown or hidden wrongly ({name})")
-        if step["question"] is not None and step["bubble"] != [f"You asked: {step['question']}"]:
-            found.append("a turn does not show the question asked as its own bubble")
+        if step["question"] is not None and step["sign"] != [f"You asked: {step['question']}"]:
+            found.append("a turn does not show the question asked as its own sign")
     # How each turn ended, and what it looks like then.
     for name in ANSWERED:
         step = steps[name]
@@ -198,7 +201,11 @@ def turn_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         found.append("a stopped answer loses its text or is shown as a failure")
     # While an answer comes: placeholders, then the text with a caret.
     waiting, writing = steps["waiting"], steps["writing"]
-    if not waiting["pending"] or waiting["placeholders"] != 2 or not waiting["progress"]:
+    if (
+        not waiting["pending"]
+        or waiting["placeholders"] != 2
+        or not any(stop["state"] == "next" for stop in waiting["stops"])
+    ):
         found.append("a turn that waits shows no placeholders")
     if writing["pending"]:
         found.append("the placeholder stays while the text is written")
@@ -211,48 +218,178 @@ def turn_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
             continue
         if step["caret"]:
             found.append(f"the caret stays after the turn has ended ({name})")
-        if step["pending"] or step["progress"]:
+        if step["pending"] or any(stop["state"] in ("next", "ahead") for stop in step["stops"]):
             found.append(f"the waiting look stays after the turn has ended ({name})")
         if step["placeholders"] != 0:
             found.append(f"sources that never came leave placeholders ({name})")
     return found
 
 
-def badge_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
-    """What the strip of badges under an answer gets wrong, in words."""
+def stop_named(step: dict[str, Any], name: str) -> dict[str, str] | None:
+    """The stop of a turn's line that has this name, or None."""
+    return next((stop for stop in step["stops"] if stop["name"] == name), None)
+
+
+def names(step: dict[str, Any]) -> list[str]:
+    return [stop["name"] for stop in step["stops"]]
+
+
+def detail(step: dict[str, Any], name: str) -> str:
+    stop = stop_named(step, name)
+    return "" if stop is None else stop["detail"]
+
+
+def stop_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """What the line of stops and the timetable under an answer get wrong, in words: what
+    the strip of badges said before, now said at the stops and under "All details"."""
     found = []
-    cited = steps["cited"]["badges"]
-    for wanted in (
-        "Search: 3 passages found",
-        "Follow-up: rewritten to stand alone",
-        "Cited: 2 sources",
-        "Model: stand-in",
-        "Time: first words 0.0 s, in all 0.0 s",
-        "Tokens: 1 in, 1 out",
+    cited = steps["cited"]
+    if detail(cited, "Searched") != "3 passages found":
+        found.append("the line does not say how many passages the search found")
+    if (
+        detail(cited, "Rewritten")
+        != "How many weeks of parental leave do new parents get in the US?"
     ):
-        if wanted not in cited:
-            found.append(f"the badges miss {wanted.split(':')[0]!r} or get it wrong")
-    if "Search: 3 passages found" not in cited:
-        found.append("the badges do not say how many passages the search found")
-    if any(badge.startswith("Follow-up") for badge in steps["first"]["badges"]):
-        found.append("a question asked by itself has a badge about a follow-up")
-    if "Follow-up: rewrite not usable" not in steps["unusable rewrite"]["badges"]:
-        found.append("a follow-up searched for as typed has no badge that says so")
+        found.append("a rewritten follow-up does not show the question it was searched for")
+    if "2 sources cited" not in detail(cited, "Answered"):
+        found.append("the line does not say how many sources the answer cites")
+    for label in (
+        "Modelstand-in",
+        "Tokens1 read, 1 written",
+        "First text after0.0 s",
+        "Whole answer after0.0 s",
+    ):
+        if label not in cited["facts"]:
+            found.append(f"the timetable misses {label!r} or gets it wrong")
+    if any(
+        stop["name"] in ("Rewritten", "Stood alone", "Not rewritten", "Rewriting")
+        for stop in steps["first"]["stops"]
+    ):
+        found.append("a question asked by itself has a stop about a follow-up")
+    if "searched as typed" not in detail(steps["unusable rewrite"], "Not rewritten"):
+        found.append("a follow-up searched for as typed does not say so at its stop")
     cached = steps["cached"]
-    if "From the cache: exact match" not in cached["badges"]:
-        found.append("a cached answer has no badge that says so")
-    if "Tokens: none: no request" not in cached["badges"]:
+    if detail(cached, "Found stored") != "an answer stored for the same question":
+        found.append("a cached answer does not say at its stop that it was stored")
+    if "Tokensnone: no request was sent" not in cached["facts"]:
         found.append("a cached answer counts tokens it never spent")
     if f"It was written for the question: {STORED}" not in cached["cached"]:
         found.append("a cached answer does not name the question it was written for")
-    if any(badge.startswith("From the cache") for badge in steps["first"]["badges"]):
-        found.append("an answer written now has a badge that says it came from the cache")
+    if stop_named(steps["first"], "Found stored") is not None:
+        found.append("an answer written now says that it came from the store")
     for name in FAILED:
-        if steps[name]["badges"] != []:
-            found.append(f"a failure shows badges of an answer it does not have ({name})")
+        if stop_named(steps[name], "Answered") is not None:
+            found.append(f"a failure has the stop of an answer it does not have ({name})")
     refused = steps["refused"]
-    if refused["madeTitle"] != "About this request" or TRACE_ID not in refused["facts"]:
+    if refused["routeLabel"] != "How this request went" or TRACE_ID not in refused["facts"]:
         found.append("a failure does not show the trace id it came with")
+    return found
+
+
+def route_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """Which stop of the line is reached when, in which words, and where the line ends:
+    for an answer, a rewritten follow-up, a stored answer, a decline, a check's decline,
+    a reply cut off, a failure and a stop, and while an answer is being written."""
+    found = []
+    first = steps["first"]
+    if names(first) != ["Asked", "Searched", "First words", "Answered"] or {
+        stop["state"] for stop in first["stops"]
+    } != {"reached"}:
+        found.append("an answer's line does not run through its four stops")
+    if [stop["segment"] for stop in first["stops"]] != ["solid", "solid", "solid", "none"]:
+        found.append("an answer's line is not drawn solid from stop to stop")
+    if (
+        detail(first, "Asked") != "by itself"
+        or detail(steps["rewritten"], "Asked") != "with 1 earlier question"
+    ):
+        found.append("the stop where a question was asked does not say what went with it")
+    if names(steps["rewritten"]) != ["Asked", "Rewritten", "Searched", "First words", "Answered"]:
+        found.append("a follow-up's line has no stop of its own for the rewrite")
+    for name, wanted in (
+        ("failed rewrite", "the request failed"),
+        ("not rewritten", "does not rewrite"),
+    ):
+        if wanted not in detail(steps[name], "Not rewritten"):
+            found.append(
+                f"a follow-up that was not rewritten does not say why at its stop ({name})"
+            )
+    for name, how in (("cached", "the same question"), ("semantic", "judged to mean the same")):
+        step = steps[name]
+        if how not in detail(step, "Found stored") or stop_named(step, "Searched") is not None:
+            found.append(f"a stored answer's line is not another one, with no search ({name})")
+    if "no request to the model" not in detail(steps["semantic"], "Answered"):
+        found.append("a stored answer's line does not say that no request was sent")
+    for name in ("declined", "form declined"):
+        step = steps[name]
+        tail = [(stop["name"], stop["state"]) for stop in step["stops"][-2:]]
+        if tail != [("No answer in them", "off"), ("Not answered", "off")]:
+            found.append(f"a decline's line does not run on to stops it does not serve ({name})")
+        searched = stop_named(step, "Searched")
+        if searched is None or searched["segment"] != "dashed":
+            found.append(f"a decline's line is not dashed after the search ({name})")
+    check = steps["check declined"]["stops"]
+    if [(stop["name"], stop["state"]) for stop in check[-2:]] != [
+        ("First words", "reached"),
+        ("Declined by a check", "off"),
+    ]:
+        found.append("a check's decline is not where its line ends")
+    for name, end, words in (
+        ("refused", "Not answered", "the request failed"),
+        ("error after text", "Broke off", "after the first words"),
+        ("stream cut", "Broke off", "after the first words"),
+        ("stopped", "Stopped by you", "after the first words"),
+        ("withheld", "Cut off", "the model stopped: safety"),
+        ("check cut", "Cut off", "the model stopped"),
+    ):
+        last = steps[name]["stops"][-1]
+        if last["name"] != end or last["state"] != "end" or words not in last["detail"]:
+            found.append(f"a line that ended short does not end where it ended ({name})")
+        elif last["told"] != " (the line ends here)":
+            found.append(f"a screen reader is not told where a line ends ({name})")
+    if names(steps["refused"]) != ["Asked", "Not answered"]:
+        found.append("a refused question's line runs past where it ended")
+    if stop_named(steps["error after text"], "First words") is None:
+        found.append("a line that broke off after its first words does not show them reached")
+    # While an answer is being written, the line is the progress display.
+    progress = {
+        "waiting": [
+            ("Asked", "reached"),
+            ("Rewriting", "next"),
+            ("Searched", "ahead"),
+            ("First words", "ahead"),
+            ("Answered", "ahead"),
+        ],
+        "searched": [
+            ("Asked", "reached"),
+            ("Stood alone", "reached"),
+            ("Searched", "reached"),
+            ("First words", "next"),
+            ("Answered", "ahead"),
+        ],
+        "writing": [
+            ("Asked", "reached"),
+            ("Stood alone", "reached"),
+            ("Searched", "reached"),
+            ("First words", "reached"),
+            ("Answered", "next"),
+        ],
+    }
+    for name, stops in progress.items():
+        if [(stop["name"], stop["state"]) for stop in steps[name]["stops"]] != stops:
+            found.append(f"the line does not show how far the answer has come ({name})")
+    told = {stop["state"]: stop["told"] for stop in steps["waiting"]["stops"]}
+    if told.get("next") != " (now)" or told.get("ahead") != " (not yet)":
+        found.append("a screen reader is not told which stop is next and which are not reached")
+    if steps["waiting"]["stops"][0]["segment"] != "faint":
+        found.append("the line to a stop not reached yet is drawn as if it were reached")
+    for name, label in (
+        ("waiting", "How this answer is being made"),
+        ("first", "How this answer was made"),
+        ("declined", "How this reply was made"),
+        ("stopped", "How this request went"),
+    ):
+        if steps[name]["routeLabel"] != label:
+            found.append(f"the line is not named for what it shows ({name})")
     return found
 
 
@@ -366,11 +503,11 @@ def label_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         step = steps[name]
         if step["cardTitle"] != word or step["ended"] != [f"ended-{word.lower()}"]:
             found.append(f"the card of a turn is not labelled by how it ended ({name})")
-    # The strip of badges names what it sums up: an answer, or a reply that is not one.
+    # The line names what it shows: an answer, or a reply that is not one.
     for name in (*ANSWERED, *DECLINED, "withheld", "check cut"):
         made = "answer" if name in ANSWERED else "reply"
-        if steps[name]["madeTitle"] != f"How this {made} was made":
-            found.append(f"the strip under a reply calls it an answer ({name})")
+        if steps[name]["routeLabel"] != f"How this {made} was made":
+            found.append(f"the line of a reply calls it an answer ({name})")
     return found
 
 
@@ -379,7 +516,7 @@ def control_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
     a trace id, the new-conversation button, the alert, the count of what is sent."""
     found = []
     by_itself = steps["asked by itself"]
-    if by_itself["turnCount"] != 1 or by_itself["bubble"] != [f"You asked: {FIRST}"]:
+    if by_itself["turnCount"] != 1 or by_itself["sign"] != [f"You asked: {FIRST}"]:
         found.append("an example button does not ask its question")
     busy = steps["keys"]["busy"]
     for name, step in steps.items():
@@ -458,10 +595,13 @@ def announcement_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
 
 
 def search_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
-    """What the fold of found passages and the Search badge get wrong."""
+    """What the fold of found passages and the stop of the search get wrong."""
     found = []
     cited = steps["cited"]
-    if not cited["searchFoldShown"] or cited["searchCount"] != " 3 passages":
+    if (
+        not cited["searchFoldShown"]
+        or cited["searchCount"] != "3 more passages were found and not cited"
+    ):
         found.append("the fold of what the search found is not shown")
     passages = cited["passages"]
     if [item["rank"] for item in passages] != ["1.", "2.", "3."]:
@@ -476,13 +616,12 @@ def search_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
     ):
         found.append("a found passage does not show where its link leads")
     for name, wanted in (
-        ("declined", "Search: 1 passage found"),
-        ("cached", "Search: failed"),
-        ("withheld", "Search: failed"),
-        ("no searched event", "Search: not run"),
+        ("declined", "1 passage found"),
+        ("withheld", "not counted: the page's own search failed"),
+        ("no searched event", "not counted: the service did not say what it searched for"),
     ):
-        if wanted not in steps[name]["badges"]:
-            found.append(f"the Search badge does not say what the search did ({name})")
+        if detail(steps[name], "Searched") != wanted:
+            found.append(f"the stop of the search does not say what the search did ({name})")
     if steps["withheld"]["searchState"] != "The search failed. The service could not be reached.":
         found.append("a search that could not reach the service does not say so")
     if steps["cached"]["searchState"] != "The search failed. The service is busy.":
@@ -490,28 +629,31 @@ def search_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
     return found
 
 
-def badge_word_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
-    """Whether each badge that stands out stands where it should, and only there."""
+def answered_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """Whether what stands out about how an answer was made is said at its last stop, and
+    only there: more than one request, the fallback model, the sources its text cites."""
     found = []
-    fallback = steps["fallback"]["badges"]
-    for name in (*ANSWERED, *DECLINED, "withheld"):
-        badges = steps[name]["badges"]
-        if name != "fallback" and any(
-            badge.startswith(("Requests", "Written by")) for badge in badges
-        ):
-            found.append(f"a warning badge stands on an ordinary answer ({name})")
-    if "Requests: 2" not in fallback or "Written by: the fallback model" not in fallback:
-        found.append("an answer of two requests by the fallback model is not badged so")
-    if "Cited: 1 source" not in fallback:
-        found.append("the Cited badge counts sources the text does not cite")
-    if "Follow-up: rewrite failed" not in steps["failed rewrite"]["badges"]:
-        found.append("a follow-up whose rewrite failed is badged as something else")
+    fallback = detail(steps["fallback"], "Answered")
+    for name in ANSWERED:
+        said = detail(steps[name], "Answered")
+        if name != "fallback" and ("requests" in said or "fallback" in said):
+            found.append(
+                f"an ordinary answer is said to have taken more requests or the fallback ({name})"
+            )
+    if "after 2 requests" not in fallback or "by the fallback model" not in fallback:
+        found.append("an answer of two requests by the fallback model is not said so")
+    if "Requests to the model2" not in steps["fallback"]["facts"]:
+        found.append("the timetable does not give the requests an answer took")
+    if "1 source cited" not in fallback:
+        found.append("the line counts sources the text does not cite")
+    if "the request failed" not in detail(steps["failed rewrite"], "Not rewritten"):
+        found.append("a follow-up whose rewrite failed is said to be something else")
     for name in (*DECLINED, "withheld"):
-        if any(badge.startswith("Cited") for badge in steps[name]["badges"]):
-            found.append(f"a reply that is not an answer has a Cited badge ({name})")
+        if stop_named(steps[name], "Answered") is not None:
+            found.append(f"a reply that is not an answer has the stop of an answer ({name})")
     semantic = steps["semantic"]
-    if "From the cache: matched by meaning" not in semantic["badges"]:
-        found.append("a match by meaning is badged as something else")
+    if "judged to mean the same" not in detail(semantic, "Found stored"):
+        found.append("a match by meaning is said to be something else")
     if "That judgement can be wrong." not in semantic["cached"]:
         found.append("a match by meaning does not warn that it can be wrong")
     return found
@@ -586,8 +728,8 @@ def look_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         first_of_conversation = name in ("first", "asked by itself")
         if (step["scrolled"] == 0) != first_of_conversation:
             found.append(f"a later turn is not brought into view, or the first is ({name})")
-    if steps["writing"]["progressText"] != "Writing":
-        found.append("the card does not say that the model is writing")
+    if detail(steps["writing"], "First words") != "arriving now":
+        found.append("the line does not say that the first words are arriving")
     for name, as_typed in (
         ("failed rewrite", True),
         ("unusable rewrite", True),
@@ -641,16 +783,16 @@ def check_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         False
     ]:
         found.append("the notes of a check do not stand under the answer's text")
-    if any(steps[name]["checkLabels"] != ["Changed by a check"] for name in CHECKED):
+    if any(steps[name]["checkLabels"] != ["Changed by a check."] for name in CHECKED):
         found.append("the notes of a check are not marked as a change")
     for step, notes in ((declined, [UNCITED]), (cut, [UNFINISHED])):
         if step["checkNotes"] != notes or step["checkInNotice"] != [True]:
             found.append(
                 "the note of a check on a reply that is not an answer is not with its notice"
             )
-    if declined["noticeTitle"] != ["Declined by a check"] or declined["noticeWhy"] != []:
+    if declined["noticeTitle"] != ["Declined by a check."] or declined["noticeWhy"] != []:
         found.append("a reply a check declined is shown as one the handbook does not answer")
-    if cut["noticeTitle"] != ["Not an answer"] or not cut["noticeWhy"]:
+    if cut["noticeTitle"] != ["Not an answer."] or not cut["noticeWhy"]:
         found.append("a reply a check cut does not say why the model stopped")
     for name, notes in CHECKED.items():
         if not steps[name]["status"].endswith("".join(f" Note: {note}" for note in notes)):
@@ -659,18 +801,16 @@ def check_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         "Declined by a check, in place of the reply the model wrote."
     ):
         found.append("a reply a check declined is announced as one the handbook does not answer")
-    for name, badge in (
-        ("check dropped line", "Changed: by a check"),
-        ("two checks", "Changed: by 2 checks"),
-        ("check declined", "Changed: by a check"),
-    ):
-        if badge not in steps[name]["badges"]:
-            found.append(f"a change by a check has no badge ({name})")
+    for name in ("check dropped line", "two checks"):
+        if "changed by a check" not in detail(steps[name], "Answered"):
+            found.append(f"a change by a check is not said at the end of the line ({name})")
+    if stop_named(steps["check declined"], "Declined by a check") is None:
+        found.append("a check's decline is not said at the end of the line")
     for name in ("malformed checks", "malformed items"):
         step = steps[name]
         if not step["answer"] or step["error"] or step["conversation"][-1:] != [step["question"]]:
             found.append(f"a list of checks of another shape loses the answer ({name})")
-        elif step["checkNotes"] or any(badge.startswith("Changed") for badge in step["badges"]):
+        elif step["checkNotes"] or "changed by a check" in detail(step, "Answered"):
             found.append(f"a list of checks of another shape gives a note ({name})")
     for name, step in steps.items():
         if name not in CHECKED and step["checkNotes"]:
@@ -687,14 +827,15 @@ def faults(steps: dict[str, dict[str, Any]]) -> list[str]:
     return [
         *conversation_faults(steps),
         *turn_faults(steps),
-        *badge_faults(steps),
+        *stop_faults(steps),
+        *route_faults(steps),
         *source_faults(steps),
         *key_faults(steps),
         *label_faults(steps),
         *control_faults(steps),
         *announcement_faults(steps),
         *search_faults(steps),
-        *badge_word_faults(steps),
+        *answered_faults(steps),
         *outcome_faults(steps),
         *look_faults(steps),
         *check_faults(steps),
@@ -760,7 +901,7 @@ PLANTED_IN_THIS_ROUND = [
         "",
     ),
     (
-        "the strip under a reply calls it an answer (declined)",
+        "the line of a reply calls it an answer (declined)",
         'answer.answered ? "How this answer was made" : "How this reply was made"',
         '"How this answer was made"',
     ),
@@ -825,7 +966,7 @@ def test_the_run_finds_each_fault_planted_in_the_keys_buttons_labels_and_address
         ),
         (
             "a line about the question searched for is left showing",
-            'turn.searchedLine.hidden = line === "";',
+            'turn.searchedLine.hidden = line === "" || searched.outcome === "rewritten";',
             "turn.searchedLine.hidden = false;",
         ),
         (
@@ -875,9 +1016,9 @@ def test_the_run_finds_each_fault_planted_in_the_keys_buttons_labels_and_address
         ),
         # The turns.
         (
-            "a turn does not show the question asked as its own bubble",
-            'bubble.append(make("span", "visually-hidden", "You asked: "), question);',
-            'bubble.append(make("span", "visually-hidden", "You asked: "));',
+            "a turn does not show the question asked as its own sign",
+            'sign.append(make("span", "visually-hidden", "You asked: "), question);',
+            'sign.append(make("span", "visually-hidden", "You asked: "));',
         ),
         (
             "the welcome is shown or hidden wrongly (new conversation)",
@@ -936,8 +1077,8 @@ def test_the_run_finds_each_fault_planted_in_the_keys_buttons_labels_and_address
         ),
         (
             "the waiting look stays after the turn has ended (refused)",
-            "  turn.pending.hidden = true;\n  turn.progress.hidden = true;\n",
-            "",
+            '  turn.pending.hidden = true;\n  turn.stream.classList.remove("streaming");',
+            '  turn.stream.classList.remove("streaming");',
         ),
         (
             "sources that never came leave placeholders (refused)",
@@ -946,24 +1087,24 @@ def test_the_run_finds_each_fault_planted_in_the_keys_buttons_labels_and_address
         ),
         # The badges.
         (
-            "a cached answer has no badge that says so",
-            '    badges.push(["From the cache", tier, "cache"]);\n',
+            "a cached answer does not say at its stop that it was stored",
+            '    stops.push({ name: "Found stored", detail: how, state: "reached" });\n',
             "",
         ),
         (
-            "the badges do not say how many passages the search found",
-            'results.length === 0 ? "nothing found" : `${count} found`',
-            '"searching"',
+            "the line does not say how many passages the search found",
+            '`${plural(found, "passage", "passages")} found`',
+            '""',
         ),
         (
             "a cached answer counts tokens it never spent",
-            'hit === null ? tokensInBrief(answer.usage) : "none: no request"',
-            "tokensInBrief(answer.usage)",
+            '  if (cacheHit(answer) !== null) {\n    tokens = "none: no request was sent";\n  }\n',
+            "",
         ),
         (
-            "a failure shows badges of an answer it does not have (refused)",
-            "  turn.badges.hidden = true;\n",
-            "",
+            "a failure has the stop of an answer it does not have (refused)",
+            "    reached.push(endStop(journey));",
+            '    reached.push({ name: "Answered", detail: "", state: "reached" });',
         ),
         (
             "a failure does not show the trace id it came with",
@@ -983,12 +1124,12 @@ def test_the_run_finds_each_fault_planted_in_the_keys_buttons_labels_and_address
         ),
         (
             "a source card does not show the page's title and the headings above",
-            '    path.append(make("span", "crumb", heading));\n',
+            '      where.append(make("span", "crumb", heading));\n',
             "",
         ),
         (
             "a source card does not show a piece of its passage",
-            '    card.append(make("p", "source-snippet", piece));\n',
+            '    body.append(make("p", "source-snippet", piece));\n',
             "",
         ),
         (
@@ -1119,24 +1260,24 @@ PLANTED_BY_THE_REVIEW = [
         '      : "Not in the handbook: the assistant declined instead of guessing.";',
     ),
     (
-        "a warning badge stands on an ordinary answer (first)",
-        "  if (requests !== null && requests > 1) {",
-        "  if (requests !== null && requests > 0) {",
+        "an ordinary answer is said to have taken more requests or the fallback (first)",
+        "  if (Number.isInteger(answer.requests) && answer.requests > 1) {",
+        "  if (Number.isInteger(answer.requests) && answer.requests > 0) {",
     ),
     (
-        "a warning badge stands on an ordinary answer (first)",
-        "  if (answer.fallback === true) {",
-        "  if (answer.fallback !== true) {",
+        "an ordinary answer is said to have taken more requests or the fallback (first)",
+        "  if (answer.fallback === true) {\n    parts.push(",
+        "  if (answer.fallback !== true) {\n    parts.push(",
     ),
     (
-        "a follow-up whose rewrite failed is badged as something else",
-        '    failed: "rewrite failed",',
-        '    failed: "rewritten to stand alone",',
+        "a follow-up whose rewrite failed is said to be something else",
+        '    failed: ["Not rewritten", "the request failed, so searched as typed"],',
+        '    failed: ["Rewritten", "to stand alone"],',
     ),
     (
-        "a reply that is not an answer has a Cited badge (declined)",
-        '  if (answer.answered) {\n    badges.push(["Cited"',
-        '  if (true) {\n    badges.push(["Cited"',
+        "a reply that is not an answer has the stop of an answer (declined)",
+        "  if (answer.answered) {\n    if (hit === null) {",
+        "  if (true) {\n    if (hit === null) {",
     ),
     (
         "the new conversation button is shown or hidden wrongly (first)",
@@ -1175,12 +1316,12 @@ PLANTED_BY_THE_REVIEW = [
     ),
     (
         "the fold says how many passages were found and lists none",
-        "  turn.passages.replaceChildren(...results.map(passageOrNotice));",
+        "  turn.passages.replaceChildren(...unused.map(passageOrNotice));",
         "  turn.passages.replaceChildren();",
     ),
     (
-        "the Search badge does not say what the search did (withheld)",
-        'could not be reached.";\n    turn.found.textContent = "failed";',
+        "the stop of the search does not say what the search did (withheld)",
+        'could not be reached.";\n    turn.journey.found = "failed";',
         'could not be reached.";',
     ),
     (
@@ -1209,9 +1350,9 @@ PLANTED_BY_THE_REVIEW = [
         "  return `${cut}…`;",
     ),
     (
-        "the Search badge does not say what the search did (declined)",
-        'results.length === 0 ? "nothing found" : `${count} found`',
-        'results.length === 1 ? "nothing found" : `${count} found`',
+        "the stop of the search does not say what the search did (declined)",
+        '    return found === 0 ? "nothing found"',
+        '    return found === 1 ? "nothing found"',
     ),
     (
         "the address in brief does not show the host the browser reads",
@@ -1229,14 +1370,14 @@ PLANTED_BY_THE_REVIEW = [
         '  page.form.classList.toggle("busy", true);',
     ),
     (
-        "the card does not say that the model is writing",
-        '  turn.progress.textContent = "Writing";\n',
-        "",
+        "the line does not say that the first words are arriving",
+        'detail: journey.text ? "arriving now" : ""',
+        'detail: ""',
     ),
     (
-        "a match by meaning is badged as something else",
-        '    const tier = hit.tier === "exact" ? "exact match" : "matched by meaning";',
-        '    const tier = "exact match";',
+        "a match by meaning is said to be something else",
+        'hit.tier === "exact" ? "an answer stored for the same question"',
+        'true ? "an answer stored for the same question"',
     ),
     (
         "the warning look of a follow-up searched as typed is wrong",
@@ -1245,8 +1386,8 @@ PLANTED_BY_THE_REVIEW = [
     ),
     (
         "a failure is not announced (refused)",
-        '  label(turn, "Failed");\n  say("No answer.");',
-        '  label(turn, "Failed");',
+        '"How this request went");\n  say("No answer.");',
+        '"How this request went");',
     ),
     (
         "text that arrived before a failure or a stop is not marked unfinished (error after text)",
@@ -1268,14 +1409,14 @@ PLANTED_FOR_THE_FIXES = [
         "  return `${part.slice(0, 7)}…${part.slice(-7)}`;",
     ),
     (
-        "the Search badge does not say what the search did (no searched event)",
-        '    turn.found.textContent = "not run";\n',
+        "the stop of the search does not say what the search did (no searched event)",
+        '    turn.journey.found = "not run";\n',
         "",
     ),
     (
-        "the Cited badge counts sources the text does not cite",
-        '    badges.push(["Cited", plural(citedNumbers(answer).size, "source", "sources"), ""]);',
-        '    badges.push(["Cited", plural(answer.sources.length, "source", "sources"), ""]);',
+        "the line counts sources the text does not cite",
+        '`${plural(citedNumbers(answer).size, "source", "sources")} cited`',
+        '`${plural(answer.sources.length, "source", "sources")} cited`',
     ),
     (
         "the status line counts sources the text does not cite",
@@ -1378,13 +1519,13 @@ def test_a_source_card_that_cannot_be_built_does_not_cost_the_answer(tmp_path: P
         ),
         (
             "the card of a source that could not be shown does not say which",
-            '    head.append(make("span", "source-number", shown(source.number)));\n',
-            "",
+            '    card.append(make("span", "source-number", shown(source.number)), body);',
+            "    card.append(body);",
         ),
         (
             "one found passage that cannot be shown costs the others",
-            "results.map(passageOrNotice)",
-            "results.map(passageItem)",
+            "unused.map(passageOrNotice)",
+            "unused.map(passageItem)",
         ),
     ],
 )
@@ -1447,13 +1588,13 @@ PLANTED_IN_THE_NOTES = [
         "",
     ),
     (
-        "a change by a check has no badge (two checks)",
-        'badges.push(["Changed", notes.length === 1',
-        'badges.push(["Unchanged", notes.length === 1',
+        "a change by a check is not said at the end of the line (two checks)",
+        '    parts.push("changed by a check");\n',
+        "",
     ),
     (
         "the notes of a check are not marked as a change",
-        '  box.append(make("p", "check-label", "Changed by a check"));\n',
+        '  box.append(make("p", "check-label", "Changed by a check."));\n',
         "",
     ),
 ]
@@ -1461,6 +1602,116 @@ PLANTED_IN_THE_NOTES = [
 
 @pytest.mark.parametrize(("fault", "old", "new"), PLANTED_IN_THE_NOTES)
 def test_the_run_finds_each_fault_planted_in_the_notes_of_the_checks(
+    fault: str, old: str, new: str, tmp_path: Path
+) -> None:
+    source = script()
+    assert source.count(old) == 1, old
+
+    assert fault in faults(run(source.replace(old, new), tmp_path))
+
+
+# The faults of the line of stops, each with the check that finds it.
+PLANTED_IN_THE_LINE = [
+    (
+        "an answer's line does not run through its four stops",
+        'const stops = [{ name: "Asked", detail: asked, state: "reached" }];',
+        'const stops = [{ name: "Asked", detail: asked, state: "ahead" }];',
+    ),
+    (
+        "the line does not show how far the answer has come (searched)",
+        "        turn.journey.searched = searched;\n        renderRoute(turn);\n",
+        "",
+    ),
+    (
+        "the line does not show how far the answer has come (writing)",
+        "    turn.journey.text = true;\n    renderRoute(turn);",
+        "    turn.journey.text = true;",
+    ),
+    (
+        "the line does not show how far the answer has come (waiting)",
+        '      next.state = "next";\n',
+        "",
+    ),
+    (
+        "a decline's line does not run on to stops it does not serve (declined)",
+        'stops.push({ name: "No answer in them", detail: first, state: "off" });',
+        'stops.push({ name: "No answer in them", detail: first, state: "reached" });',
+    ),
+    (
+        "a decline's line is not dashed after the search (declined)",
+        'segment = next.state === "off" ? "dashed" :',
+        'segment = next.state === "off" ? "solid" :',
+    ),
+    (
+        "the line to a stop not reached yet is drawn as if it were reached",
+        ': next.state === "reached" || next.state === "end" ? "solid" : "faint";',
+        ': "solid";',
+    ),
+    (
+        "a line that ended short does not end where it ended (refused)",
+        '  turn.journey.ended = { kind: "failed" };\n',
+        "",
+    ),
+    (
+        "a line that ended short does not end where it ended (stopped)",
+        '  turn.journey.ended = { kind: "stopped" };\n',
+        "",
+    ),
+    (
+        "a line that ended short does not end where it ended (error after text)",
+        '{ name: "Broke off", detail: "after the first words: the request failed", state: "end" }',
+        '{ name: "Not answered", detail: "the request failed", state: "end" }',
+    ),
+    (
+        "a line that ended short does not end where it ended (withheld)",
+        'the model stopped: ${shown(answer.stop_reason)}`, state: "end" });',
+        'the model stopped: ${shown(answer.stop_reason)}`, state: "off" });',
+    ),
+    (
+        "a stored answer's line is not another one, with no search (cached)",
+        "  if (hit !== null) {\n    const how",
+        "  if (false) {\n    const how",
+    ),
+    (
+        "a follow-up's line has no stop of its own for the rewrite",
+        "  if (journey.earlier > 0) {\n    stops.push(rewriteStop(searched));\n  }\n",
+        "",
+    ),
+    (
+        "a rewritten follow-up does not show the question it was searched for",
+        '    rewritten: ["Rewritten", searched.question],',
+        '    rewritten: ["Rewritten", searched.asked],',
+    ),
+    (
+        "a check's decline is not where its line ends",
+        'stops.push({ name: "Declined by a check", detail: "nothing is cited", state: "off" });',
+        'stops.push({ name: "Not answered", detail: "nothing is cited", state: "off" });',
+    ),
+    (
+        "a screen reader is not told which stop is next and which are not reached",
+        '  next: " (now)",',
+        '  next: "",',
+    ),
+    (
+        "a screen reader is not told where a line ends (refused)",
+        '  end: " (the line ends here)",',
+        '  end: "",',
+    ),
+    (
+        "the line is not named for what it shows (stopped)",
+        '  turn.route.setAttribute("aria-label", "How this request went");\n  say(words);',
+        "  say(words);",
+    ),
+    (
+        "a stored answer's line does not say that no request was sent",
+        '    parts.push("no request to the model");\n',
+        "",
+    ),
+]
+
+
+@pytest.mark.parametrize(("fault", "old", "new"), PLANTED_IN_THE_LINE)
+def test_the_run_finds_each_fault_planted_in_the_line_of_stops(
     fault: str, old: str, new: str, tmp_path: Path
 ) -> None:
     source = script()

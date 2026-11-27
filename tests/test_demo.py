@@ -8,6 +8,7 @@ that would read text from the API as HTML or as code or take the reader to anoth
 and must make links in one place only.
 """
 
+import hashlib
 import json
 import re
 from collections.abc import Callable, Iterator
@@ -70,12 +71,25 @@ def static(name: str) -> str:
     return files("handbook_rag").joinpath("static", name).read_text(encoding="utf-8")
 
 
+def static_bytes(name: str) -> bytes:
+    return files("handbook_rag").joinpath("static", name).read_bytes()
+
+
+# The page's typeface: the one file it loads besides its own three, and its licence.
+FONT = "overpass-latin-wght-normal.woff2"
+FONT_ADDRESS = f"/static/{FONT}"
+FONT_SHA256 = "29217ef8adef5f6c059feb461bdb029348205fc233dc9b6ca8604b0d068ac086"
+FONT_BYTES = 39_380
+
+
 @pytest.mark.parametrize(
     ("path", "name", "content_type"),
     [
         ("/", "demo.html", "text/html; charset=utf-8"),
         ("/static/demo.js", "demo.js", "text/javascript; charset=utf-8"),
         ("/static/demo.css", "demo.css", "text/css; charset=utf-8"),
+        (FONT_ADDRESS, FONT, "font/woff2"),
+        ("/static/OFL.txt", "OFL.txt", "text/plain; charset=utf-8"),
     ],
 )
 def test_the_page_and_its_files_are_served_with_their_type_and_the_security_headers(
@@ -85,7 +99,7 @@ def test_the_page_and_its_files_are_served_with_their_type_and_the_security_head
 
     assert response.status_code == 200
     assert response.headers["content-type"] == content_type
-    assert response.text == static(name)
+    assert response.content == static_bytes(name)
     assert response.headers["content-security-policy"] == CONTENT_SECURITY_POLICY
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["referrer-policy"] == "no-referrer"
@@ -104,7 +118,14 @@ def test_the_page_is_on_by_default_and_the_setting_switches_it_and_only_it_off(
         search = client.post("/search", json={"query": "paid leave"})
 
     assert settings.api_demo is False
-    assert statuses == {"/": 404, "/static/demo.js": 404, "/static/demo.css": 404}
+    assert statuses == dict.fromkeys(FILES, 404)
+    assert set(FILES) == {
+        "/",
+        "/static/demo.js",
+        "/static/demo.css",
+        FONT_ADDRESS,
+        "/static/OFL.txt",
+    }
     assert search.status_code == 200, "the rest of the API is still there"
 
 
@@ -161,7 +182,8 @@ def test_the_files_are_read_from_the_package_and_not_from_the_working_directory(
     """
     elsewhere = tmp_path / "elsewhere"
     (elsewhere / "static").mkdir(parents=True)
-    for name in ("demo.html", "demo.js", "demo.css"):
+    names = ("demo.html", "demo.js", "demo.css", FONT, "OFL.txt")
+    for name in names:
         (elsewhere / "static" / name).write_text(f"stand-in {name}", encoding="utf-8")
     asked: list[str] = []
 
@@ -178,6 +200,8 @@ def test_the_files_are_read_from_the_package_and_not_from_the_working_directory(
         "/": "stand-in demo.html",
         "/static/demo.js": "stand-in demo.js",
         "/static/demo.css": "stand-in demo.css",
+        FONT_ADDRESS: f"stand-in {FONT}",
+        "/static/OFL.txt": "stand-in OFL.txt",
     }
 
 
@@ -207,13 +231,16 @@ def test_the_policy_allows_nothing_inline_nothing_from_elsewhere_and_no_framing(
     assert policy["frame-ancestors"] == ["'none'"]
     assert policy["form-action"] == ["'none'"]
     assert policy["base-uri"] == ["'none'"]
-    # This server is allowed for what the page needs, and for nothing else.
+    # This server is allowed for what the page needs, and for nothing else: its script, its
+    # style, its requests to the API, and its one font file.
     assert {name for name, allowed in policy.items() if "'self'" in allowed} == {
         "script-src",
         "style-src",
         "connect-src",
+        "font-src",
     }
     assert policy["script-src"] == policy["style-src"] == policy["connect-src"] == ["'self'"]
+    assert policy["font-src"] == ["'self'"]
     # No other site, and none of the words that would let inline or generated code run.
     assert sources <= {"'self'", "'none'"}
     for loose in ("unsafe-inline", "unsafe-eval", "unsafe-hashes", "nonce-", "sha256-", "*"):
@@ -681,17 +708,17 @@ def test_a_cached_answer_names_the_question_it_was_written_for_as_text() -> None
     # Each line is given to make, which sets it as text. The stored question is a
     # question somebody typed, and is shown like everything else that comes from the API.
     assert 'note.append(make("p", "", line));' in render
-    assert 'make("p", "cached-label", "From the cache")' in render
+    assert 'make("p", "cached-label", "A stored answer.")' in render
     assert ".cached {" in static("demo.css")
     # The search beside the answer is the new question's, not the one the answer was written
     # from. Each turn has its own fold of found passages, which the script builds, so the
     # words that say so are the script's and are put in every fold.
     assert "An answer that came from the cache ran no search" in body_of_constant("SEARCH_HINT")
     assert "SEARCH_HINT);" in body_of("addTurn")
-    # The badge under the answer says it came from the cache, and from which tier.
-    badges = body_of("answerBadges")
-    assert '"From the cache"' in badges
-    assert 'hit.tier === "exact" ? "exact match" : "matched by meaning"' in badges
+    # The line of stops says the answer was found stored, and for which kind of question.
+    stops = body_of("routeStops")
+    assert 'name: "Found stored"' in stops
+    assert 'hit.tier === "exact" ? "an answer stored for the same question"' in stops
 
 
 # The notes of the checks in code that changed a reply or marked it (ADR 0025).
@@ -1086,3 +1113,102 @@ def test_the_check_of_the_notice_finds_each_fault_planted_in_the_markup_or_the_s
 
     problems = notice_problems(*((planted, sheet) if file == "demo.html" else (html, planted)))
     assert problems != []
+
+
+# The page's typeface. A font is a file that nobody reads, so it is pinned by its hash and
+# its size, its licence travels with it, and the style sheet may name no other file or
+# address: the page loads nothing but its own files, from its own server.
+
+
+def test_the_font_file_is_the_one_pinned_and_its_licence_is_beside_it() -> None:
+    font = static_bytes(FONT)
+
+    assert len(font) == FONT_BYTES
+    assert hashlib.sha256(font).hexdigest() == FONT_SHA256
+    assert font[:4] == b"wOF2", "a WOFF2 file"
+    licence = static("OFL.txt")
+    assert "SIL OPEN FONT LICENSE Version 1.1" in licence
+    assert "The Overpass Project Authors" in licence
+
+
+def font_problems(sheet: str) -> list[str]:
+    """What a style sheet names besides the page's one font file, or loads from elsewhere."""
+    found = []
+    sheet = re.sub(r"/\*.*?\*/", "", sheet, flags=re.DOTALL)
+    addresses = re.findall(r"url\(\s*([\"']?)([^)\"']*)\1\s*\)", sheet)
+    if [address for _, address in addresses] != [FONT_ADDRESS]:
+        found.append(f"the sheet names a file or an address but the font: {addresses}")
+    if re.search(r"@import\b|\blocal\(|image-set\(|@namespace\b", sheet):
+        found.append("the sheet imports, names a local font, or loads an image")
+    faces = re.findall(r"@font-face\s*\{([^}]*)\}", sheet)
+    if len(faces) != 1 or 'font-family: "Overpass"' not in faces[0]:
+        found.append("the sheet has another font face than Overpass")
+    for value in re.findall(r"(?<![\w-])font-family:\s*([^;]+);", sheet):
+        if value.strip() not in ('"Overpass"', "var(--font)", "inherit"):
+            found.append(f"a font family other than the page's: {value}")
+    (stack,) = re.findall(r"--font:\s*([^;]+);", sheet)
+    names = [name.strip() for name in stack.split(",")]
+    system = {"system-ui", "-apple-system", '"Segoe UI"', "Roboto", "Arial", "sans-serif"}
+    if names[0] != '"Overpass"' or not set(names[1:]) <= system:
+        found.append(
+            f"the page's font stack names a font that is neither Overpass nor the system's: {stack}"
+        )
+    return found
+
+
+def test_the_style_sheet_names_no_file_or_address_but_the_one_font() -> None:
+    assert font_problems(static("demo.css")) == []
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        '@font-face { font-family: "Inter"; src: url("https://fonts.example/inter.woff2"); }',
+        '@import url("https://fonts.example/css?family=Inter");',
+        '.band { background-image: url("/static/band.png"); }',
+        '.band { font-family: "Helvetica Neue", sans-serif; }',
+        '@font-face { font-family: "Overpass"; src: local("Overpass"); }',
+    ],
+)
+def test_the_check_of_the_fonts_finds_each_rule_planted_in_the_style_sheet(rule: str) -> None:
+    assert font_problems(f"{static('demo.css')}\n{rule}\n") != []
+
+
+# The look's own rules, which the review of the page held it to: colour means source, so
+# every colour is a token; no capitals for labels, no pills, no shadows.
+
+
+def look_problems(sheet: str) -> list[str]:
+    found = []
+    sheet = re.sub(r"/\*.*?\*/", "", sheet, flags=re.DOTALL)
+    for selector, declarations in css_rules(sheet):
+        for name, value in declarations.items():
+            if re.search(r"#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(", value) and not name.startswith(
+                "--"
+            ):
+                found.append(f"a colour written outside the tokens: {name}: {value} on {selector}")
+            if name == "text-transform" and "uppercase" in value:
+                found.append(f"capitals for a label on {selector}")
+            if name == "box-shadow":
+                found.append(f"a shadow on {selector}")
+            if name == "border-radius" and value not in ("0", "50%"):
+                found.append(f"a rounded box or a pill on {selector}: {value}")
+    return found
+
+
+def test_the_look_keeps_its_own_rules() -> None:
+    assert look_problems(static("demo.css")) == []
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        ".band { background: #4f46e5; }",
+        ".badge { text-transform: uppercase; letter-spacing: 0.08em; }",
+        ".source-card { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); }",
+        ".badge { border-radius: 999px; }",
+        ".answer-card { color: rgb(20, 20, 20); }",
+    ],
+)
+def test_the_check_of_the_look_finds_each_rule_planted_in_the_style_sheet(rule: str) -> None:
+    assert look_problems(f"{static('demo.css')}\n{rule}\n") != []

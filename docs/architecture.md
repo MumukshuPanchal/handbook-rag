@@ -85,7 +85,7 @@ The first working version (the baseline) used dense search only and skipped step
 | Generator | Write a grounded, cited answer, within time limits, with an optional fallback model | Gemini through Google's API by default, or Claude through the Anthropic API | [ADR 0013](adr/0013-gemini-free-tier-with-marker-citations.md), [ADR 0006](adr/0006-claude-with-native-citations-for-generation.md), [ADR 0010](adr/0010-search-result-blocks-and-declining.md), [ADR 0018](adr/0018-time-limits-retries-and-a-fallback.md) |
 | API | HTTP interface: `POST /ask` (JSON or server-sent events), `POST /search` and `GET /health` | FastAPI | [ADR 0015](adr/0015-answers-over-http.md) |
 | MCP server | Handbook search as one read-only tool for AI assistants, over standard input and output. Added after version 1.0.0 | The official MCP SDK for Python, its low-level server | [ADR 0017](adr/0017-an-mcp-server-for-search.md) |
-| Demo page | A page at `/` that asks `POST /ask`, shows the answer as it arrives with its sources, and what `POST /search` found beside it | Three hand-written files served by the API: HTML, JavaScript and CSS, with no framework and no build step | [ADR 0016](adr/0016-a-demo-page-without-a-build-step.md) |
+| Demo page | A page at `/` that asks `POST /ask`, shows the answer as it arrives with its sources, and what `POST /search` found beside it | Three hand-written files served by the API: HTML, JavaScript and CSS, with no framework and no build step; and one font file, Overpass, with its licence | [ADR 0016](adr/0016-a-demo-page-without-a-build-step.md) |
 | Evaluation | Measure retrieval and answer quality | Our own harness | [ADR 0007](adr/0007-evaluation-strategy.md) |
 | Tracing | Record every stage of a request, when switched on | OpenTelemetry | [ADR 0008](adr/0008-opentelemetry-tracing.md) |
 
@@ -170,8 +170,8 @@ src/handbook_rag/
                         which the entry point runs when a question has earlier questions
     pipeline.py         the single entry point: question in, answer out
     api.py              the FastAPI application
-    demo.py             serves the demo page and its two files, with their security headers
-    static/             the demo page: HTML, JavaScript and CSS, written by hand
+    demo.py             serves the demo page and its files, with their security headers
+    static/             the demo page: HTML, JavaScript and CSS, written by hand, and its font
     streaming.py        an answer written in a worker thread, read as a stream of events
     mcp_server.py       handbook search as a tool for AI assistants (MCP)
     tracing.py          tracing setup, and what each span records
@@ -198,7 +198,7 @@ compose.yaml            API, Qdrant and trace backend
 - **No secrets in git.** Credentials live in the environment.
 - **What is kept.** The answer cache keeps each question with its answer in the vector store, until the cache is emptied or a setting that decides an answer changes. A stored question is shown to whoever is served its answer, and a question can hold personal details. `HANDBOOK_RAG_CACHE_MODE=off` keeps nothing, and `exact` shows a reader only their own question. Traces record metadata only unless content recording is switched on for local debugging.
 - **Fixed words for callers.** A failure is reported to a caller of the API, or of the MCP tool, in words chosen in advance. The error's own message, which can name files, settings and internal addresses, goes to the log with the trace ID.
-- **The demo page shows what the API sends as text.** An answer is written by a model from pages anyone can edit, and the adversarial tests saw a planted link reach the answer. So the page's script builds each element and sets its text, never reads text as HTML or code, and never takes the reader to another page; an address in an answer is not a link, and the only links are the sources' pages, for `https://` and `http://` addresses. A strict content security policy, sent as a header, lets the page run only its own script and style and talk only to its own server, and forbids framing. A test reads the script for the calls it must not make. Details: [ADR 0016](adr/0016-a-demo-page-without-a-build-step.md).
+- **The demo page shows what the API sends as text.** An answer is written by a model from pages anyone can edit, and the adversarial tests saw a planted link reach the answer. So the page's script builds each element and sets its text, never reads text as HTML or code, and never takes the reader to another page; an address in an answer is not a link, and the only links are the sources' pages, for `https://` and `http://` addresses. A strict content security policy, sent as a header, lets the page run only its own script, style and font and talk only to its own server, and forbids framing. A test reads the script for the calls it must not make. Details: [ADR 0016](adr/0016-a-demo-page-without-a-build-step.md).
 - **Not in scope for the first version.** User authentication, rate limiting for each caller and per-document permissions. The demo page adds none of them, so it is for the machine the service runs on. The corpus is public, so no access control is needed to read it. The API caps how many answers it writes at once, which protects the model's allowance from a burst, not from one caller who keeps asking.
 
 ## Deliberately left out

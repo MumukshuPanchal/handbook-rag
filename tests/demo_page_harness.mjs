@@ -367,12 +367,10 @@ function latestTurn() {
   const cards = byClass(item, "source-card").filter((card) => !card.classes.has("placeholder"));
   const answerText = shownByClass(item, "answer-text");
   const [made] = byClass(item, "made");
-  const badgeList = made !== undefined && isShown(made) ? shownByClass(made, "badge") : [];
   const [note] = byClass(item, "turn-note");
-  const [madeTitle] = byClass(item, "made-title");
   const [cardTitle] = byClass(item, "card-title");
   const [facts] = byClass(item, "facts");
-  const [progress] = byClass(item, "card-progress");
+  const [route] = byClass(item, "route");
   const [sourcesBlock] = byClass(item, "sources-block");
   const [searchFold] = byClass(item, "search-fold");
   const fold = (node) => {
@@ -408,7 +406,7 @@ function latestTurn() {
     turnSearchedLine: line.textContent,
     turnSearchedHidden: !isShown(line),
     searchedAsTyped: line.classes.has("searched-as-typed"),
-    bubble: byClass(item, "bubble").map((bubble) => bubble.textContent),
+    sign: byClass(item, "question-sign").map((sign) => sign.textContent),
     scrolled: item.scrolled,
     // An answer's text, shown as an answer and not inside the notice of a reply that is not.
     answer: answerText.some((text) => !inside(text, "notice")),
@@ -423,13 +421,19 @@ function latestTurn() {
     caret: shownByClass(item, "stream").some((text) => text.classes.has("streaming")),
     streamed: shownByClass(item, "stream").map((text) => text.textContent).join(""),
     streamUnfinished: byClass(item, "stream").some((text) => text.classes.has("unfinished")),
-    progress: shownByClass(item, "card-progress").length > 0,
-    progressText: progress.textContent,
-    badges: badgeList.map((badge) => badge.textContent),
+    // The line of stops: each stop's name, its detail, its state, the kind of line that
+    // leaves it, and what a screen reader is told of its state.
+    stops: route.children.map((stop) => ({
+      name: byClass(stop, "station-name").map((name) => name.textContent).join(""),
+      detail: byClass(stop, "station-detail").map((detail) => detail.textContent).join(""),
+      state: ([...stop.classes].find((name) => name.startsWith("station-")) ?? "").slice(8),
+      segment: ([...stop.classes].find((name) => name.startsWith("seg-")) ?? "").slice(4),
+      told: spoken(stop),
+    })),
+    routeLabel: route.attrs["aria-label"] ?? "",
     cached: shownByClass(item, "cached").map((box) => box.textContent).join(" "),
     note: note !== undefined && isShown(note) ? note.textContent : "",
     madeShown: made !== undefined && isShown(made),
-    madeTitle: made !== undefined && isShown(made) ? madeTitle.textContent : "",
     cardTitle: cardTitle.textContent,
     ended: [...item.classes].filter((name) => name.startsWith("ended-")),
     facts: facts !== undefined && isShown(facts) ? facts.textContent : "",
@@ -750,6 +754,8 @@ await step("late failure", "and in japan", refusal("The answer model is unavaila
   record("waiting", "Who approves parental leave?");
   const found = searched("Who approves parental leave?", "Who approves parental leave?", "unchanged");
   body.send("searched", found);
+  await settle();
+  record("searched", "Who approves parental leave?");
   body.send("text", { text: "Your manager" });
   await settle();
   record("writing", "Who approves parental leave?");

@@ -1,7 +1,8 @@
 """The demo page: a question box over ``POST /ask``, served by the API itself.
 
 Three files written by hand, in ``static/`` next to this module: the page, its script and
-its style. There is no framework and no build step, so what is served is what is in the
+its style; and the one typeface the page uses, Overpass, as one font file, with its
+licence. There is no framework and no build step, so what is served is what is in the
 repository, and a reader can read all of it. Why, and how the page keeps what a model
 wrote from becoming code or a link, is in ADR 0016.
 """
@@ -17,12 +18,17 @@ FILES = {
     "/": ("demo.html", "text/html; charset=utf-8"),
     "/static/demo.js": ("demo.js", "text/javascript; charset=utf-8"),
     "/static/demo.css": ("demo.css", "text/css; charset=utf-8"),
+    # The page's typeface: the Latin subset of the variable font Overpass, as Fontsource
+    # distributes it, under the SIL Open Font License 1.1, which is served beside it. A
+    # test pins the file's hash and size.
+    "/static/overpass-latin-wght-normal.woff2": ("overpass-latin-wght-normal.woff2", "font/woff2"),
+    "/static/OFL.txt": ("OFL.txt", "text/plain; charset=utf-8"),
 }
 
 # What the browser may do on the page. Nothing is allowed unless it is named: the script,
-# the style and the requests to the API, all from this server. So no inline script or
-# style runs, nothing is loaded from another site, no other page can frame this one, and
-# no form sends anywhere. The last two lines switch on Trusted Types, where a browser has
+# the style, the font and the requests to the API, all from this server. So no inline
+# script or style runs, nothing is loaded from another site, no other page can frame this
+# one, and no form sends anywhere. The last two lines switch on Trusted Types, where a browser has
 # them: it then refuses any HTML written from a string, which the script never does.
 CONTENT_SECURITY_POLICY = "; ".join(
     (
@@ -30,6 +36,7 @@ CONTENT_SECURITY_POLICY = "; ".join(
         "script-src 'self'",
         "style-src 'self'",
         "connect-src 'self'",
+        "font-src 'self'",
         "base-uri 'none'",
         "form-action 'none'",
         "frame-ancestors 'none'",
@@ -46,8 +53,8 @@ HEADERS = {
     "Referrer-Policy": "no-referrer",
     # The browser may keep a copy but must not use it without asking the server. No ETag
     # or Last-Modified is sent, so there is nothing to check a copy against, and every
-    # load fetches the three small files again. A changed file reaches the reader at the
-    # next load.
+    # load fetches the page's files again, the font the largest of them at 39 KB. A
+    # changed file reaches the reader at the next load.
     "Cache-Control": "no-cache",
 }
 
@@ -68,7 +75,7 @@ def read_files() -> dict[str, tuple[bytes, str]]:
 
 
 def add_demo_page(app: FastAPI) -> None:
-    """Serve the page and its two files, outside the API's documentation.
+    """Serve the page and its files, outside the API's documentation.
 
     The files are read once, here. They are small, and a request then reads no file.
     """

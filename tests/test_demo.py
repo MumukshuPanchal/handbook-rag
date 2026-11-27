@@ -80,6 +80,9 @@ FONT = "overpass-latin-wght-normal.woff2"
 FONT_ADDRESS = f"/static/{FONT}"
 FONT_SHA256 = "29217ef8adef5f6c059feb461bdb029348205fc233dc9b6ca8604b0d068ac086"
 FONT_BYTES = 39_380
+# The licence's text as it came with the font, byte for byte. The hook that trims spaces
+# at the ends of lines leaves this file alone (.pre-commit-config.yaml).
+LICENCE_SHA256 = "86e5ff25c701ec446d20b1a85b02ee6d36de8503a7288a4c948f5459809af1f0"
 
 
 @pytest.mark.parametrize(
@@ -357,7 +360,12 @@ def test_the_example_questions_are_real_questions_of_the_golden_set() -> None:
         attrs for attrs, decline in zip(markup.example_attributes, marked, strict=True) if decline
     ]
     note = str(decline_attributes.get("aria-describedby"))
-    assert "not in the handbook" in markup.paragraphs[note]
+    # Under version 2 of the instructions the saved reply to that question says that the
+    # passages do not say and adds GitLab's own figure, which the page shows as an answer.
+    # So the note promises no decline: it says what is true of either reply.
+    assert markup.paragraphs[note].strip() == (
+        "The last one is not in the handbook: ask it to see how the assistant says so."
+    )
 
 
 def test_the_links_in_the_header_lead_to_sections_the_readme_has() -> None:
@@ -415,7 +423,19 @@ def test_the_steps_beside_the_welcome_and_folded_on_a_phone_are_the_same() -> No
 
     assert len(steps) == 2
     assert steps[0] == steps[1]
-    assert "The handbook is searched" in steps[0].split("</li>")[0], "the search comes first"
+    # Drawn as a line, so in the order things happen: a follow-up is rewritten first, a
+    # stored answer is served in place of the rest, and then the search, the answer, or the
+    # decline.
+    order = [
+        re.sub(r"<[^>]+>", "", strong) for strong in re.findall(r"<strong>(.*?)</strong>", steps[0])
+    ]
+    assert order == [
+        "A follow-up is rewritten first.",
+        "A stored answer",
+        "The handbook is searched",
+        "A model writes the answer",
+        "Or it declines",
+    ]
     assert '<details class="how-fold">' in html
 
 
@@ -881,32 +901,48 @@ def subjects(selector: str) -> list[str]:
     return found
 
 
-# The address line itself, by class; the card, the found passage, the fold that holds the
-# whole address, and every element around them, by class; and the elements, by name, that
-# the line is or that hold it. A rule for any other class or element, or for an id, cannot
-# reach the line.
+# The address line itself and what is inside it, by class; every element around it, by
+# class and by id; and the elements, by name, that the line is, that it holds, or that hold
+# it. The script builds most of these, so test_demo_behaviour.py reads them from the page
+# the script really builds, in every state its run puts the page in, and fails when this
+# list misses one: a new wrapper cannot be forgotten here. A rule for any other class,
+# element or id cannot reach the line in that structure.
 ADDRESS = {"source-address", "address-brief", "passage-address"}
 AROUND = {
-    "source-card", "source-cards", "sources-block", "passage-item", "passages", "passage",
-    "search-fold", "turn-sources", "turn", "turns", "app",
+    # Built by the script, for each turn.
+    "turn", "ended-answer", "ended-declined", "ended-reply", "ended-failed", "ended-stopped",
+    "cols", "turn-sources", "no-sources", "sources-block", "source-cards", "source-card",
+    "line-1", "line-2", "line-3", "line-4", "line-5", "line-other", "linked", "marked",
+    "source-body", "passage", "search-fold", "nothing-more", "passages", "passage-item",
+    # In the page's markup, around the list of turns.
+    "turns", "app",
 }  # fmt: skip
-HOLDERS = {"p", "li", "ol", "div", "details", "main", "body", "html", "*"}
+AROUND_IDS = {"turns"}
+HOLDERS = {"p", "span", "li", "ol", "div", "details", "main", "body", "html", "*"}
 
 
-def reach(compound: str) -> str | None:
+def reach(
+    compound: str,
+    around: set[str] = AROUND,
+    holders: set[str] = HOLDERS,
+    ids: set[str] = AROUND_IDS,
+) -> str | None:
     """Whether a rule for this compound styles the line ("line"), an element around it
-    ("around"), something that may be either ("either"), or nothing that holds it (None)."""
-    classes = set(re.findall(r"\.([\w-]+)", re.sub(r"\[[^\]]*\]", "", compound)))
-    if "#" in re.sub(r"\[[^\]]*\]", "", compound):
-        return None
+    ("around"), something that may be either ("either"), or nothing that holds it (None).
+    What stands around the line can be given, as the structure the script builds."""
+    bare = re.sub(r"\[[^\]]*\]", "", compound)
+    classes = set(re.findall(r"\.([\w-]+)", bare))
+    named = set(re.findall(r"#([\w-]+)", bare))
+    if named:
+        return "around" if named & ids else None
     if classes:
-        return "line" if classes & ADDRESS else "around" if classes & AROUND else None
+        return "line" if classes & ADDRESS else "around" if classes & around else None
     if compound == "[hidden]":
         return None  # the hidden attribute's own rule, which hides what is meant to be
     if "::" in compound:
         return None  # a box the style sheet adds before or after an element, not the element
     tag = re.match(r"[a-z][a-z0-9]*|\*", compound)
-    return "either" if tag is None or tag.group(0) in HOLDERS else None
+    return "either" if tag is None or tag.group(0) in holders else None
 
 
 def wraps(value: str) -> bool:
@@ -955,11 +991,17 @@ RULES_FOR: dict[str, dict[str, Test]] = {
 }
 
 
-def cuts_the_address(selector: str, declarations: dict[str, str]) -> list[str]:
+def cuts_the_address(
+    selector: str,
+    declarations: dict[str, str],
+    around: set[str] = AROUND,
+    holders: set[str] = HOLDERS,
+    ids: set[str] = AROUND_IDS,
+) -> list[str]:
     """What a rule does that could hide or cut the address line, by the ways it knows."""
     found = []
     for compound in subjects(selector):
-        kind = reach(compound)
+        kind = reach(compound, around, holders, ids)
         if kind is not None:
             hides = RULES_FOR[kind]
             found += [
@@ -1012,6 +1054,17 @@ def test_no_rule_of_the_stylesheet_can_cut_the_address_under_a_source() -> None:
         ".source-card [class~=source-address] { overflow: hidden; }",
         "li { white-space: nowrap; }",
         ".passage { display: none; }",
+        # The ones the review of the new look found getting past it: the wrapper of a
+        # source's text, and the columns of a turn.
+        ".source-body { overflow: hidden; max-height: 6em; }",
+        ".source-body { display: -webkit-box; -webkit-line-clamp: 4; overflow: hidden; }",
+        ".cols { overflow: hidden; }\n.source-body { white-space: nowrap; }",
+        # And what else stands around the line now: an id in the markup, the colour of a
+        # source's line, the state of the fold, and the spans inside the line.
+        "#turns { overflow: hidden; }",
+        ".line-3 { overflow: clip; }",
+        ".nothing-more { display: none; }",
+        "span { display: none; }",
     ],
 )
 def test_the_check_of_the_stylesheet_finds_each_rule_that_could_cut_the_address(rule: str) -> None:
@@ -1127,32 +1180,58 @@ def test_the_font_file_is_the_one_pinned_and_its_licence_is_beside_it() -> None:
     assert hashlib.sha256(font).hexdigest() == FONT_SHA256
     assert font[:4] == b"wOF2", "a WOFF2 file"
     licence = static("OFL.txt")
+    assert hashlib.sha256(static_bytes("OFL.txt")).hexdigest() == LICENCE_SHA256
     assert "SIL OPEN FONT LICENSE Version 1.1" in licence
     assert "The Overpass Project Authors" in licence
 
 
-def font_problems(sheet: str) -> list[str]:
-    """What a style sheet names besides the page's one font file, or loads from elsewhere."""
-    found = []
+def unescaped(sheet: str) -> str:
+    """A style sheet with its comments taken out and its escapes resolved, as a browser
+    reads it: `\\75 rl(` is `url(`."""
     sheet = re.sub(r"/\*.*?\*/", "", sheet, flags=re.DOTALL)
-    addresses = re.findall(r"url\(\s*([\"']?)([^)\"']*)\1\s*\)", sheet)
+    sheet = re.sub(r"\\([0-9a-fA-F]{1,6})\s?", lambda hit: chr(int(hit.group(1), 16)), sheet)
+    return re.sub(r"\\(.)", r"\1", sheet)
+
+
+def font_problems(sheet: str) -> list[str]:
+    """What a style sheet names besides the page's one font file. It reads the sheet as a
+    browser does, in either case and with escapes resolved, and finds: an address in a
+    `url()` or `src()` other than the font's, an `@import`, a `local()` font, an image made
+    by `image-set()`, `image()`, `cross-fade()` or `element()`, a second font face, and a
+    family other than Overpass and the system's own in `font-family` or in the `font`
+    shorthand, which may only be `inherit`. In a browser the policy stands behind it:
+    `default-src 'none'` and `font-src 'self'` refuse anything from another origin, whatever
+    the sheet names."""
+    found = []
+    sheet = unescaped(sheet)
+    low = sheet.lower()
+    addresses = re.findall(r"url\(\s*([\"']?)([^)\"']*)\1\s*\)", low)
     if [address for _, address in addresses] != [FONT_ADDRESS]:
         found.append(f"the sheet names a file or an address but the font: {addresses}")
-    if re.search(r"@import\b|\blocal\(|image-set\(|@namespace\b", sheet):
-        found.append("the sheet imports, names a local font, or loads an image")
-    faces = re.findall(r"@font-face\s*\{([^}]*)\}", sheet)
-    if len(faces) != 1 or 'font-family: "Overpass"' not in faces[0]:
+    loads = r"@import\b|@namespace\b|(?<![\w-])(?:src|local|image-set|image|cross-fade|element)\("
+    if re.search(loads, low):
+        found.append("the sheet imports, names a local font, or makes an image")
+    faces = re.findall(r"@font-face\s*\{([^}]*)\}", low)
+    if len(faces) != 1 or 'font-family: "overpass"' not in faces[0]:
         found.append("the sheet has another font face than Overpass")
-    for value in re.findall(r"(?<![\w-])font-family:\s*([^;]+);", sheet):
-        if value.strip() not in ('"Overpass"', "var(--font)", "inherit"):
-            found.append(f"a font family other than the page's: {value}")
-    (stack,) = re.findall(r"--font:\s*([^;]+);", sheet)
-    names = [name.strip() for name in stack.split(",")]
-    system = {"system-ui", "-apple-system", '"Segoe UI"', "Roboto", "Arial", "sans-serif"}
-    if names[0] != '"Overpass"' or not set(names[1:]) <= system:
-        found.append(
-            f"the page's font stack names a font that is neither Overpass nor the system's: {stack}"
-        )
+    for selector, declarations in css_rules(sheet):
+        family = declarations.get("font-family")
+        if family is not None and family not in ('"overpass"', "var(--font)", "inherit"):
+            found.append(f"a font family other than the page's on {selector}: {family}")
+        if declarations.get("font", "inherit") != "inherit":
+            found.append(
+                f"the font shorthand on {selector}, which names a family: {declarations['font']}"
+            )
+    stacks = re.findall(r"--font\s*:\s*([^;}]+)", low)
+    system = {"system-ui", "-apple-system", '"segoe ui"', "roboto", "arial", "sans-serif"}
+    for stack in stacks:
+        names = [name.strip() for name in stack.split(",")]
+        if names[0] != '"overpass"' or not set(names[1:]) <= system:
+            found.append(
+                f"the page's font stack names a font not Overpass nor the system's: {stack}"
+            )
+    if len(stacks) != 1:
+        found.append(f"the page's font stack is set {len(stacks)} times")
     return found
 
 
@@ -1168,6 +1247,17 @@ def test_the_style_sheet_names_no_file_or_address_but_the_one_font() -> None:
         '.band { background-image: url("/static/band.png"); }',
         '.band { font-family: "Helvetica Neue", sans-serif; }',
         '@font-face { font-family: "Overpass"; src: local("Overpass"); }',
+        # The ones the review of the new look found getting past it.
+        '.band { background: URL("https://evil.example/x.png"); }',
+        ".band { background: Url(/static/x.png); }",
+        '@IMPORT "https://evil.example/x.css";',
+        '.band { background: IMAGE-SET("https://evil.example/x.png" 1x); }',
+        ".band { background: \\75 rl(https://evil.example/x.png); }",
+        '.band { font: 700 17px "Comic Sans MS", serif; }',
+        '.band { font-family: "Comic Sans MS" }',
+        # And the newer function that takes an address, and a second stack.
+        '.band { background: src("https://evil.example/x.png"); }',
+        ':root { --font: "Comic Sans MS", serif; }',
     ],
 )
 def test_the_check_of_the_fonts_finds_each_rule_planted_in_the_style_sheet(rule: str) -> None:
@@ -1212,3 +1302,241 @@ def test_the_look_keeps_its_own_rules() -> None:
 )
 def test_the_check_of_the_look_finds_each_rule_planted_in_the_style_sheet(rule: str) -> None:
     assert look_problems(f"{static('demo.css')}\n{rule}\n") != []
+
+
+# Colour means source: it is the one meaning the look carries. Each line class takes its own
+# line colour and a numeral colour, no two lines share a colour in either theme, the
+# numeral on each line reads at 4.5:1 at least in either theme, worked out here from the
+# tokens, and the bullets and strokes take the colour of their line. That the script gives
+# each citation and its source the class of its number is run in node.
+
+
+def css_blocks(sheet: str) -> list[tuple[str, str, dict[str, str]]]:
+    """Every rule of a style sheet with the condition of the media query it sits in, or ""
+    for none, in the order of the sheet."""
+    sheet = re.sub(r"/\*.*?\*/", "", sheet, flags=re.DOTALL)
+    sheet = re.sub(r"@keyframes[^{]*\{(?:[^{}]*\{[^{}]*\})*\s*\}", "", sheet)
+    found: list[tuple[str, str, dict[str, str]]] = []
+    at = 0
+    while at < len(sheet):
+        media = re.compile(r"@media([^{]*)\{").search(sheet, at)
+        plain = sheet[at : len(sheet) if media is None else media.start()]
+        found += [("", selector, declared) for selector, declared in css_rules(plain)]
+        if media is None:
+            break
+        depth, end = 1, media.end()
+        while depth and end < len(sheet):
+            depth += {"{": 1, "}": -1}.get(sheet[end], 0)
+            end += 1
+        condition = " ".join(media.group(1).split())
+        found += [
+            (condition, sel, declared) for sel, declared in css_rules(sheet[media.end() : end - 1])
+        ]
+        at = end
+    return found
+
+
+def merged(sheet: str) -> dict[tuple[str, str], dict[str, str]]:
+    """The declarations of each selector in each media condition, a later one winning."""
+    rules: dict[tuple[str, str], dict[str, str]] = {}
+    for condition, selector, declared in css_blocks(sheet):
+        rules.setdefault((condition, selector), {}).update(declared)
+    return rules
+
+
+DARK = "(prefers-color-scheme: dark)"
+
+
+def theme_tokens(sheet: str) -> dict[str, dict[str, str]]:
+    """The values of the custom properties of :root, in the light theme and the dark."""
+    light: dict[str, str] = {}
+    dark: dict[str, str] = {}
+    for condition, selector, declared in css_blocks(sheet):
+        if selector == ":root" and condition in ("", DARK):
+            (dark if condition == DARK else light).update(declared)
+    return {"light": light, "dark": {**light, **dark}}
+
+
+def resolved(value: str, tokens: dict[str, str]) -> str | None:
+    """A colour as a hex code, through the custom properties it names."""
+    for _ in range(5):
+        named = re.fullmatch(r"var\((--[\w-]+)\)", value.strip())
+        if named is None:
+            break
+        value = tokens.get(named.group(1), "")
+    return value if re.fullmatch(r"#[0-9a-f]{6}", value) else None
+
+
+def contrast(one: str, other: str) -> float:
+    """The contrast ratio of two colours, as WCAG 2 works it out."""
+
+    def luminance(colour: str) -> float:
+        channels = [int(colour[i : i + 2], 16) / 255 for i in (1, 3, 5)]
+        r, g, b = (c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    high, low = sorted((luminance(one), luminance(other)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+LINES = ["line-1", "line-2", "line-3", "line-4", "line-5", "line-other"]
+
+
+def line_colour_problems(sheet: str) -> list[str]:
+    found = []
+    rules = merged(sheet)
+    for theme, tokens in theme_tokens(sheet).items():
+        colours = {}
+        for line in LINES:
+            declared = rules.get(("", f".{line}"), {})
+            own = "var(--other)" if line == "line-other" else f"var(--l{line[-1]})"
+            if declared.get("--c") != own:
+                found.append(f"{line} does not take its own colour, {own}: {declared.get('--c')}")
+            colour = resolved(declared.get("--c", ""), tokens)
+            numeral = resolved(declared.get("--on-c", ""), tokens)
+            if colour is None or numeral is None:
+                found.append(f"{line} has no colour or no numeral colour in the {theme} theme")
+                continue
+            colours[line] = colour
+            if contrast(numeral, colour) < 4.5:
+                ratio = contrast(numeral, colour)
+                found.append(f"the numeral on {line} reads at {ratio:.2f}:1 in the {theme} theme")
+        if len(set(colours.values())) != len(colours):
+            found.append(f"two lines share a colour in the {theme} theme: {colours}")
+    for selector, wanted in (
+        (".cite", {"background": "var(--c)", "color": "var(--on-c)"}),
+        (".source-number", {"background": "var(--c)", "color": "var(--on-c)"}),
+        (".source-card::before", {"background": "var(--c)"}),
+    ):
+        declared = rules.get(("", selector), {})
+        for name, value in wanted.items():
+            if declared.get(name) != value:
+                found.append(
+                    f"{selector} does not take its line's colour: {name}: {declared.get(name)}"
+                )
+    return found
+
+
+def test_each_source_has_a_line_colour_of_its_own_and_its_numeral_reads() -> None:
+    assert line_colour_problems(static("demo.css")) == []
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        ".line-4 { --on-c: var(--on-line); }",
+        ":root { --on-l4: #ffffff; }",
+        ":root { --l2: #d8261c; }",
+        ".line-2 { --c: var(--l1); }",
+        f"@media {DARK} {{ :root {{ --l5: #0a57c2; --l2: #0a57c2; }} }}",
+        ".line-other { --c: var(--l5); }",
+        ".cite { background: var(--l1); }",
+        ".source-card::before { background: var(--rule-line); }",
+        ".source-number { color: var(--text); }",
+    ],
+)
+def test_the_check_of_the_line_colours_finds_each_rule_planted_in_the_style_sheet(
+    rule: str,
+) -> None:
+    assert line_colour_problems(f"{static('demo.css')}\n{rule}\n") != []
+
+
+# The other style rules that carry meaning: the one motion only for a reader who has not
+# asked for less, a visible focus, the next stop filled, a decline's line dashed both ways,
+# a bar where a line ends, and the dark theme's sign edged so that it stands out from the
+# page.
+
+REDUCED = "(prefers-reduced-motion: no-preference)"
+NARROW = "(max-width: 40rem)"
+
+
+def taken_away(value: str | None) -> bool:
+    return value is not None and (
+        value.split()[:1] in (["none"], ["0"], ["0px"]) or "none" in value.split()
+    )
+
+
+def meaning_problems(sheet: str) -> list[str]:
+    found = []
+    rules = merged(sheet)
+    for condition, selector, declared in css_blocks(sheet):
+        for name, value in declared.items():
+            moving = name.startswith(("animation", "transition")) and value not in ("none", "0s")
+            if moving and condition != REDUCED:
+                found.append(f"motion outside {REDUCED}: {name}: {value} on {selector}")
+        if "focus" in selector and (
+            taken_away(declared.get("outline"))
+            or taken_away(declared.get("outline-style"))
+            or declared.get("outline-width") in ("0", "0px")
+        ):
+            # Only the question box takes its own outline away, because its frame draws the
+            # focus instead.
+            frame = rules.get(("", ".field:focus-within"), {}).get("outline", "")
+            if selector != "textarea:focus-visible" or not re.match(r"[2-9]px solid", frame):
+                found.append(f"the focus is not drawn on {selector}")
+    focus = rules.get(("", ":focus-visible"), {}).get("outline", "")
+    if not re.match(r"[2-9]px solid var\(--focus\)", focus):
+        found.append(f"the focus has no visible outline: {focus}")
+    if rules.get(("", ".station-next::after"), {}).get("background") != "var(--rule-line)":
+        found.append("the next stop is not a filled ring")
+    for condition in ("", NARROW):
+        dashed = rules.get((condition, ".seg-dashed::before"), {}).get("background", "")
+        if not (
+            "repeating-linear-gradient" in dashed
+            and "var(--off)" in dashed
+            and "transparent" in dashed
+        ):
+            found.append(f"a decline's line is not dashed ({condition or 'wide'}): {dashed}")
+    ring = rules.get(("", ".station::after"), {})
+    bar = rules.get(("", ".station-end::after"), {})
+    if (
+        ring.get("content") != '""'
+        or bar.get("background") != "var(--rule-line)"
+        or "content" in bar
+        or bar.get("display") == "none"
+        or not {bar.get("width"), bar.get("height")} & {"28px"}
+    ):
+        found.append(f"no bar is drawn where a line ends: {bar}")
+    # The words the fold's control adds to its own: to show the passages it holds, or, with
+    # none left, what the search is.
+    for selector, words in (
+        (".search-fold > summary::after", '"show them" / ""'),
+        (".search-fold[open] > summary::after", '"hide them" / ""'),
+        (".search-fold.nothing-more > summary::after", '"about this search" / ""'),
+    ):
+        if rules.get(("", selector), {}).get("content") != words:
+            found.append(f"the fold's control says the wrong thing: {selector}")
+    dark = theme_tokens(sheet)["dark"]
+    edge, page = resolved("var(--sign-edge)", dark), resolved("var(--page)", dark)
+    if edge is None or page is None or contrast(edge, page) < 3:
+        found.append("the dark theme's sign does not stand out from the page")
+    border = rules.get(("", ".sign, .question-sign"), {}).get("border", "")
+    if not re.fullmatch(r"[2-9]px solid var\(--sign-edge\)", border):
+        found.append(f"a sign has no edge of its own: {border}")
+    return found
+
+
+def test_the_style_rules_that_carry_meaning_hold() -> None:
+    assert meaning_problems(static("demo.css")) == []
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        # The eight style faults of the review of the new look, and more of each kind.
+        ".station-next::after { animation: approach 1.2s ease-in-out infinite; }",
+        ":focus-visible { outline: none; }",
+        ".station-next::after { background: var(--ring-fill); }",
+        ".seg-dashed::before { background: var(--off); }",
+        ".station-end::after { background: transparent; }",
+        f"@media {DARK} {{ :root {{ --sign-edge: #000000; }} }}",
+        ".station { transition: color 0.2s; }",
+        f"@media {NARROW} {{ .seg-dashed::before {{ background: var(--off); }} }}",
+        ".cite:focus-visible { outline: 0; }",
+        ".station-end::after { content: none; }",
+        ".sign, .question-sign { border: 0; }",
+        '.search-fold.nothing-more > summary::after { content: "Show them"; }',
+    ],
+)
+def test_the_check_of_the_style_rules_that_carry_meaning_finds_each_rule_planted(rule: str) -> None:
+    assert meaning_problems(f"{static('demo.css')}\n{rule}\n") != []

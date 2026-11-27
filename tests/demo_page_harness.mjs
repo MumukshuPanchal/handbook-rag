@@ -23,6 +23,7 @@ function element(tag, id = "") {
     type: "",
     listeners: {},
     classes: new Set(),
+    ever: new Set(),
     attrs: {},
     scrolled: 0,
     get children() {
@@ -33,6 +34,7 @@ function element(tag, id = "") {
     },
     set className(value) {
       this.classes = new Set(String(value).split(/\s+/).filter(Boolean));
+      this.classes.forEach((name) => this.ever.add(name));
     },
     get textContent() {
       return this.nodes.map((child) => (typeof child === "string" ? child : child.textContent)).join("");
@@ -80,12 +82,13 @@ function element(tag, id = "") {
     },
   };
   node.classList = {
-    add: (...names) => names.forEach((name) => node.classes.add(name)),
+    add: (...names) => names.forEach((name) => node.classes.add(name) && node.ever.add(name)),
     remove: (...names) => names.forEach((name) => node.classes.delete(name)),
     toggle(name, force) {
       const on = force === undefined ? !node.classes.has(name) : Boolean(force);
       if (on) {
         node.classes.add(name);
+        node.ever.add(name);
       } else {
         node.classes.delete(name);
       }
@@ -127,6 +130,11 @@ function isShown(node) {
     }
   }
   return true;
+}
+
+// An element's line colours: its classes that name a line.
+function lines(node) {
+  return [...node.classes].filter((name) => name.startsWith("line-"));
 }
 
 function shownByClass(node, name) {
@@ -431,6 +439,7 @@ function latestTurn() {
       told: spoken(stop),
     })),
     routeLabel: route.attrs["aria-label"] ?? "",
+    routeTag: route.tagName,
     cached: shownByClass(item, "cached").map((box) => box.textContent).join(" "),
     note: note !== undefined && isShown(note) ? note.textContent : "",
     madeShown: made !== undefined && isShown(made),
@@ -441,8 +450,11 @@ function latestTurn() {
     sourcesNone: shownByClass(item, "sources-none").map((none) => none.textContent).join(""),
     chips: shownByClass(item, "cite").map((chip) => chip.textContent),
     chipLabels: shownByClass(item, "cite").map((chip) => chip.attrs["aria-label"] ?? null),
+    // Each citation's number and its line colours, as classes.
+    chipLines: shownByClass(item, "cite").map((chip) => [chip.textContent, lines(chip)]),
     cards: cards.filter(isShown).map((card) => ({
       number: byClass(card, "source-number").map((number) => number.textContent).join(""),
+      lines: lines(card),
       path: byClass(card, "source-path").map((path) => path.textContent).join(""),
       crumbs: byClass(card, "crumb").map((crumb) => crumb.textContent),
       snippet: byClass(card, "source-snippet").map((piece) => piece.textContent).join(""),
@@ -456,6 +468,8 @@ function latestTurn() {
     noticeTitle: shownByClass(item, "notice-title").map((title) => title.textContent),
     noticeWhy: shownByClass(item, "notice-why").map((why) => why.textContent),
     searchFoldShown: isShown(searchFold),
+    searchFoldClasses: searchFold === undefined ? [] : [...searchFold.classes],
+    sideClasses: byClass(item, "turn-sources").flatMap((side) => [...side.classes]),
     searchCount: byClass(item, "search-fold").flatMap((each) => byClass(each, "side-count")).map((count) => count.textContent).join(""),
     searchState: byClass(item, "search-state").map((state) => state.textContent).join(""),
     passages: byClass(item, "passage-item").map((found) => ({
@@ -467,8 +481,24 @@ function latestTurn() {
 }
 
 const steps = [];
+const around = { classes: new Set(), tags: new Set(), insideClasses: new Set(), insideTags: new Set() };
+
+function gatherAround() {
+  const lines = all(page.turns, (node) => node.classes.has("source-address") || node.classes.has("passage-address"));
+  for (const line of lines) {
+    for (let at = line.parent; at !== null && at !== page.turns; at = at.parent) {
+      around.tags.add(at.tagName.toLowerCase());
+      at.ever.forEach((name) => around.classes.add(name));
+    }
+    for (const inner of [line, ...all(line, () => true)]) {
+      around.insideTags.add(inner.tagName.toLowerCase());
+      inner.ever.forEach((name) => around.insideClasses.add(name));
+    }
+  }
+}
 
 function record(name, question) {
+  gatherAround();
   steps.push({
     name,
     question,
@@ -968,7 +998,7 @@ await step(
         segments: [{ text: "Apply a month ahead.", sources: [] }],
         sources: [],
         answered: false,
-        stop_reason: "max_tokens_or_other",
+        stop_reason: "other",
         checks: [{ check: "unfinished_reply", action: "dropped_words", note: UNFINISHED }],
       }),
     ],
@@ -992,6 +1022,102 @@ await step("failure before new", "and in brazil", refusal("The answer model is u
 fire(elements["new-conversation"], "click");
 await step("new after failure", null, null);
 
+// A first question waited on before the service has said what it searched for, while the
+// page's own search has already come back; then stopped by the reader after the search
+// and before the first words.
+{
+  const body = held();
+  replies.push([200, body, "text/event-stream; charset=utf-8"]);
+  searchFor.set("What is the notice period?", [passage(1)]);
+  const asking = ask("What is the notice period?");
+  await settle();
+  record("waiting first", "What is the notice period?");
+  body.send("searched", searched("What is the notice period?", "What is the notice period?", "not_asked"));
+  await settle();
+  fire(elements.stop, "click");
+  await asking;
+  await settle();
+  record("stopped early", "What is the notice period?");
+}
+
+// A failure after the search and before any text.
+await step(
+  "failed after search",
+  "Who signs the contract?",
+  stream([
+    ["searched", searched("Who signs the contract?", "Who signs the contract?", "not_asked")],
+    ["error", { detail: "The answer model is unavailable. Try again later." }],
+  ]),
+);
+
+// A decline that came with no text: the search found nothing to send, and no request
+// was made.
+{
+  const found = searched("Is there a pet allowance?", "Is there a pet allowance?", "not_asked");
+  await step(
+    "no text",
+    "Is there a pet allowance?",
+    stream([
+      ["searched", found],
+      [
+        "answer",
+        answer(found, {
+          answer: NOT_FOUND,
+          answered: false,
+          segments: [{ text: NOT_FOUND, sources: [] }],
+          stop_reason: "no_context",
+          first_text_ms: null,
+          usage: { input_tokens: 0, output_tokens: 0 },
+          requests: 0,
+        }),
+      ],
+    ]),
+  );
+}
+
+// A reply cut off at the length limit.
+await step(
+  "cut at the limit",
+  "List every benefit.",
+  stream([
+    ["searched", searched("List every benefit.", "List every benefit.", "not_asked")],
+    ["text", { text: "Leave, " }],
+    [
+      "answer",
+      answer(searched("List every benefit.", "List every benefit.", "not_asked"), {
+        answer: "Leave, ",
+        answered: false,
+        segments: [{ text: "Leave, ", sources: [] }],
+        stop_reason: "max_tokens",
+      }),
+    ],
+  ]),
+);
+
+// An answer that cites six sources, one past the five line colours. The page's own search
+// finds the one passage of the first source, which the answer cites, so nothing is left.
+{
+  const SIX = "What do I set up in my first week?";
+  const sources = [1, 2, 3, 4, 5, 6].map((number) => ({
+    number,
+    doc_id: `people/first-week-${number}.md`,
+    title: `First week ${number}`,
+    url: `https://handbook.example.com/handbook/first-week-${number}/`,
+    section: "people",
+    heading_path: [],
+    text: `Step ${number}.`,
+  }));
+  searchFor.set(SIX, [passage(1, { url: sources[0].url, text: sources[0].text, title: sources[0].title })]);
+  await step(
+    "six sources",
+    SIX,
+    answered(SIX, SIX, "not_asked", {
+      segments: sources.map((source) => ({ text: ` Step ${source.number}.`, sources: [source.number] })),
+      sources,
+    }),
+  );
+}
+
 // The address in brief and the piece of a passage, asked of the script's own functions.
 const ADDRESSES = [
   "https://handbook.example.com",
@@ -1013,9 +1139,17 @@ const brief = (url) => {
     return `threw: ${error.message}`;
   }
 };
-steps.at(-1).briefs = Object.fromEntries(ADDRESSES.map((url) => [url, brief(url)]));
-steps.at(-1).consoleErrors = consoleErrors;
-steps.at(-1).longText = LONG_TEXT;
-steps.at(-1).snippet = snippet(LONG_TEXT);
+const last = steps.find((each) => each.name === "new after failure");
+last.briefs = Object.fromEntries(ADDRESSES.map((url) => [url, brief(url)]));
+last.consoleErrors = consoleErrors;
+last.longText = LONG_TEXT;
+last.snippet = snippet(LONG_TEXT);
+// What stood around the address lines on the page, and inside them, over the whole run.
+last.around = {
+  aroundClasses: [...around.classes].sort(),
+  aroundTags: [...around.tags].sort(),
+  insideClasses: [...around.insideClasses].sort(),
+  insideTags: [...around.insideTags].sort(),
+};
 
 console.log(JSON.stringify(steps));

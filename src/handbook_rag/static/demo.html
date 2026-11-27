@@ -12,7 +12,7 @@
 <header class="band">
   <div class="band-inner">
     <h1 class="band-name">Handbook assistant</h1>
-    <p class="band-says">Answers from the public GitLab handbook, with the passages they rest on.</p>
+    <p class="band-says">Answers from the public GitLab handbook, with their sources.</p>
     <nav class="band-nav" aria-label="About this project">
       <a href="https://github.com/MumukshuPanchal/handbook-rag#how-it-works" target="_blank" rel="noopener noreferrer">How it works<span class="visually-hidden"> (opens in a new tab)</span></a>
       <a href="https://github.com/MumukshuPanchal/handbook-rag#results" target="_blank" rel="noopener noreferrer">How it is measured<span class="visually-hidden"> (opens in a new tab)</span></a>
@@ -44,21 +44,21 @@
     <aside class="how" aria-labelledby="how-heading">
       <h3 id="how-heading">What happens when you ask</h3>
       <ol class="steps">
+        <li><span><strong>A follow-up is rewritten first.</strong> With earlier questions, one request to the model turns "and in Finland?" into a question that stands alone.</span></li>
+        <li><span><strong>A stored answer</strong>, when there is one for the question, is served in place of the rest, without a request, and names the question it was written for.</span></li>
         <li><span><strong>The handbook is searched</strong> by meaning and by keyword, and the two lists are merged.</span></li>
         <li><span><strong>A model writes the answer</strong> from the passages found, with a number after each statement. Code checks that every number names a passage that was sent.</span></li>
         <li><span><strong>Or it declines</strong> when the passages do not hold the answer: with one fixed sentence, or in its own words that the passages do not say, with no sources.</span></li>
-        <li><span><strong>A follow-up is rewritten first.</strong> With earlier questions, one request to the model turns "and in Finland?" into a question that stands alone.</span></li>
-        <li><span><strong>A stored answer</strong> is served again without a request, and names the question it was written for.</span></li>
       </ol>
     </aside>
     <details class="how-fold">
       <summary>What happens when you ask</summary>
       <ol class="steps">
+        <li><span><strong>A follow-up is rewritten first.</strong> With earlier questions, one request to the model turns "and in Finland?" into a question that stands alone.</span></li>
+        <li><span><strong>A stored answer</strong>, when there is one for the question, is served in place of the rest, without a request, and names the question it was written for.</span></li>
         <li><span><strong>The handbook is searched</strong> by meaning and by keyword, and the two lists are merged.</span></li>
         <li><span><strong>A model writes the answer</strong> from the passages found, with a number after each statement. Code checks that every number names a passage that was sent.</span></li>
         <li><span><strong>Or it declines</strong> when the passages do not hold the answer: with one fixed sentence, or in its own words that the passages do not say, with no sources.</span></li>
-        <li><span><strong>A follow-up is rewritten first.</strong> With earlier questions, one request to the model turns "and in Finland?" into a question that stands alone.</span></li>
-        <li><span><strong>A stored answer</strong> is served again without a request, and names the question it was written for.</span></li>
       </ol>
     </details>
   </section>

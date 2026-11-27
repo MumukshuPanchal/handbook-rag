@@ -20,11 +20,22 @@ each, so that a check which saw nothing would not pass unnoticed.
 import json
 import shutil
 import subprocess
+from html.parser import HTMLParser
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
+
+from tests.test_demo import (
+    ADDRESS,
+    AROUND,
+    AROUND_IDS,
+    HOLDERS,
+    css_rules,
+    cuts_the_address,
+    static,
+)
 
 NODE = shutil.which("node")
 HARNESS = Path(__file__).parent / "demo_page_harness.mjs"
@@ -74,7 +85,7 @@ FAILED = (
 # service sends it as a decline in those words, with no source (ADR 0025).
 FORM = "The passages found do not say how much the backup care benefit pays per year."
 # Steps recorded while an answer was still coming, when its turn had not ended.
-UNDER_WAY = ("waiting", "searched", "writing")
+UNDER_WAY = ("waiting", "searched", "writing", "waiting first")
 
 
 def script() -> str:
@@ -338,8 +349,9 @@ def route_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         ("error after text", "Broke off", "after the first words"),
         ("stream cut", "Broke off", "after the first words"),
         ("stopped", "Stopped by you", "after the first words"),
-        ("withheld", "Cut off", "the model stopped: safety"),
-        ("check cut", "Cut off", "the model stopped"),
+        ("withheld", "Withheld", "the model stopped: safety"),
+        ("check cut", "Stopped early", "the model stopped: other"),
+        ("cut at the limit", "Cut off", "the model stopped: max_tokens"),
     ):
         last = steps[name]["stops"][-1]
         if last["name"] != end or last["state"] != "end" or words not in last["detail"]:
@@ -378,7 +390,7 @@ def route_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         if [(stop["name"], stop["state"]) for stop in steps[name]["stops"]] != stops:
             found.append(f"the line does not show how far the answer has come ({name})")
     told = {stop["state"]: stop["told"] for stop in steps["waiting"]["stops"]}
-    if told.get("next") != " (now)" or told.get("ahead") != " (not yet)":
+    if told.get("next") != " (next stop)" or told.get("ahead") != " (not yet)":
         found.append("a screen reader is not told which stop is next and which are not reached")
     if steps["waiting"]["stops"][0]["segment"] != "faint":
         found.append("the line to a stop not reached yet is drawn as if it were reached")
@@ -600,7 +612,7 @@ def search_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
     cited = steps["cited"]
     if (
         not cited["searchFoldShown"]
-        or cited["searchCount"] != "3 more passages were found and not cited"
+        or cited["searchCount"] != "3 more passages were found and not cited."
     ):
         found.append("the fold of what the search found is not shown")
     passages = cited["passages"]
@@ -725,7 +737,12 @@ def look_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
     for name, step in steps.items():
         if step["question"] is None or "scrolled" not in step:
             continue
-        first_of_conversation = name in ("first", "asked by itself")
+        first_of_conversation = name in (
+            "first",
+            "asked by itself",
+            "waiting first",
+            "stopped early",
+        )
         if (step["scrolled"] == 0) != first_of_conversation:
             found.append(f"a later turn is not brought into view, or the first is ({name})")
     if detail(steps["writing"], "First words") != "arriving now":
@@ -801,8 +818,11 @@ def check_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         "Declined by a check, in place of the reply the model wrote."
     ):
         found.append("a reply a check declined is announced as one the handbook does not answer")
-    for name in ("check dropped line", "two checks"):
-        if "changed by a check" not in detail(steps[name], "Answered"):
+    for name, words in (
+        ("check dropped line", "changed by a check"),
+        ("two checks", "changed by 2 checks"),
+    ):
+        if words not in detail(steps[name], "Answered"):
             found.append(f"a change by a check is not said at the end of the line ({name})")
     if stop_named(steps["check declined"], "Declined by a check") is None:
         found.append("a check's decline is not said at the end of the line")
@@ -819,6 +839,102 @@ def check_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
             found.append("the notes of a check are shown on another turn (the first)")
     if steps["two checks"]["previousTurnCheckNotes"] != [DROPPED]:
         found.append("the notes of a check leave their own turn")
+    return found
+
+
+def line_end_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """Where a line ends and in which words, in the states the first round left untested:
+    a stop before the first words, a failure after the search and before any text, an
+    answer that came with no text, and what each kind of failure is called; and what a
+    screen reader is told of the stops."""
+    found = []
+    early = steps["stopped early"]
+    if names(early) != ["Asked", "Searched", "Stopped by you"] or (
+        detail(early, "Stopped by you") != "before the first words"
+    ):
+        found.append("a stop before the first words is not said where it ended")
+    after = steps["failed after search"]
+    if names(after) != ["Asked", "Searched", "Not answered"]:
+        found.append("a failure after the search does not keep the search it ran")
+    elif detail(after, "Not answered") != "the request failed":
+        found.append("a failure after the search does not say what failed")
+    for name, words in (
+        ("error after text", "after the first words: the request failed"),
+        ("unreadable answer", "after the first words: the answer could not be read"),
+        ("stream cut", "after the first words: the stream ended without the answer"),
+    ):
+        if steps[name]["stops"][-1:] and steps[name]["stops"][-1]["detail"] != words:
+            found.append(f"a line that broke off does not say what went wrong ({name})")
+    if detail(steps["no text"], "No answer in them") != "no text came":
+        found.append("a reply that came with no text is said to have had first words")
+    for name in ("declined", "no text"):
+        told = [stop["told"] for stop in steps[name]["stops"] if stop["state"] == "off"]
+        if not told or any(each != " (not served)" for each in told):
+            found.append(
+                f"a screen reader is not told which stops the line does not serve ({name})"
+            )
+    writing = {stop["name"]: stop["told"] for stop in steps["writing"]["stops"]}
+    if writing.get("First words") != "" or writing.get("Answered") != " (next stop)":
+        found.append(
+            "a screen reader is told that a stop not reached yet is where the answer is now"
+        )
+    if any(step.get("stops") and step.get("routeTag") != "OL" for step in steps.values()):
+        found.append("the line of stops is not a list")
+    return found
+
+
+def fold_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """What the control of the fold of the page's own search says, and whether it offers to
+    show passages only when it holds some; when the fold shows; and whether the column of
+    sources says that it holds none."""
+    found = []
+    for name, words, nothing_more in (
+        ("cited", "3 more passages were found and not cited.", False),
+        ("declined", "1 passage was found, and none is cited.", False),
+        ("six sources", "Every passage found is cited.", True),
+        ("first", "The page's own search found nothing.", True),
+        ("form declined", "The page's own search found nothing.", True),
+        ("withheld", "The page's own search failed.", True),
+        ("cached", "The page's own search failed.", True),
+    ):
+        step = steps[name]
+        if step["searchCount"] != words:
+            found.append(f"the fold's control says the wrong thing ({name})")
+        if ("nothing-more" in step["searchFoldClasses"]) != nothing_more:
+            found.append(
+                f"the fold offers passages it does not hold, or hides those it does ({name})"
+            )
+    if steps["waiting first"]["searchFoldShown"] or not steps["stopped early"]["searchFoldShown"]:
+        found.append("the fold of the page's own search shows before the line reaches the search")
+    if (
+        "no-sources" not in steps["declined"]["sideClasses"]
+        or "no-sources" in steps["cited"]["sideClasses"]
+    ):
+        found.append("the column of sources does not say when it holds none")
+    return found
+
+
+def line_of(number: str) -> list[str]:
+    """The line colour of a source's number, as a class: five colours, then the signs'."""
+    return [f"line-{number}"] if number in ("1", "2", "3", "4", "5") else ["line-other"]
+
+
+def colour_faults(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """Colour means source: each citation and each source line has the one colour of its
+    number, the same for both, and a source past the fifth has the colour of the signs."""
+    found = []
+    chips = [chip for step in steps.values() for chip in step.get("chipLines") or []]
+    cards = [card for step in steps.values() for card in step.get("cards") or []]
+    if any(lines != line_of(number) for number, lines in chips):
+        found.append("a citation is not drawn in its source's line colour")
+    if any(card.get("lines") != line_of(card["number"]) for card in cards):
+        found.append("a source's line is not drawn in the colour of its number")
+    six = steps["six sources"]
+    numbers = ["1", "2", "3", "4", "5", "6"]
+    if [number for number, _ in six["chipLines"]] != numbers or [
+        card["number"] for card in six["cards"]
+    ] != numbers:
+        found.append("an answer with six sources does not show its six citations and lines")
     return found
 
 
@@ -839,6 +955,9 @@ def faults(steps: dict[str, dict[str, Any]]) -> list[str]:
         *outcome_faults(steps),
         *look_faults(steps),
         *check_faults(steps),
+        *line_end_faults(steps),
+        *fold_faults(steps),
+        *colour_faults(steps),
     ]
 
 
@@ -1001,8 +1120,10 @@ def test_the_run_finds_each_fault_planted_in_the_keys_buttons_labels_and_address
         ),
         (
             "a turn that failed (unreadable answer) is added to the conversation",
-            "  if (!isAnswer(data)) {\n    fail(turn, UNREADABLE_ANSWER);\n    return false;",
-            "  if (!isAnswer(data)) {\n    fail(turn, UNREADABLE_ANSWER);\n    return true;",
+            "  if (!isAnswer(data)) {\n"
+            '    fail(turn, UNREADABLE_ANSWER, "unreadable");\n    return false;',
+            "  if (!isAnswer(data)) {\n"
+            '    fail(turn, UNREADABLE_ANSWER, "unreadable");\n    return true;',
         ),
         (
             "the list on the page is not the conversation (rewritten)",
@@ -1311,7 +1432,7 @@ PLANTED_BY_THE_REVIEW = [
     ),
     (
         "the fold of what the search found is not shown",
-        "  turn.searchFold.hidden = false;\n",
+        "  turn.searchRun = true;\n",
         "",
     ),
     (
@@ -1321,8 +1442,8 @@ PLANTED_BY_THE_REVIEW = [
     ),
     (
         "the stop of the search does not say what the search did (withheld)",
-        'could not be reached.";\n    turn.journey.found = "failed";',
-        'could not be reached.";',
+        '  turn.searchFold.classList.add("nothing-more");\n  turn.journey.found = "failed";\n',
+        '  turn.searchFold.classList.add("nothing-more");\n',
     ),
     (
         "a new conversation begins while an answer is being written",
@@ -1589,8 +1710,8 @@ PLANTED_IN_THE_NOTES = [
     ),
     (
         "a change by a check is not said at the end of the line (two checks)",
-        '    parts.push("changed by a check");\n',
-        "",
+        "  const notes = checkNotes(answer).length;",
+        "  const notes = 0;",
     ),
     (
         "the notes of a check are not marked as a change",
@@ -1649,7 +1770,7 @@ PLANTED_IN_THE_LINE = [
     ),
     (
         "a line that ended short does not end where it ended (refused)",
-        '  turn.journey.ended = { kind: "failed" };\n',
+        "  turn.journey.ended = { kind };\n",
         "",
     ),
     (
@@ -1659,13 +1780,13 @@ PLANTED_IN_THE_LINE = [
     ),
     (
         "a line that ended short does not end where it ended (error after text)",
-        '{ name: "Broke off", detail: "after the first words: the request failed", state: "end" }',
-        '{ name: "Not answered", detail: "the request failed", state: "end" }',
+        '{ name: "Broke off", detail: `after the first words: ${why}`, state: "end" }',
+        '{ name: "Not answered", detail: why, state: "end" }',
     ),
     (
         "a line that ended short does not end where it ended (withheld)",
-        'the model stopped: ${shown(answer.stop_reason)}`, state: "end" });',
-        'the model stopped: ${shown(answer.stop_reason)}`, state: "off" });',
+        'return { name, detail: `the model stopped: ${reason}`, state: "end" };',
+        'return { name, detail: `the model stopped: ${reason}`, state: "off" };',
     ),
     (
         "a stored answer's line is not another one, with no search (cached)",
@@ -1689,7 +1810,7 @@ PLANTED_IN_THE_LINE = [
     ),
     (
         "a screen reader is not told which stop is next and which are not reached",
-        '  next: " (now)",',
+        '  next: " (next stop)",',
         '  next: "",',
     ),
     (
@@ -1718,3 +1839,238 @@ def test_the_run_finds_each_fault_planted_in_the_line_of_stops(
     assert source.count(old) == 1, old
 
     assert fault in faults(run(source.replace(old, new), tmp_path))
+
+
+# The faults the review of the new look planted that got past every test, and more of each
+# kind: each with the check that now finds it.
+PLANTED_IN_THE_SECOND_ROUND = [
+    (
+        "a stop before the first words is not said where it ended",
+        'detail: journey.text ? "after the first words" : "before the first words",',
+        'detail: "after the first words",',
+    ),
+    (
+        "a failure after the search does not keep the search it ran",
+        'const reached = stops.filter((stop) => stop.state === "reached");',
+        'const reached = stops.filter((stop) => stop.state === "reached"'
+        ' && (journey.text || stop.name !== "Searched"));',
+    ),
+    (
+        "a reply that came with no text is said to have had first words",
+        'const first = answer.first_text_ms === null ? "no text came" :'
+        " `after ${secondsInWords(answer.first_text_ms)}`;",
+        "const first = `after ${secondsInWords(answer.first_text_ms)}`;",
+    ),
+    (
+        "a citation is not drawn in its source's line colour",
+        ': "line-other";',
+        ': "line-5";',
+    ),
+    (
+        "a citation is not drawn in its source's line colour",
+        'make("button", `cite ${lineClass(number)}`, String(number));',
+        'make("button", "cite", String(number));',
+    ),
+    (
+        "a source's line is not drawn in the colour of its number",
+        'make("li", `source-card ${lineClass(number)}`);',
+        'make("li", `source-card ${lineClass(number + 1)}`);',
+    ),
+    (
+        "a screen reader is not told which stops the line does not serve (declined)",
+        '  off: " (not served)",',
+        '  off: "",',
+    ),
+    (
+        "the fold's control says the wrong thing (six sources)",
+        'count = "Every passage found is cited.";',
+        'count = "Nothing more.";',
+    ),
+    (
+        "the fold offers passages it does not hold, or hides those it does (six sources)",
+        'turn.searchFold.classList.toggle("nothing-more", unused.length === 0);',
+        'turn.searchFold.classList.toggle("nothing-more", false);',
+    ),
+    (
+        "the line of stops is not a list",
+        'turn.route = make("ol", "route");',
+        'turn.route = make("div", "route");',
+    ),
+    # The words a reader got wrong.
+    (
+        "a screen reader is told that a stop not reached yet is where the answer is now",
+        '  next: " (next stop)",',
+        '  next: " (now)",',
+    ),
+    (
+        "a line that ended short does not end where it ended (withheld)",
+        '    name = "Withheld";',
+        '    name = "Cut off";',
+    ),
+    (
+        "the fold's control says the wrong thing (first)",
+        '    count = "The page\'s own search found nothing.";',
+        '    count = "Every passage found is cited.";',
+    ),
+    (
+        "the fold's control says the wrong thing (withheld)",
+        '  turn.searchCount.textContent = "The page\'s own search failed.";',
+        '  turn.searchCount.textContent = "";',
+    ),
+    (
+        "a line that broke off does not say what went wrong (unreadable answer)",
+        '  unreadable: "the answer could not be read",',
+        '  unreadable: "the request failed",',
+    ),
+    (
+        "a change by a check is not said at the end of the line (two checks)",
+        "`changed by ${notes} checks`",
+        '"changed by a check"',
+    ),
+    # And the fold, the column and the stop the review found crowded or at odds.
+    (
+        "the fold of the page's own search shows before the line reaches the search",
+        "  turn.searchFold.hidden = !turn.searchRun || !searchReached(turn.journey);",
+        "  turn.searchFold.hidden = !turn.searchRun;",
+    ),
+    (
+        "the column of sources does not say when it holds none",
+        '  turn.side.classList.toggle("no-sources", answer.sources.length === 0);\n',
+        "",
+    ),
+    (
+        "a failure after the search does not say what failed",
+        '  failed: "the request failed",',
+        '  failed: "the answer could not be read",',
+    ),
+]
+
+
+@pytest.mark.parametrize(("fault", "old", "new"), PLANTED_IN_THE_SECOND_ROUND)
+def test_the_run_finds_each_fault_planted_in_the_second_round(
+    fault: str, old: str, new: str, tmp_path: Path
+) -> None:
+    source = script()
+    assert source.count(old) == 1, old
+
+    assert fault in faults(run(source.replace(old, new), tmp_path))
+
+
+# The address line under a source and a found passage must never be hidden or cut. The
+# check of the style sheet in test_demo.py knows, by class, id and element, what stands
+# around the line. Here what stands around it is read from the page the script really
+# builds, in every state of the run, with the markup around the list of turns, so that a
+# new wrapper cannot be left out of that check: each one is either known to it, or this
+# fails, and the sheet is checked against the structure as built.
+
+
+class Around(HTMLParser):
+    """The elements of the page's markup that hold the element with an id."""
+
+    VOID: ClassVar[set[str]] = {"meta", "link", "br", "img", "input", "hr", "source", "wbr"}
+
+    def __init__(self, target: str) -> None:
+        super().__init__()
+        self.target = target
+        self.open: list[tuple[str, str, str]] = []
+        self.found: list[tuple[str, str, str]] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        named = dict(attrs)
+        here = (tag, named.get("class") or "", named.get("id") or "")
+        if here[2] == self.target and self.found is None:
+            self.found = [*self.open, here]
+        if tag not in self.VOID:
+            self.open.append(here)
+
+    def handle_endtag(self, tag: str) -> None:
+        while self.open and self.open.pop()[0] != tag:
+            pass
+
+
+def structure_around_the_address(
+    steps: dict[str, dict[str, Any]],
+) -> tuple[set[str], set[str], set[str], set[str]]:
+    """The classes, the elements and the ids around every address line on the page, and the
+    classes inside the line, as the script built them in the run, with the markup above."""
+    built = steps["new after failure"]["around"]
+    markup = Around("turns")
+    markup.feed(static("demo.html"))
+    assert markup.found is not None
+    classes = set(built["aroundClasses"]) | {
+        name for _, names, _ in markup.found for name in names.split()
+    }
+    tags = set(built["aroundTags"]) | set(built["insideTags"]) | {tag for tag, _, _ in markup.found}
+    ids = {each for _, _, each in markup.found if each}
+    # The whole address for a screen reader is kept in a span that is hidden on screen on
+    # purpose, beside the address in brief that the reader sees.
+    inside = set(built["insideClasses"]) - {"visually-hidden"}
+    return classes, tags | {"*"}, ids, inside
+
+
+@pytest.fixture(scope="module")
+def built(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[set[str], set[str], set[str], set[str]]:
+    return structure_around_the_address(run(script(), tmp_path_factory.mktemp("built")))
+
+
+def test_the_check_of_the_address_line_knows_everything_the_script_puts_around_it(
+    built: tuple[set[str], set[str], set[str], set[str]],
+) -> None:
+    classes, tags, ids, inside = built
+
+    assert classes - AROUND == set(), "a class around the address that the check does not know"
+    assert tags - HOLDERS == set(), "an element around the address that the check does not know"
+    assert ids - AROUND_IDS == set(), "an id around the address that the check does not know"
+    assert inside - ADDRESS == set(), "a class inside the address that the check does not know"
+    # What the run must have seen, for the list to mean something: a source's line and a
+    # found passage's, each with what holds it.
+    assert {"source-card", "source-body", "passage-item", "search-fold", "cols", "turn"} <= classes
+
+
+def test_a_wrapper_added_around_the_address_is_one_the_check_must_learn(tmp_path: Path) -> None:
+    old = "  body.append(addressLine(source.url));\n"
+    new = (
+        '  const wrap = make("div", "address-wrap");\n'
+        "  wrap.append(addressLine(source.url));\n"
+        "  body.append(wrap);\n"
+    )
+    source = script()
+    assert source.count(old) == 1
+
+    classes, _, _, _ = structure_around_the_address(run(source.replace(old, new), tmp_path))
+    assert classes - AROUND == {"address-wrap"}
+
+
+def test_no_rule_of_the_style_sheet_cuts_the_address_in_the_structure_the_script_builds(
+    built: tuple[set[str], set[str], set[str], set[str]],
+) -> None:
+    classes, tags, ids, _ = built
+    rules = css_rules(static("demo.css"))
+
+    assert [
+        problem for sel, d in rules for problem in cuts_the_address(sel, d, classes, tags, ids)
+    ] == []
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        ".source-body { overflow: hidden; max-height: 6em; }",
+        ".source-body { display: -webkit-box; -webkit-line-clamp: 4; overflow: hidden; }",
+        ".cols { overflow: hidden; }\n.source-body { white-space: nowrap; }",
+        ".no-sources { overflow: hidden; }",
+        ".marked { white-space: nowrap; }",
+        "#turns { contain: paint; }",
+    ],
+)
+def test_the_check_of_the_structure_as_built_finds_each_rule_planted(
+    rule: str, built: tuple[set[str], set[str], set[str], set[str]]
+) -> None:
+    classes, tags, ids, _ = built
+    rules = css_rules(f"{static('demo.css')}\n{rule}\n")
+
+    assert [
+        problem for sel, d in rules for problem in cuts_the_address(sel, d, classes, tags, ids)
+    ] != []

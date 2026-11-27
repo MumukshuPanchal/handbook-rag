@@ -322,18 +322,6 @@ button[aria-disabled="true"] {
   background: var(--page);
 }
 
-/* The question the handbook does not answer: the sign of a line that does not run there. */
-.example-decline::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 2px;
-  width: 28px;
-  height: 4px;
-  background: var(--rule-line);
-  transform: translateY(-50%) rotate(-45deg);
-}
-
 .example:hover {
   background: var(--ground);
 }
@@ -600,7 +588,7 @@ button[aria-disabled="true"] {
   place-items: center;
   min-width: 1.45em;
   height: 1.45em;
-  margin: 0 0.1em 0 0.22em;
+  margin: 0 0.16em 0 0.32em;
   padding: 0.14em 0.22em 0;
   border: 0;
   border-radius: 50%;
@@ -616,6 +604,10 @@ button[aria-disabled="true"] {
 .cite.linked {
   outline: 3px solid var(--text);
   outline-offset: 2px;
+}
+
+.cite:focus-visible {
+  outline-offset: 1px;
 }
 
 .line-1 {
@@ -1043,8 +1035,9 @@ button[aria-disabled="true"] {
 }
 
 .search-fold > summary::after {
-  content: " Show them";
-  content: " Show them" / "";
+  content: "Show them";
+  content: "Show them" / "";
+  margin-left: 0.4em;
   color: var(--text);
   font-weight: 700;
   text-decoration: underline;
@@ -1052,18 +1045,28 @@ button[aria-disabled="true"] {
 }
 
 .search-fold[open] > summary::after {
-  content: " Hide them";
-  content: " Hide them" / "";
+  content: "Hide them";
+  content: "Hide them" / "";
 }
 
 .search-fold.nothing-more > summary::after {
-  content: " About this search";
-  content: " About this search" / "";
+  content: "About this search";
+  content: "About this search" / "";
 }
 
 .search-fold.nothing-more[open] > summary::after {
-  content: " Hide";
-  content: " Hide" / "";
+  content: "Hide";
+  content: "Hide" / "";
+}
+
+/* With no source lines above it, the fold is not set in under them; its grey stops keep
+   the room their rings need. */
+.no-sources .search-fold {
+  margin-left: 0;
+}
+
+.no-sources .passages {
+  padding-left: 46px;
 }
 
 .search-fold > .hint {
@@ -1408,10 +1411,11 @@ textarea:focus-visible {
 
   .send {
     min-width: 0;
+    padding: 4px 16px 0;
   }
 
   /* The dock keeps to a few lines: the two controls in one row, the box, then the status
-     and the count in one line, the status cut short on screen and read out whole. */
+     beside the count, on as many lines as its words need. */
   .on-narrow {
     display: inline;
   }
@@ -1441,10 +1445,12 @@ textarea:focus-visible {
 
   .status {
     margin-top: 0;
-    overflow: hidden;
     font-size: 13.5px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  }
+
+  /* The box keeps room for its placeholder on one line while Stop stands beside Ask. */
+  .stop {
+    padding: 4px 14px 0;
   }
 
   textarea {

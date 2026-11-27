@@ -392,6 +392,14 @@ function rewriteStop(searched) {
   return { name, detail, state: "reached" };
 }
 
+// What went wrong when a request ended without an answer, by its kind: the request
+// itself, a reply the page cannot read, or a stream that ended before the answer came.
+const FAILED_IN_WORDS = {
+  failed: "the request failed",
+  unreadable: "the answer could not be read",
+  cut: "the stream ended without the answer",
+};
+
 // The stop where a line ended short: a failure, or a stop by the reader.
 function endStop(journey) {
   if (journey.ended.kind === "stopped") {
@@ -401,9 +409,25 @@ function endStop(journey) {
       state: "end",
     };
   }
+  const why = FAILED_IN_WORDS[journey.ended.kind] ?? FAILED_IN_WORDS.failed;
   return journey.text
-    ? { name: "Broke off", detail: "after the first words: the request failed", state: "end" }
-    : { name: "Not answered", detail: "the request failed", state: "end" };
+    ? { name: "Broke off", detail: `after the first words: ${why}`, state: "end" }
+    : { name: "Not answered", detail: why, state: "end" };
+}
+
+// The stop where a reply that is not an answer ended, named by why the model stopped: held
+// back by the provider, cut at the length limit, or stopped for another reason.
+const WITHHELD = new Set(["refusal", "safety", "recitation", "blocklist", "prohibited_content", "spii"]);
+
+function stoppedStop(answer) {
+  const reason = shown(answer.stop_reason);
+  let name = "Stopped early";
+  if (WITHHELD.has(reason)) {
+    name = "Withheld";
+  } else if (reason === "max_tokens") {
+    name = "Cut off";
+  }
+  return { name, detail: `the model stopped: ${reason}`, state: "end" };
 }
 
 // What the last stop of an answer says: how long it took and how many sources its text
@@ -419,8 +443,9 @@ function answeredDetail(answer) {
   if (answer.fallback === true) {
     parts.push("by the fallback model");
   }
-  if (checkNotes(answer).length > 0) {
-    parts.push("changed by a check");
+  const notes = checkNotes(answer).length;
+  if (notes > 0) {
+    parts.push(notes === 1 ? "changed by a check" : `changed by ${notes} checks`);
   }
   return parts.join(", ");
 }
@@ -500,7 +525,7 @@ function routeStops(journey) {
     if (hit === null && answer.first_text_ms !== null) {
       stops.push({ name: "First words", detail: first, state: "reached" });
     }
-    stops.push({ name: "Cut off", detail: `the model stopped: ${shown(answer.stop_reason)}`, state: "end" });
+    stops.push(stoppedStop(answer));
   }
   return withSegments(stops);
 }
@@ -872,7 +897,7 @@ function placeholderCard() {
 // is not reached, in words for a screen reader, what state it is in.
 const STOP_STATES = {
   reached: "",
-  next: " (now)",
+  next: " (next stop)",
   ahead: " (not yet)",
   off: " (not served)",
   end: " (the line ends here)",
@@ -893,6 +918,13 @@ function stopItem(stop) {
 // Draws a turn's line again from what is known of it.
 function renderRoute(turn) {
   turn.route.replaceChildren(...routeStops(turn.journey).map(stopItem));
+  turn.searchFold.hidden = !turn.searchRun || !searchReached(turn.journey);
+}
+
+// Whether a turn's line has come as far as the search: the service has said what it
+// searched for, text has come, or the request has ended.
+function searchReached(journey) {
+  return journey.searched !== null || journey.text || journey.answer !== null || journey.ended !== null;
 }
 
 // ---- The turns ------------------------------------------------------------------------
@@ -915,6 +947,9 @@ function addTurn(question, earlier) {
     foundPassages: null,
     citedKeys: null,
     journey: { earlier, searched: null, found: "waiting", text: false, answer: null, ended: null },
+    // Whether the page's own search was run for this turn; its fold shows once the line
+    // has come as far as the search.
+    searchRun: false,
   };
   const item = make("li", "turn");
   const sign = make("h3", "question-sign");
@@ -952,6 +987,7 @@ function addTurn(question, earlier) {
   card.append(turn.error, turn.note, turn.made);
 
   const side = make("div", "turn-sources");
+  turn.side = side;
   turn.sourcesBlock = make("div", "sources-block");
   const sourcesTitle = make("h4", "visually-hidden", "Sources");
   turn.sourcesCount = make("span", "side-count", "");
@@ -1048,10 +1084,11 @@ function renderAnswer(turn, answer) {
   turn.stream.hidden = true;
   turn.body.replaceChildren(...parts);
   turn.sources.replaceChildren(...cards);
+  turn.side.classList.toggle("no-sources", answer.sources.length === 0);
   turn.sourcesCount.textContent = answer.sources.length === 0 ? "" : ` ${answer.sources.length}`;
   // A follow-up is searched for once the service has said which question it searched
   // for. An answer that came without saying so ran no search on this page.
-  if (turn.searchFold.hidden) {
+  if (!turn.searchRun) {
     turn.journey.found = "not run";
   }
   turn.journey.answer = answer;
@@ -1136,7 +1173,7 @@ function say(words) {
 // Shows a failure in words, in its turn as a card that says what happened and offers to
 // ask again, and in the alert region, which a screen reader reads at once. Text that had
 // already arrived stays, marked as unfinished.
-function fail(turn, words) {
+function fail(turn, words, kind = "failed") {
   const partial = turn.stream.textContent !== "";
   turn.stream.classList.toggle("unfinished", partial);
   const told = partial ? `${words} The text above is only what arrived before the failure.` : words;
@@ -1144,7 +1181,7 @@ function fail(turn, words) {
   turn.errorText.textContent = told;
   turn.error.hidden = false;
   label(turn, "Failed");
-  turn.journey.ended = { kind: "failed" };
+  turn.journey.ended = { kind };
   renderRoute(turn);
   turn.route.setAttribute("aria-label", "How this request went");
   say("No answer.");
@@ -1318,7 +1355,7 @@ async function readAnswer(turn, response, question, followUp) {
   const traceId = response.headers.get("X-Trace-Id");
   const contentType = response.headers.get("Content-Type");
   if (mediaType(contentType) !== "text/event-stream") {
-    fail(turn, notAStream(contentType));
+    fail(turn, notAStream(contentType), "unreadable");
     failedFacts(turn, traceId);
     return;
   }
@@ -1357,7 +1394,7 @@ async function readAnswer(turn, response, question, followUp) {
     }
   });
   if (!ended) {
-    fail(turn, "The answer stopped before it was complete: the stream ended without it.");
+    fail(turn, "The answer stopped before it was complete: the stream ended without it.", "cut");
     failedFacts(turn, traceId);
   }
 }
@@ -1367,14 +1404,14 @@ async function readAnswer(turn, response, question, followUp) {
 // connection broke when it was the answer that could not be read. True when it is shown.
 function showAnswer(turn, data) {
   if (!isAnswer(data)) {
-    fail(turn, UNREADABLE_ANSWER);
+    fail(turn, UNREADABLE_ANSWER, "unreadable");
     return false;
   }
   try {
     renderAnswer(turn, data);
   } catch (error) {
     console.error(error);
-    fail(turn, UNREADABLE_ANSWER);
+    fail(turn, UNREADABLE_ANSWER, "unreadable");
     return false;
   }
   const from = cacheHit(data) === null ? "" : " It came from the cache.";
@@ -1421,11 +1458,13 @@ function stopped(turn) {
 // Each turn has its own, so a search that comes back late fills the turn it was run for.
 // How many passages it found is the detail of the line's stop of the search.
 async function search(turn, question) {
-  turn.searchFold.hidden = false;
-  turn.searchCount.textContent = "";
+  turn.searchRun = true;
+  turn.searchCount.textContent = "The page's own search is running.";
+  turn.searchFold.classList.add("nothing-more");
   turn.searchState.textContent = "Searching.";
   turn.passages.replaceChildren();
   turn.journey.found = "running";
+  renderRoute(turn);
   let response;
   let body;
   try {
@@ -1438,8 +1477,7 @@ async function search(turn, question) {
   } catch (error) {
     console.error(error);
     turn.searchState.textContent = "The search failed. The service could not be reached.";
-    turn.journey.found = "failed";
-    renderRoute(turn);
+    searchFailed(turn);
     return;
   }
   if (response.ok && isObject(body) && Array.isArray(body.results)) {
@@ -1447,9 +1485,16 @@ async function search(turn, question) {
   } else {
     const words = refusalInWords(response.status, body, response.headers.get("Retry-After"));
     turn.searchState.textContent = `The search failed. ${words}`;
-    turn.journey.found = "failed";
-    renderRoute(turn);
+    searchFailed(turn);
   }
+}
+
+// A search of the page's own that failed: its fold's control says so, and opens on why.
+function searchFailed(turn) {
+  turn.searchCount.textContent = "The page's own search failed.";
+  turn.searchFold.classList.add("nothing-more");
+  turn.journey.found = "failed";
+  renderRoute(turn);
 }
 
 function renderPassages(turn, results) {
@@ -1474,14 +1519,16 @@ function renderUnused(turn) {
   }
   const cited = turn.citedKeys;
   const unused = cited === null ? found : found.filter((passage) => !cited.has(passageKey(passage)));
-  let count = `${plural(found.length, "passage", "passages")} found`;
-  if (cited !== null && turn.journey.answer !== null) {
+  let count = `The page's own search found ${plural(found.length, "passage", "passages")}.`;
+  if (found.length === 0) {
+    count = "The page's own search found nothing.";
+  } else if (cited !== null && turn.journey.answer !== null) {
     if (unused.length === 0) {
-      count = "Every passage found is cited";
+      count = "Every passage found is cited.";
     } else if (turn.journey.answer.answered) {
-      count = `${plural(unused.length, "more passage was", "more passages were")} found and not cited`;
+      count = `${plural(unused.length, "more passage was", "more passages were")} found and not cited.`;
     } else {
-      count = `${plural(unused.length, "passage was", "passages were")} found, and none is cited`;
+      count = `${plural(unused.length, "passage was", "passages were")} found, and none is cited.`;
     }
   }
   turn.searchCount.textContent = count;

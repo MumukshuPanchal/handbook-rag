@@ -9,6 +9,8 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
+        # The font's licence is kept byte for byte as it came, and a test pins its hash.
+        exclude: ^src/handbook_rag/static/OFL\.txt$
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-toml

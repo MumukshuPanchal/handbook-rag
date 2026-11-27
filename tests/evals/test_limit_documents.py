@@ -1240,7 +1240,11 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
     ]
     assert f"with {in_words(len(second['false_alarms']))} false alarm in" in started
     assert roadmap.index(started) > roadmap.index("Started since 1.0, and not finished:")
-    assert "are neither counted in the assistant's own answers nor reduced" in started
+    # The 40 limit questions were asked of both versions of the instructions since.
+    assert (
+        "are counted in the assistant's own answers only on the questions chosen for the fault"
+        in started
+    )
 
 
 def test_the_architecture_page_names_the_second_version() -> None:

@@ -4504,7 +4504,8 @@ def guard_against_a_cache(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # Every command that measures, with arguments it takes. `eval-cache` measures the second
-# check and simulates a cache, and builds none either.
+# check and simulates a cache, and builds none either. `human-sample` draws labelled answers
+# for a person, and `eval-human` compares that person's labels with the judges.
 MEASURES = {
     "eval-retrieval": [],
     "eval-compare": ["baseline", "v1"],
@@ -4522,9 +4523,12 @@ MEASURES = {
     "golden-candidates": ["candidates.jsonl"],
     "golden-check": [],
     "golden-review": [],
+    "human-sample": [],
+    "eval-human": [],
 }
 # Every other command. `ask` and `serve` answer people and use the cache. The rest search,
-# build the index or look after the cache, and answer nothing.
+# build the index, look after the cache, or check a person's labels file and put it in
+# place (`human-labels`), and answer nothing.
 NOT_AN_EVALUATION = {
     "snapshot",
     "chunks",
@@ -4537,6 +4541,7 @@ NOT_AN_EVALUATION = {
     "ask",
     "cache-status",
     "cache-clear",
+    "human-labels",
 }
 
 
@@ -4588,7 +4593,13 @@ def test_while_a_command_that_measures_runs_no_answer_cache_can_be_built_or_used
         raise RuntimeError("the probe ends the command here")
 
     # The first thing each of these commands does is to read its settings or its files.
-    for name in ("get_settings", "_load_questions", "load_golden_set", "compare_runs"):
+    for name in (
+        "get_settings",
+        "_load_questions",
+        "load_golden_set",
+        "compare_runs",
+        "labelled_batches",
+    ):
         monkeypatch.setattr(f"handbook_rag.cli.{name}", probe)
     monkeypatch.setattr("handbook_rag.cli.overview_of_runs", probe)
 
@@ -4614,11 +4625,14 @@ def test_a_command_that_is_no_evaluation_runs_with_the_switch_off(
         raise RuntimeError("the probe ends the command here")
 
     monkeypatch.setattr("handbook_rag.cli.get_settings", probe)
+    # `human-labels` reads no settings: the first thing it does is to read the labels file.
+    monkeypatch.setattr("handbook_rag.cli.load_labels_file", probe)
     arguments = {
         "search": ["leave"],
         "ask": ["leave"],
         "compare-collections": ["a", "b"],
         "check-reuse": ["--reuse-from", "a" * 40],
+        "human-labels": ["labels-batch-1.json"],
     }
 
     result = runner.invoke(app, [command, *arguments.get(command, [])])

@@ -1,0 +1,29 @@
+{
+  "why": "The statements and answers of the first draw of batch 1, made on 28 November 2026 and replaced before any label existed. Its key, which gives the label of each of them, was pushed with it. No batch draws them, so that that key gives the label of no item of a batch.",
+  "units_sha256": [
+    "003f1acbd9be5e3a",
+    "0b38d3ca82fe2296",
+    "0fe4a8e24caa6298",
+    "119244ef3e32416c",
+    "1942d644d982e5bc",
+    "19b9326342402ef0",
+    "35dec070a8725ba6",
+    "44eaf06df7dca273",
+    "4e144c7894d43c83",
+    "5a4f7bd1b6d52eec",
+    "6f0cdf2f3da60d29",
+    "7a2b31e20aebb309",
+    "7fd689b83938f5c8",
+    "83ae7a3e095f734c",
+    "8486b38763bcd8bf",
+    "893fa6c24abcc149",
+    "8c871b7945143002",
+    "a04e96bb7abdb3bc",
+    "b0696b243f265179",
+    "bbe4d5723a22957d",
+    "bfed536b1d6ddad6",
+    "c6b927c23416d6a8",
+    "c92a6269cecdb68f",
+    "d67572efc47b8a5c"
+  ]
+}

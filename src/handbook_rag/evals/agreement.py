@@ -121,7 +121,7 @@ def measure_agreement(
         matrix=matrix,
         same_verdict=_share(pair.expected == pair.judged for pair in pairs),
         same_decision=_share(is_fault(pair.expected) == is_fault(pair.judged) for pair in pairs),
-        kappa=_kappa([(is_fault(pair.expected), is_fault(pair.judged)) for pair in pairs]),
+        kappa=decision_kappa([(is_fault(pair.expected), is_fault(pair.judged)) for pair in pairs]),
         recall=_share_or_none(is_fault(pair.judged) for pair in labelled_bad),
         precision=_share_or_none(is_fault(pair.expected) for pair in judged_bad),
         caught={
@@ -145,7 +145,7 @@ def _share_or_none(flags: Iterable[bool]) -> Estimate | None:
     return share_with_interval(sum(values), len(values)) if values else None
 
 
-def _kappa(decisions: Sequence[tuple[bool, bool]]) -> float:
+def decision_kappa(decisions: Sequence[tuple[bool, bool]]) -> float:
     """Cohen's kappa for two raters and a yes-or-no decision.
 
     Two raters who both say "no" almost every time agree almost every time by chance

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="{{policy}}">
+<meta name="referrer" content="no-referrer">
+<title>Label batch {{batch}}</title>
+<style>{{style}}</style>
+</head>
+<body>
+<div class="page">
+<header>
+<h1>Batch {{batch}}: label {{total}} items</h1>
+<p class="lead">{{counted}}. One item at a time: choose a label, add a short note where you hesitate, and go on. Decide each item from what it shows and the rubric below, and from nothing else.</p>
+<p class="first">{{first}}</p>
+</header>
+<details class="rubric-box" open>
+<summary>The rubric in short</summary>
+<div class="rubric">
+<section aria-labelledby="part-a">
+<h3 id="part-a">Part A: is the marked statement backed by the passages it cites?</h3>
+<dl>
+<dt>1 Supported</dt><dd>Every fact it asserts is in the passages it cites, or follows directly from them. Rewording is fine, and so is leaving detail out.</dd>
+<dt>2 Unsupported</dt><dd>At least one fact is not backed by the passages it cites: it is not in them, it differs from them, it is wider than them (a limit, a condition or an exception left out), they contradict it, or it asserts a fact and cites no passage.</dd>
+<dt>3 No claim</dt><dd>It asserts nothing about what the handbook says: a heading, a lead-in such as "The steps are:", or a sentence saying that something is not covered.</dd>
+<dt>4 Cannot tell</dt><dd>What is shown does not let you decide. Say why in the note.</dd>
+</dl>
+<p>Only the passages the statement cites count, titles included. Read the statement with the question and the statements before it. One unbacked fact is enough. "May" is not "must".</p>
+<details><summary>The rubric in full</summary><div class="full" id="rubric-support"></div></details>
+</section>
+<section aria-labelledby="part-b">
+<h3 id="part-b">Part B: does the answer tell the asker what the reference answer tells them?</h3>
+<dl>
+<dt>1 Correct</dt><dd>It gives what the question asks for, as the reference answer gives it, in any wording, and nothing in it contradicts the reference answer.</dd>
+<dt>2 Partial</dt><dd>What it says is right by the reference answer, but part of what the question asks for is missing.</dd>
+<dt>3 Incorrect</dt><dd>Another fact, the opposite, other people or places, an answer to another question, no answer ("it depends", "ask your manager"), or the right fact beside one that contradicts the reference answer.</dd>
+<dt>4 Cannot tell</dt><dd>What is shown does not let you decide. Say why in the note.</dd>
+</dl>
+<p>The reference answer is the only measure: do not use what you know yourself. The question decides what matters. More detail is fine unless it contradicts the reference answer.</p>
+<details><summary>The rubric in full</summary><div class="full" id="rubric-correct"></div></details>
+</section>
+</div>
+</details>
+<div class="found" id="found" hidden>
+<p id="found-text"></p>
+<div class="row">
+<button type="button" id="keep-found">Keep them</button>
+<button type="button" id="drop-found">Start again</button>
+</div>
+</div>
+<p class="storage" id="storage-note"></p>
+<p class="keys">Keys: <kbd>1</kbd> to <kbd>4</kbd> choose a label, <kbd>N</kbd> or <kbd>&rarr;</kbd> the next item, <kbd>P</kbd> or <kbd>&larr;</kbd> the one before, <kbd>Esc</kbd> leaves the note.</p>
+<nav class="items" id="items-nav" aria-label="Items"></nav>
+<p class="progress" id="progress" aria-live="polite"></p>
+<main id="item" tabindex="-1"></main>
+<p class="credit">The passages are text of the GitLab Handbook, &copy; GitLab and its contributors, under the Creative Commons Attribution-ShareAlike 4.0 licence; the questions and answers come from this project's evaluation sets.</p>
+</div>
+<div class="bar">
+<div class="bar-inner">
+<div class="row">
+<div class="choices" id="choices" role="group" aria-label="Your label for this item"></div>
+<span class="spacer"></span>
+<button type="button" id="prev">&larr; Previous</button>
+<button type="button" id="next">Next &rarr;</button>
+</div>
+<div class="row">
+<label class="note-label" for="note">Note</label>
+<textarea id="note" rows="1" placeholder="Optional and short: why you hesitate, or why you cannot tell"></textarea>
+<button type="button" id="save" disabled>Save labels file</button>
+</div>
+<div class="row">
+<p class="status" id="status" aria-live="polite"></p>
+<span class="spacer"></span>
+<button type="button" class="quiet" id="clear" disabled>Clear this browser's copy</button>
+</div>
+</div>
+</div>
+<noscript><p>This page needs JavaScript. Its script is inside this file and sends nothing anywhere.</p></noscript>
+<script type="application/json" id="batch-data">{{data}}</script>
+<script>{{script}}</script>
+</body>
+</html>

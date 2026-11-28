@@ -9,6 +9,7 @@ import os
 import statistics
 import sys
 import time
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Literal, TextIO
@@ -51,6 +52,40 @@ from handbook_rag.evals.gate import (
     shown_with_minimum,
 )
 from handbook_rag.evals.golden import check_against_corpus, sample_source_chunks
+from handbook_rag.evals.human_labels import (
+    LabelsError,
+    labelled_batches,
+    labels_batch_number,
+    labels_text,
+    load_labels_file,
+    newer_files,
+    read_labels,
+)
+from handbook_rag.evals.human_report import RUNS_DIR, LabelledBatch, report, write_report
+from handbook_rag.evals.human_sample import (
+    BATCHES_DIR,
+    CORRECT_PART,
+    DEFAULT_PLAN,
+    DEFAULT_SEED,
+    SUPPORT_PART,
+    BatchError,
+    Plan,
+    SampleError,
+    SavedVerdicts,
+    Sets,
+    batch_dir,
+    find_disputes,
+    key_entries,
+    load_saved_checks,
+    make_batch,
+    read_batch,
+    read_batches,
+    read_set_aside,
+    reader_splits,
+    redraw,
+    sources_of,
+    write_key,
+)
 from handbook_rag.evals.judge import Judgement
 from handbook_rag.evals.judging import (
     UNCLEAR,
@@ -68,6 +103,7 @@ from handbook_rag.evals.judging import (
     run_judge,
     saved_verdicts,
 )
+from handbook_rag.evals.label_page import part_counts, read_rubrics, write_batch
 from handbook_rag.evals.metrics import Estimate
 from handbook_rag.evals.retrieval import (
     METRICS,
@@ -3315,6 +3351,316 @@ def golden_review(
     )
     typer.echo(f"  written to  {target}")
     typer.echo("  open it in a browser, then set review to verified for each question you accept")
+
+
+def _sets_with_passages(
+    settings: Settings, batches: Path = BATCHES_DIR
+) -> tuple[Any, Sets, list[SavedVerdicts]]:
+    """The two labelled sets with their passages, their disputes, and the judges' saved checks.
+
+    The passages a statement cites are read from the handbook, as for a judge check, and a
+    saved verdict counts as a dispute only if it was given on exactly the words of the set.
+    """
+    corpus = build_corpus(settings)
+    chunks = {chunk.chunk_id: chunk for chunk in corpus.chunks}
+    support = SUPPORT.load_labelled(SUPPORT.labelled_path, chunks)
+    answers = CORRECT.load_labelled(CORRECT.labelled_path, chunks)
+    saved = load_saved_checks()
+    splits = {
+        SUPPORT_PART: reader_splits(SUPPORT.labelled_path),
+        CORRECT_PART: reader_splits(CORRECT.labelled_path),
+    }
+    disputes = find_disputes(support, answers, saved, splits)
+    return corpus, Sets(support, answers, disputes, read_set_aside(batches)), saved
+
+
+@app.command(name="human-sample")
+@measures
+def human_sample(
+    seed: Annotated[
+        int,
+        typer.Option(
+            help=(
+                "Seed of the drawing. The same seed, sets, saved checks and earlier batches "
+                "draw the same batch."
+            )
+        ),
+    ] = DEFAULT_SEED,
+    statements: Annotated[
+        int, typer.Option(min=0, help="Statements in part A, the disputed ones among them.")
+    ] = DEFAULT_PLAN.statements,
+    answers: Annotated[
+        int, typer.Option(min=0, help="Answers in part B, the disputed ones among them.")
+    ] = DEFAULT_PLAN.answers,
+    disputed_statements: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            help=(
+                "At most this many statements of part A on which the instruments disagree: a "
+                "judge's saved verdict and the set's label, two readers, or 'unclear'."
+            ),
+        ),
+    ] = DEFAULT_PLAN.disputed_statements,
+    disputed_answers: Annotated[
+        int,
+        typer.Option(
+            min=0, help="At most this many answers of part B on which the instruments disagree."
+        ),
+    ] = DEFAULT_PLAN.disputed_answers,
+    into: Annotated[
+        Path, typer.Option(help="Directory that holds one folder for each batch.")
+    ] = BATCHES_DIR,
+) -> None:
+    """Draw the next batch of labelled answers for a person to label blind, and write its page.
+
+    No request to any model. A question that an earlier batch holds is never drawn again.
+    The key is not written: `eval-human` draws it again once the labels are in place.
+    """
+    settings = get_settings()
+    try:
+        plan = Plan(statements, answers, disputed_statements, disputed_answers)
+        earlier = read_batches(into)
+        rubrics = read_rubrics()
+        corpus, sets, _ = _sets_with_passages(settings, into)
+        before = redraw(earlier, sets)
+        number = 1 + max((batch.number for batch in earlier), default=0)
+        drawn = make_batch(
+            number=number,
+            seed=seed,
+            plan=plan,
+            sets=sets,
+            earlier=[candidate for batch in before for candidate in batch.picked],
+            sources=sources_of(
+                Path(), handbook_commit=corpus.source_commit, chunking=corpus.chunking_version
+            ),
+        )
+        directory = write_batch(into, drawn, rubrics, sets)
+    except (DatasetError, CorpusError, BatchError, SampleError, SavedRunError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    parts = part_counts(drawn.items)
+    typer.echo(f"Batch {number}: {len(drawn.items)} items for a person to label, blind")
+    typer.echo(f"  part A       {parts[SUPPORT_PART]} statements")
+    typer.echo(f"  part B       {parts[CORRECT_PART]} answers")
+    typer.echo(f"  seed         {seed}")
+    typer.echo(f"  written to   {directory}")
+    typer.echo("  key          not written: eval-human draws it again once the labels are in place")
+    typer.echo(
+        f"  next         open {directory / 'label.html'}, as {directory / 'HOW-TO-LABEL.md'} says"
+    )
+
+
+@app.command(name="human-labels")
+def human_labels(
+    labels_file: Annotated[
+        Path,
+        typer.Argument(
+            help="The newest file the page saved, such as ~/Downloads/labels-batch-1-<time>.json.",
+            show_default=False,
+        ),
+    ],
+    into: Annotated[
+        Path, typer.Option(help="Directory that holds one folder for each batch.")
+    ] = BATCHES_DIR,
+    replace: Annotated[
+        bool,
+        typer.Option("--replace", help="Replace the labels a batch already has in place."),
+    ] = False,
+    older: Annotated[
+        bool,
+        typer.Option(
+            "--older",
+            help="Put this file in place although a newer labels file of the batch lies beside it.",
+        ),
+    ] = False,
+) -> None:
+    """Check a labels file saved from a batch's page, and put it in place beside the batch.
+
+    A file that does not fit its batch is refused, with what to do about it, and so is a
+    file beside which a newer one of the same batch lies. Nothing in it is guessed or mended.
+    """
+    try:
+        data = load_labels_file(labels_file)
+        number = labels_batch_number(data)
+        directory = batch_dir(into, number)
+        if not directory.is_dir():
+            drawn = ", ".join(str(batch.number) for batch in read_batches(into)) or "none"
+            raise LabelsError(
+                f"The file labels batch {number}, and no batch {number} was drawn in {into} "
+                f"(batches drawn: {drawn}). Give the file saved from the page of a batch that "
+                "was drawn, or run the command from the project folder."
+            )
+        batch = read_batch(directory)
+        labels = read_labels(data, batch)
+        newer = newer_files(labels_file, labels)
+        if newer and not older:
+            listed = "; ".join(f"{path.name}, saved at {when}" for path, when in newer)
+            raise LabelsError(
+                f"A NEWER labels file of batch {number} lies beside this one, which was saved at "
+                f"{labels.saved_at}: {listed}. Your last labels are in the newest file: give "
+                "that one. If you do mean to put this older file in place, add --older."
+            )
+        if batch.labels_path.exists() and not replace:
+            raise LabelsError(
+                f"Batch {number} has its labels in place already, in {batch.labels_path}. "
+                "Give --replace to put this file in their place."
+            )
+    except (LabelsError, BatchError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    batch.labels_path.write_text(labels_text(labels, batch), encoding="utf-8")
+    given = Counter(label.label for label in labels.labels.values())
+    by_label = ", ".join(f"{choice} {count}" for choice, count in sorted(given.items()))
+    typer.echo(f"Labels of batch {number}: all {len(labels.labels)} items, each labelled once")
+    typer.echo(
+        f"  saved at     {labels.saved_at} ({labels.saved.astimezone():%Y-%m-%d %H:%M:%S} here)"
+    )
+    typer.echo(f"  labels       {len(labels.labels)}: {by_label}")
+    typer.echo(f"  notes        {labels.notes}")
+    if newer:
+        typer.echo(
+            f"  WARNING      {len(newer)} newer labels file{'s' * (len(newer) != 1)} of batch "
+            f"{number} lie beside it, and this older one was put in place, as --older asked"
+        )
+    typer.echo(f"  put in place {batch.labels_path}")
+    typer.echo(f"  next         uv run handbook-rag eval-human --variant batch-{number}")
+
+
+@app.command(name="eval-human")
+@measures
+def eval_human(
+    variant: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Name of this report. The default, 'current', is a scratch run that git "
+                "ignores. Name a report to keep it, such as 'batch-1'."
+            )
+        ),
+    ] = "current",
+    batches: Annotated[
+        Path, typer.Option(help="Directory that holds one folder for each batch.")
+    ] = BATCHES_DIR,
+    output: Annotated[
+        Path, typer.Option(help="Directory that holds one sub-directory for each report.")
+    ] = RUNS_DIR,
+) -> None:
+    """Report how far a person's labels agree with the labelled sets and with the judges.
+
+    It counts every batch whose labels are in place. It draws each batch's key again, checks
+    it against the hash written when the batch was drawn, and writes it beside the labels.
+    No request to any model: the judges' verdicts are those of their saved checks.
+    """
+    settings = get_settings()
+    try:
+        done, waiting = labelled_batches(batches)
+        if not done:
+            raise LabelsError(
+                f"No batch in {batches} has its labels in place yet. Label a batch on its "
+                "page, then put the file in place with `handbook-rag human-labels <file>`."
+            )
+        _, sets, saved = _sets_with_passages(settings, batches)
+        last = max(batch.number for batch, _ in done)
+        keys = {
+            drawn.number: drawn.key
+            for drawn in redraw([b for b in read_batches(batches) if b.number <= last], sets)
+        }
+        labelled = []
+        for batch, labels in done:
+            write_key(batch, keys[batch.number])
+            labelled.append(LabelledBatch(batch, labels, key_entries(keys[batch.number])))
+    except (BatchError, LabelsError, SavedRunError, DatasetError, CorpusError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    def fingerprint(part: str, case_id: str) -> str:
+        return str(sets.case(part, case_id).case.fingerprint)
+
+    summary, found = report(labelled, waiting, saved, fingerprint)
+    run_dir = output / variant
+    write_report(run_dir, summary, found, labelled, saved)
+
+    items = sum(len(done.batch.items) for done in labelled)
+    numbers = ", ".join(str(done.batch.number) for done in labelled)
+    still = ", ".join(str(batch.number) for batch in waiting) or "none"
+    typer.echo(f"Labels of a person: {variant}")
+    typer.echo(f"  labeller     {summary['labeller']}")
+    typer.echo(f"  batches      {numbers}, {items} items; waiting for labels: {still}")
+    for part in summary["parts"].values():
+        typer.echo(part["title"])
+        typer.echo(
+            f"  labelled     {part['labelled']}, of them {part['cannot_tell']} "
+            "'cannot tell', counted apart"
+        )
+        against = part["against_the_set"]
+        unclear = against["unclear_in_the_set"]
+        typer.echo(
+            f"  Against the set's labels, on {against['compared']}"
+            + (f"; {unclear} the set calls unclear, counted apart" if unclear else "")
+        )
+        _echo_share("Same verdict", against["same_verdict"])
+        _echo_share("Same decision, fault or not", against["same_decision"])
+        _echo_kappa(against["kappa"], against["compared"])
+        for label, figures in against["by_class"].items():
+            _echo_share(
+                f"Labelled {label}: the same",
+                figures["same"],
+                after=f"; {figures['cannot_tell']} cannot tell" if figures["cannot_tell"] else "",
+            )
+        for judge in part["against_the_judges"]:
+            typer.echo(
+                f"  Against {judge['judge']} ({judge['run']}), on {judge['compared']}; "
+                f"no saved verdict: {judge['no_saved_verdict']}"
+            )
+            _echo_share("Same verdict", judge["same_verdict"])
+            _echo_share("Same decision, fault or not", judge["same_decision"])
+            _echo_kappa(judge["kappa"], judge["compared"])
+            _echo_share("Owner's faults it faulted", judge["owner_faults_the_judge_faulted"])
+            _echo_share("Its faults the owner agrees", judge["judge_faults_the_owner_agrees_with"])
+        disputed = part["disputed"]
+        typer.echo("  Where a judge and the set differ, the owner sides with")
+        for judge in disputed["judges"]:
+            sides = judge["the_owner_sides_with"]
+            typer.echo(
+                f"    {judge['judge']}, on {len(judge['items_where_it_differs_from_the_set'])}: "
+                + ", ".join(f"{name} {count}" for name, count in sides.items())
+            )
+        unclear_items = disputed["unclear_in_the_set"]
+        if unclear_items["items"]:
+            called = ", ".join(
+                f"{choice} {count}"
+                for choice, count in unclear_items["the_owner_called_them"].items()
+            )
+            count = len(unclear_items["items"])
+            typer.echo(f"  The set's unclear, {count}: the owner called them {called}")
+    for label, count, name in (
+        ("differences", summary["differences"], "differences.jsonl"),
+        ("cannot tell", summary["cannot_tell"], "cannot-tell.jsonl"),
+        ("disputed", summary["disputed_items"], "disputed.jsonl"),
+    ):
+        typer.echo(f"  {label:<12} {count} item{'s' * (count != 1)}, in full in {run_dir / name}")
+    typer.echo(f"  written to   {run_dir}")
+
+
+def _echo_share(label: str, figures: Mapping[str, Any] | None, *, after: str = "") -> None:
+    """A share of the person's labels with its count, as `eval-human` prints it."""
+    if figures is None:
+        typer.echo(f"    {label:<32} nothing to compare{after}")
+        return
+    typer.echo(
+        f"    {label:<32} {figures['successes']} of {figures['count']}, {figures['mean']:.3f} "
+        f"(95% interval {figures['low']:.3f} to {figures['high']:.3f}){after}"
+    )
+
+
+def _echo_kappa(kappa: float | None, compared: int) -> None:
+    if not compared:
+        typer.echo(f"    {'Kappa':<32} nothing to compare")
+    elif kappa is None:
+        typer.echo(f"    {'Kappa':<32} not measured: one side makes only one decision")
+    else:
+        typer.echo(f"    {'Kappa':<32} {kappa:.3f}")
 
 
 @app.command()

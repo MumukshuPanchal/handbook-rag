@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve mcp eval-retrieval eval-answers eval-judge eval-judge-correct eval-judge-references eval-judge-limits eval-judge-limits-v2 eval-judge-v2 eval-support eval-support-v2 eval-correct eval-adversarial eval-limits eval-follow-ups eval-follow-ups-held-out eval-cache eval-compare eval-table eval-gate golden-check golden-review
+.PHONY: help install lint format typecheck test test-slow test-live check snapshot chunks qdrant traces up index search ask serve mcp eval-retrieval eval-answers eval-judge eval-judge-correct eval-judge-references eval-judge-limits eval-judge-limits-v2 eval-judge-v2 eval-support eval-support-v2 eval-correct eval-adversarial eval-limits eval-follow-ups eval-follow-ups-held-out eval-cache eval-compare eval-table eval-gate golden-check golden-review human-sample human-labels eval-human
 
 help: ## List the available commands
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -124,3 +124,12 @@ golden-check: ## Check every golden set label against the corpus
 
 golden-review: ## Write a page for reviewing the golden set by eye
 	uv run handbook-rag golden-review
+
+human-sample: ## Draw the next batch of labelled answers for a person to label blind, and write its page (no request to a model API)
+	uv run handbook-rag human-sample
+
+human-labels: ## Check the labels file a batch's page saved, and put it in place: make human-labels file=~/Downloads/labels-batch-1.json
+	uv run handbook-rag human-labels $(file)
+
+eval-human: ## Report how far the sets' labels and the judges' saved verdicts agree with a person's labels, as a kept run: make eval-human variant=batch-1 (no request to a model API)
+	uv run handbook-rag eval-human --variant $(or $(variant),current)

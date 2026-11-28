@@ -1,0 +1,44 @@
+{
+  "batch": 1,
+  "seed": 20261128,
+  "plan": {
+    "statements": 16,
+    "answers": 8,
+    "first_statements": 6,
+    "first_answers": 3
+  },
+  "sources": {
+    "sets": {
+      "support": {
+        "path": "evals/judge/support/cases.jsonl",
+        "sha256": "27b617d6a68c4927d3721f1dfb6bad61e41a8d901951faed282ffc12b517d89c"
+      },
+      "correct": {
+        "path": "evals/judge/correct/cases.jsonl",
+        "sha256": "7e460d0a8b8c259c0dd75339d295fd56520cc801b87722d4f0de4e63986698c9"
+      }
+    },
+    "checks": {
+      "support_v1": {
+        "path": "evals/runs/judge/baseline/judgements.jsonl",
+        "sha256": "7d761ae6e7c140b0123775bcf8e26dbf2203b2553e6c89edae011366251d9d13"
+      },
+      "support_v2": {
+        "path": "evals/runs/judge/v2/judgements.jsonl",
+        "sha256": "8dcfa5fe4c4fc8bb3dfcf6ddbe6d62b3186b8c58a2a4969c7550f6131360e457"
+      },
+      "correct": {
+        "path": "evals/runs/judge-correct/baseline/judgements.jsonl",
+        "sha256": "3ab997c506f2f90665fa40ea284ae901942f8533902f8f800a9c456f8e4b30d0"
+      }
+    },
+    "set_aside": {
+      "path": "evals/judge/human/set-aside.json",
+      "sha256": "6b7f4c34ae3278b1f6a7ac06e4549effed6fca5fa92246631907db8c7cb1e79e"
+    },
+    "handbook_commit": "e645aac6dc6fbb0b759b92ed32f016aaed5ef4b8",
+    "chunking": "v1-max320-min60-overlap40"
+  },
+  "items_sha256": "c25c750c50c9e9ad",
+  "joins_sha256": "ee07c117f888159ba73cad78d14788f0fb008bff2b2e06451415d1853918bd93"
+}

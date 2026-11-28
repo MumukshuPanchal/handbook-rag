@@ -409,7 +409,7 @@ How far this goes:
 - **The planted faults were written by a model**, and real answers held only one fault. The check shows that the judge catches faults like the planted ones.
 - **On dropped limits the judge is as lenient as most readers.** Three statements are labelled `unclear`: each leaves out a limit or an exception that its passage states, two readers called them supported and the third unsupported. The judge said supported each time, though for one of the three that says little: it is in the answer where the judge lost count, described next. It did catch all five planted faults of that kind, which were more blunt ([issue 59](https://github.com/MumukshuPanchal/handbook-rag/issues/59)).
 - **In one long answer the judge's numbering slipped.** The answer has nine statements, the third of which holds a lead-in and the first item of a list. From the fourth statement on, each of the judge's reasons is about the statement before, so the last statement was never judged. No verdict in it was `unsupported`, so the score did not change. A rough check found no other answer like it among the 23 labelled answers with three or more statements, 18 of them real and 5 copies ([issue 58](https://github.com/MumukshuPanchal/handbook-rag/issues/58)).
-- **The judge is the answer model.** The labels were made by models of another family, which is some protection, and no person has checked them.
+- **The judge is the answer model.** The labels were made by models of another family, which is some protection, and no person has checked them. A sample of them is drawn: batch 1 waits for the owner's labels ([below](#a-persons-labels-on-a-sample)).
 - **Sampling is left at the model's defaults**, so a second check could differ. That was not measured.
 
 ### The score
@@ -663,6 +663,38 @@ What "correct" does and does not mean here:
 - **A wrong reference answer would pass on a wrong answer that repeats it.** The reference answers were checked by model sessions, not by a person.
 - **It does not say that the answer is backed by its passages.** That is the first judge's score. An answer can be correct and add a detail no passage supports.
 - **Scoring cost no request.** The check had already read these 127 answers.
+
+## A person's labels on a sample
+
+Both judges were checked against labels that model sessions made and checked, and no person has labelled any of them. A sample drawn from the two labelled sets is now for one person, the project's owner, to label blind. Batch 1 waits for the owner's labels, so this section says what will be measured, and gives no figure. The decision is [ADR 0026](adr/0026-one-person-labels-a-sample-of-the-labelled-answers.md), and how the sample is drawn and made up is on [the sample's card](../evals/judge/human/README.md), which the owner reads after labelling.
+
+```bash
+make human-sample                                         # draw the next batch and write its page: no request
+uv run handbook-rag human-labels ~/Downloads/labels-batch-1-<date>-<time>.json   # check the newest file the page saved, and put it in place
+uv run handbook-rag eval-human --variant batch-1          # draw the key again, write it beside the labels, and report: no request
+```
+
+### The sample
+
+Batch 1 is 24 judgements: 16 statements to hold against the passages they cite, and 8 answers to hold against their reference answers. It was drawn with a fixed seed from the two labelled sets and the judges' saved checks on them, by a rule written down on the card before any label existed; no question is drawn twice, in a batch or a later one.
+
+The owner labels on one page that works from disk, `evals/judge/human/batch-1/label.html`. It shows the question, the answer with the statement to label marked, and the passages that statement cites; or the question, the reference answer and the answer. The choices are the judge's verdicts and "cannot tell". Before a batch is written, the code checks that each item holds only the fields of what is shown and exactly the words of its case, that no id of the sets and no name of a kind, a group or a sort of dispute is in what the owner is given, that the order of a part does not show its groups, and that the page holds no other data, no comment and no word about how a batch is made up. The key that joins each item to its case and its label is not committed with the batch: `batch.json` holds its SHA-256, and `eval-human` draws it again, checks it and writes it beside the labels. The labels file the page saves is checked by `human-labels` before it is put in place, and refused if anything in it does not fit the batch, or if a newer file of the same batch lies beside it.
+
+### What will be measured
+
+For each part, with every share given with its count and a 95% Wilson interval:
+
+| Against | Figures |
+|---|---|
+| The label each set held when the batch was drawn | Same verdict; same decision, a fault or not; Cohen's kappa for that decision; for each label of the set, how many of its items get the same label from the owner |
+| Each judge's saved verdicts: the judge of support in version 1 (`judge/baseline`) and version 2 (`judge/v2`), and the judge of correctness (`judge-correct/baseline`) | Same verdict; same decision; kappa; of the owner's faults, how many the judge faulted; of the judge's faults, how many the owner agrees with |
+| Each judge, where it differs from the set | How many times the owner sides with the set, with the judge, with neither, or cannot tell |
+
+- **"Cannot tell" is counted apart**, never as agreement or disagreement, and so is a statement the set calls `unclear`, of which the report says what the owner called it.
+- **The judges' verdicts are those of their saved checks** on the labelled sets, the ones their published agreement rests on, and only those given on exactly the words drawn. An item without such a verdict is counted apart.
+- **Every item on which the owner differs from a set or a judge is written in full** to `differences.jsonl`, every "cannot tell" to `cannot-tell.jsonl`, and every item on which the instruments disagree to `disputed.jsonl`, for a later look. A difference does not say who is right.
+
+How far it will go: one person, who is not an expert on GitLab and knows the project; 24 judgements, so wide intervals; and a sample whose mix of labels is chosen, from sets in which a model planted the faults, so that no share is a natural rate ([the card](../evals/judge/human/README.md#what-it-can-carry-and-what-it-cannot)). It will be one person's labels on a small sample, not a verification of the sets.
 
 ## Adversarial tests
 

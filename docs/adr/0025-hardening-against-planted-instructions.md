@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-25
+- The project's owner read this record on 28 November 2026 and accepted it.
 
 ## Context
 

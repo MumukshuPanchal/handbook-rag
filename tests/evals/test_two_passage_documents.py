@@ -65,6 +65,12 @@ ISSUE = "https://github.com/MumukshuPanchal/handbook-rag/issues/"
 # issues of the two-passage questions, of follow-up questions, of the rule for "clear"
 # and of query rewriting.
 RECORD, QUESTIONS_ISSUE, FOLLOW_UPS, CLEAR, REWRITING = "0021", "78", "79", "80", "22"
+# Where a line sends the step that splits a question: to query rewriting, and the issue of
+# follow-up questions is named as closed without it (issue 92).
+SPLIT_STEP = (
+    f"([issue {REWRITING}]({ISSUE}{REWRITING}); [issue {FOLLOW_UPS}]({ISSUE}{FOLLOW_UPS}) "
+    "closed with the rewriting of follow-up questions and without the split)"
+)
 # The cutoff in the name of the headline score, "both in the top 5".
 TOP = "5"
 # The free key's allowance of requests a day, as the README's limitations give it.
@@ -393,6 +399,7 @@ def decision_record_numbers() -> dict[str, list[str]]:
             str(config["rrf_k"]),
         ],
         "- **The next step asks a model before the search**": [FOLLOW_UPS],
+        "> **Note, 2026-11-28.**": ["2026", "11", "28", REWRITING, FOLLOW_UPS],
         "**Nothing found both passages clearly more often.**": [
             str(min(found.values())),
             str(max(found.values())),
@@ -794,7 +801,7 @@ def guide_numbers() -> dict[str, list[str]]:
             str(len(k["under_its_page"])),
             str(k["by_limit"][1].better),
         ],
-        "- **So none is adopted": [RECORD, FOLLOW_UPS, str(RETRIEVAL_DEPTH)],
+        "- **So none is adopted": [RECORD, REWRITING, FOLLOW_UPS, str(RETRIEVAL_DEPTH)],
         "The command refuses a variant that it could not measure": [str(RETRIEVAL_DEPTH)],
         "- **Many comparisons on the same questions.**": [
             TOP,
@@ -1010,6 +1017,7 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
         RECORD,
         str(known["not_in_ten"]),
         str(confirmed),
+        REWRITING,
         FOLLOW_UPS,
     ]
     assert f"{in_words(len(variants.VARIANTS)).capitalize()} changes to the search" in line
@@ -1017,6 +1025,34 @@ def test_the_changelog_and_the_roadmap_give_the_figures_of_the_runs() -> None:
     assert roadmap.index(line) > roadmap.index("Started since 1.0, and not finished:")
     assert "none was adopted" in line
     assert "no person has read the questions" in line
+
+
+def test_the_step_that_splits_a_question_is_sent_to_query_rewriting() -> None:
+    """Issue 79 closed with follow-up questions and without the split (issue 92).
+
+    The numbers of these lines are held above, without their link targets. Here the links
+    are held too, in each line that names the step, and the decision record keeps its
+    decision as it was written, with a dated note after it.
+    """
+    for path, start in (
+        (README, "- **The second passage is often further down, or not found.**"),
+        (GUIDE, "- **So none is adopted"),
+        (ROADMAP, "- **Questions that need two passages**"),
+        (RESULTS, "These twelve were written down before the first run."),
+    ):
+        line = line_starting(read(path), start)
+        assert re.search(r"split(?:ting)? a question", line, re.IGNORECASE), path.name
+        assert SPLIT_STEP in line, path.name
+    text = read(ADR)
+    decision = line_starting(text, "- **The next step asks a model before the search**")
+    note = line_starting(text, "> **Note, 2026-11-28.**")
+    assert f"the request that [issue {FOLLOW_UPS}]({ISSUE}{FOLLOW_UPS}) plans" in decision
+    assert text.index(decision) < text.index(note) < text.index("### Why none of the")
+    assert f"belongs with [issue {REWRITING}]({ISSUE}{REWRITING}), query rewriting" in note
+    assert (
+        f"[Issue {FOLLOW_UPS}]({ISSUE}{FOLLOW_UPS}) closed with the rewriting of follow-up "
+        "questions and without the split." in note
+    )
 
 
 def test_the_architecture_page_names_the_new_parts() -> None:

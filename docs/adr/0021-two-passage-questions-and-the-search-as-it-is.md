@@ -54,6 +54,8 @@ Compared with the default question by question, no variant differs clearly on "b
 - **The variants stay as options of `eval-retrieval`, for one run each**, so that the same measurement can be made on other questions. The limit for each page is a rule of its own (`handbook_rag.retrieve.spread`): no setting turns it on, and no other command has it. The number of candidates and the fusion constant could already be set for every command, by `HANDBOOK_RAG_FUSION_CANDIDATES` and `HANDBOOK_RAG_RRF_K`, and reranking by `HANDBOOK_RAG_RERANK`. Their defaults are as they were.
 - **The next step asks a model before the search**, to split a question that asks for two things, and belongs with the request that [issue 79](https://github.com/MumukshuPanchal/handbook-rag/issues/79) plans for follow-up questions.
 
+> **Note, 2026-11-28.** The step that splits a question belongs with [issue 22](https://github.com/MumukshuPanchal/handbook-rag/issues/22), query rewriting before retrieval. [Issue 79](https://github.com/MumukshuPanchal/handbook-rag/issues/79) closed with the rewriting of follow-up questions and without the split.
+
 ### Why none of the fourteen
 
 **Nothing found both passages clearly more often.** The counts run from 8 to 13 of 33, where the default has 12. The best variants are one question ahead, and no interval excludes zero.

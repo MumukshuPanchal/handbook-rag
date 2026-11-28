@@ -4,6 +4,10 @@ What each version of this project contains. The format follows [Keep a Changelog
 
 ## [Unreleased]
 
+### Fixed
+
+- The README, the roadmap, the evaluation guide and the results of the search variants sent the step that splits a question asking for two things to [#79], which closed with the rewriting of follow-up questions and without it. They now send it to [#22], query rewriting before retrieval, and the decision record has a dated note that says so ([#92], [ADR 0021]).
+
 ## [1.1.0] - 2026-11-27
 
 The second version: the assistant takes follow-up questions, serves an answer it wrote before to the same question or to one that a second model judges to mean the same, and answers under version 2 of its instructions, with checks of each reply in code, against instructions planted in a page. The API serves a demo page that holds a conversation, and an MCP server offers the search to AI assistants. Version 2 was measured against version 1 on the same questions and on cases kept from the work on it, and the [README](README.md#results) reports what got better and what got worse, such as fewer declines of the questions the handbook does not answer.
@@ -183,6 +187,7 @@ These are the [limitations in the README](README.md#limitations).
 [#19]: https://github.com/MumukshuPanchal/handbook-rag/issues/19
 [#20]: https://github.com/MumukshuPanchal/handbook-rag/issues/20
 [#21]: https://github.com/MumukshuPanchal/handbook-rag/issues/21
+[#22]: https://github.com/MumukshuPanchal/handbook-rag/issues/22
 [#23]: https://github.com/MumukshuPanchal/handbook-rag/pull/23
 [#24]: https://github.com/MumukshuPanchal/handbook-rag/issues/24
 [#25]: https://github.com/MumukshuPanchal/handbook-rag/pull/25
@@ -227,6 +232,7 @@ These are the [limitations in the README](README.md#limitations).
 [#70]: https://github.com/MumukshuPanchal/handbook-rag/pull/70
 [#78]: https://github.com/MumukshuPanchal/handbook-rag/issues/78
 [#79]: https://github.com/MumukshuPanchal/handbook-rag/issues/79
+[#92]: https://github.com/MumukshuPanchal/handbook-rag/issues/92
 [ADR 0001]: docs/adr/0001-record-architecture-decisions.md
 [ADR 0002]: docs/adr/0002-handbook-corpus.md
 [ADR 0003]: docs/adr/0003-own-pipeline-code-instead-of-a-framework.md

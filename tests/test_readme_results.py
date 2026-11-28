@@ -1231,6 +1231,9 @@ def test_the_two_passage_section_is_the_committed_runs() -> None:
                 str(both_within(10)),
                 str(several["not_all_retrieved"]),
                 str(confirmed),
+                # The step that splits a question, at query rewriting; follow-up
+                # questions closed without it.
+                "22",
                 "79",
                 str(several["retrieved"]),
             ],

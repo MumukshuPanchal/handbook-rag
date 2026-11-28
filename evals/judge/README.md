@@ -4,6 +4,8 @@ Answers whose verdicts are known. They are what a judge is checked against befor
 
 > **Status of both sets: labelled by independent model sessions, not by a person.** One model session labelled every statement, a second labelled them again without seeing the first one's labels, and a third settled the cases they left open. No person has labelled any of them. All three sessions were Claude models, which is another model family than the judge, a Gemini model.
 
+A sample drawn from both sets is for the project's owner to label blind, 16 statements and 8 answers to begin with: batch 1 waits for the owner's labels. It has [a card of its own](human/README.md), which says what will be reported, and which the owner reads after labelling. Until the labels are in place, the line above stands as it is.
+
 ## The first set: statements against the passages they cite
 
 ### What is in it

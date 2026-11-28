@@ -4,6 +4,10 @@ What each version of this project contains. The format follows [Keep a Changelog
 
 ## [Unreleased]
 
+### Added
+
+- A sample of the labelled answers for one person to label blind, and the report of how far the judges agree with that person ([#8], [ADR 0026]). `handbook-rag human-sample` draws a batch from the two labelled sets and the judges' saved checks with a fixed seed: first the statements and answers on which a judge and the set, or the set's two readers, disagree, or which the set calls unclear, then the rest in groups by the set's label, and never a question twice. It writes the items, the page `label.html` and its steps, and `batch.json`, which holds the SHA-256 of the key; the key itself is not written until the labels are in place. Before a batch is written, the code checks that each item holds only the fields of what is shown and exactly the words of its case, that no id of the sets and no name of a kind, a group or a sort of dispute is in what the owner is given, that the order of a part does not show its groups, and that the page holds no other data, no comment and no word about how a batch is made up. The page works from disk with no server or network, shows one item at a time with the rubric in short at the top, keeps unsaved labels in the browser until a button clears them, says when it cannot keep them, asks before it takes labels found from before, and saves each time a new file named by the batch and the time; a test runs its script in node. `handbook-rag human-labels` checks that file and puts it in place, says when it was saved and how many labels and notes it holds, and refuses a file that does not fit its batch, or beside which a newer one of the batch lies. `handbook-rag eval-human` draws the key again, refuses it unless it has the hash written when the batch was drawn, writes it beside the labels, and compares the labels with the sets' labels and with the verdicts of the judges' saved checks, with no request to a model, with a section on the items where a judge and the set differ and every difference in full. Batch 1 waits for the owner's labels: no person has labelled anything yet, and the card says what will be counted and what it cannot carry. A first draw of batch 1, by the set's label alone, was replaced before any label existed, and its statements and answers are set aside.
+
 ### Fixed
 
 - The README, the roadmap, the evaluation guide and the results of the search variants sent the step that splits a question asking for two things to [#79], which closed with the rewriting of follow-up questions and without it. They now send it to [#22], query rewriting before retrieval, and the decision record has a dated note that says so ([#92], [ADR 0021]).
@@ -258,3 +262,4 @@ These are the [limitations in the README](README.md#limitations).
 [ADR 0023]: docs/adr/0023-a-second-version-of-the-support-judge-for-dropped-limits.md
 [ADR 0024]: docs/adr/0024-follow-up-questions-in-the-service.md
 [ADR 0025]: docs/adr/0025-hardening-against-planted-instructions.md
+[ADR 0026]: docs/adr/0026-one-person-labels-a-sample-of-the-labelled-answers.md
